@@ -929,6 +929,9 @@ Strategy rules:
 
 Tag rules:
 - The deterministic rule engine already handles Outside/Inside Day, level breaks, first-10m, airgapped >1%, no-level-break, chop-range, VWAP-based No Market Sign, and break-even. Do not repeat those.
+- Treat PDH/PDL/PMH/PML as usable only when the corresponding level_meta status is VERIFIED or VERIFIED_HISTORICAL.
+- Treat 10-minute 8 EMA evidence as usable only when ema_integrity_status is VERIFIED or VERIFIED_HISTORICAL.
+- Treat Market Sign as usable only when market_sign.integrity_status is VERIFIED. If status is unverified, do not infer confirmation from observed_status.
 - Market Sign is a custom trader rule supplied in objective evidence: bullish requires both SPY and QQQ above regular-session VWAP; bearish requires both below. Mixed is not a failed sign.
 - Suggest A++ Level + EMA only when broken-level and EMA confluence is genuinely supported.
 - Suggest Flag-Line-Sign only when Flag and Line are supported and objective market_sign.status is confirmed.
