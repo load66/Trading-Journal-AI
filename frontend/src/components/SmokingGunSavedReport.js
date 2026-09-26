@@ -311,6 +311,12 @@ export default function SmokingGunSavedReport({
         </div>
       </Section>
 
+      <Section title="Evidence Standards" subtitle="How to read confidence in this audit.">
+        <div className="sg-callout sg-callout-neutral">
+          <b>Verified arithmetic</b> is calculated directly from stored executions. <b>Established sample</b> means 30+ trades, <b>Developing sample</b> means 10–29, and <b>Thin sample</b> means fewer than 10. Cohort P&amp;L shows association, not proof that the behavior caused the entire result.
+        </div>
+      </Section>
+
       <Section title="Behavioral Forensics" subtitle="Only measured cohorts belong here; positive or unsupported behavior is not mislabeled as a leak.">
         <BehaviorEvidence behavior={metrics.behavior} />
       </Section>
