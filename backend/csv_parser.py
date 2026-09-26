@@ -516,6 +516,96 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
     return executions
 
 
+
+def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """Parse Schwab transaction-history CSV exports.
+
+    Format:
+      index,Date,Type,Description,Ref Num,Misc Fees,Commissions,Amount,Balance
+
+    The Date column carries only minute precision (for example
+    "9/25/26 10:11 AM"). The importer stores ":00" seconds and explicitly marks
+    timestamp_precision="minute"; it never invents sub-minute timing.
+    """
+    rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
+    header_idx = None
+    col = {}
+
+    def norm_header(value: str) -> str:
+        return re.sub(r'[^A-Z0-9]+', ' ', value.strip().upper()).strip()
+
+    for i, row in enumerate(rows[:20]):
+        normalized = [norm_header(x) for x in row]
+        if 'DATE' in normalized and 'DESCRIPTION' in normalized and 'AMOUNT' in normalized:
+            header_idx = i
+            col = {name: j for j, name in enumerate(normalized)}
+            break
+
+    if header_idx is None:
+        raise ValueError("Schwab transaction-history header was not found.")
+
+    def cell(row, *names):
+        for name in names:
+            idx = col.get(name)
+            if idx is not None and idx < len(row):
+                return row[idx].strip()
+        return ''
+
+    executions = []
+    problems = []
+
+    for line_no, row in enumerate(rows[header_idx + 1:], start=header_idx + 2):
+        if not any(x.strip() for x in row):
+            continue
+        if cell(row, 'TYPE').upper() != 'TRD':
+            continue
+
+        dt_text = cell(row, 'DATE')
+        parsed_dt = None
+        for fmt in ('%m/%d/%y %I:%M %p', '%m/%d/%Y %I:%M %p'):
+            try:
+                parsed_dt = datetime.strptime(dt_text, fmt)
+                break
+            except ValueError:
+                pass
+        if parsed_dt is None:
+            problems.append(f"line {line_no}: unsupported Schwab timestamp '{dt_text}'")
+            continue
+
+        desc = cell(row, 'DESCRIPTION').strip('"')
+        parsed = parse_cash_description(desc)
+        if not parsed:
+            problems.append(f"line {line_no}: trade description could not be parsed: {desc}")
+            continue
+
+        misc_fees = clean_amount(cell(row, 'MISC FEES'))
+        commissions = clean_amount(cell(row, 'COMMISSIONS', 'COMMISSIONS FEES'))
+        amount = clean_amount(cell(row, 'AMOUNT'))
+        source_ref = cell(row, 'REF NUM', 'REF')
+
+        parsed.update({
+            'date': f"{parsed_dt.month}/{parsed_dt.day}/{str(parsed_dt.year)[2:]}",
+            'iso_date': parsed_dt.strftime('%Y-%m-%d'),
+            'time': parsed_dt.strftime('%H:%M:00'),
+            'amount': amount,
+            'commission': abs(misc_fees) + abs(commissions),
+            'raw_description': desc,
+            'source_ref': source_ref,
+            'timestamp_precision': 'minute',
+        })
+        executions.append(parsed)
+
+    if problems:
+        more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ''
+        raise ValueError(
+            f"{len(problems)} Schwab trade row(s) could not be read, so nothing was imported{more}. "
+            + " | ".join(problems[:8])
+        )
+    if not executions:
+        raise ValueError("The Schwab transaction-history CSV contains no trade rows.")
+
+    return build_trades_from_executions(executions, account_id, conn)
+
 def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
     """
     Parse rows from the Futures Statements section.
