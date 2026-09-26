@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, TrendingUp, BarChart2, BookOpen, Plus, ChevronDown,
-  CalendarDays, Check, X, Pencil, CalendarCheck, HelpCircle, Upload, Brain, Settings as SettingsIcon,
+  CalendarDays, Check, X, Pencil, CalendarCheck, HelpCircle, Upload, Brain, LogOut, Settings as SettingsIcon,
 } from 'lucide-react';
 import { accountsApi } from '../api';
 import aiJournalLogo from '../assets/ai-journal-logo.png';
@@ -224,7 +224,7 @@ function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCr
 
 export default function AppHeader({
   page, onNavigate, accounts, selectedAccountId, onSelectAccount,
-  onAddTrade, onAccountCreated, brainOpen, onToggleBrain,
+  onAddTrade, onAccountCreated, brainOpen, onToggleBrain, onSignOut,
 }) {
   // Trade detail is reached from Trade View, so it keeps that tab highlighted.
   const activeId = page === 'trade-detail' ? 'trades' : page;
@@ -259,7 +259,8 @@ export default function AppHeader({
             aria-pressed={brainOpen}
             title="Brain, your AI trading coach"
           >
-            <Brain size={16} aria-hidden="true" /> Brain
+            <Brain size={16} aria-hidden="true" />
+            <span className="action-label">Brain</span>
           </button>
           <AccountMenu
             accounts={accounts}
@@ -273,11 +274,30 @@ export default function AppHeader({
             onClick={() => onNavigate('import')}
             aria-current={page === 'import' ? 'page' : undefined}
           >
-            <Upload size={16} aria-hidden="true" /> Import
+            <Upload size={16} aria-hidden="true" />
+            <span className="action-label">Import</span>
           </button>
-          <button type="button" className="btn btn-primary" onClick={onAddTrade}>
-            <Plus size={16} aria-hidden="true" /> Add Trade
+          <button
+            type="button"
+            className="btn btn-primary mobile-add-trade"
+            onClick={onAddTrade}
+            aria-label="Add trade"
+            title="Add trade"
+          >
+            <Plus size={16} aria-hidden="true" />
+            <span className="action-label">Add Trade</span>
           </button>
+          {onSignOut && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon header-signout"
+              onClick={onSignOut}
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <LogOut size={16} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
     </header>
