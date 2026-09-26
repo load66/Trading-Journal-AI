@@ -1,4 +1,5 @@
 import os
+import logging
 import json
 import sqlite3
 import aiofiles
@@ -19,6 +20,7 @@ from auth import install_auth_middleware
 import httpx
 
 from database import init_db, get_db, row_to_dict
+from auth import AuthError, authorize_header, auth_required, validate_auth_config
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
@@ -41,6 +43,7 @@ UPLOAD_DIR = SETTINGS.upload_dir
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_auth_config()
     init_db()
     _conn = get_db()
     try:
@@ -67,6 +70,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def authentication_middleware(request, call_next):
+    path = request.url.path
+    protected = path == "/api" or path.startswith("/api/") or path.startswith("/uploads/")
+    if protected and auth_required():
+        try:
+            authorize_header(request.headers.get("Authorization"))
+        except AuthError as exc:
+            return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+    return await call_next(request)
 
 install_auth_middleware(app, SETTINGS)
 
@@ -102,6 +117,9 @@ async def not_found_handler(request, exc):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
+    logger.exception("Unhandled application error", exc_info=exc)
+    if os.getenv("APP_ENV", "").strip().lower() == "production":
+        return JSONResponse(status_code=500, content={"error": "Internal server error"})
     return JSONResponse(
         status_code=500,
         content={"error": str(exc), "type": type(exc).__name__}
