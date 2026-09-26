@@ -180,3 +180,64 @@ def test_kpis_strategy_breakdown_respects_date_range(monkeypatch, tmp_path):
         assert result["by_strategy"][0]["count"] == 1
     finally:
         conn.close()
+
+
+def test_recent_closed_trades_sort_by_broker_exit_time(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Recent", "day_trading", "schwab"),
+        )
+
+        rows = [
+            ("early", 25.0, [
+                {"date": "2026-09-25", "time": "09:30:00", "action": "BOT", "qty": 1, "price": 1.0},
+                {"date": "2026-09-25", "time": "09:40:00", "action": "SOLD", "qty": 1, "price": 1.3},
+            ]),
+            ("late", 50.0, [
+                {"date": "2026-09-25", "time": "14:00:00", "action": "BOT", "qty": 1, "price": 1.0},
+                {"date": "2026-09-25", "time": "14:52:00", "action": "SOLD", "qty": 1, "price": 1.6},
+            ]),
+            ("middle", 40.0, [
+                {"date": "2026-09-25", "time": "10:00:00", "action": "BOT", "qty": 1, "price": 1.0},
+                {"date": "2026-09-25", "time": "11:48:00", "action": "SOLD", "qty": 1, "price": 1.5},
+            ]),
+            ("open-latest", None, [
+                {"date": "2026-09-25", "time": "15:30:00", "action": "BOT", "qty": 1, "price": 1.0},
+            ]),
+        ]
+
+        for group, pnl, executions in rows:
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source, imported_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, group, "2026-09-25", group.upper(), "OPTION", "LONG",
+                    pnl, pnl, 0.0, __import__("json").dumps(executions), "imported",
+                    "2026-09-26 20:08:14",
+                ),
+            )
+        conn.commit()
+
+        result = main.list_trades(
+            account_id=account_id,
+            instrument_type=None,
+            date_from=None,
+            date_to=None,
+            ticker=None,
+            open_only=False,
+            closed_only=True,
+            sort_by="closed_at_desc",
+            limit=2,
+            conn=conn,
+        )
+
+        assert [row["trade_group"] for row in result] == ["late", "middle"]
+    finally:
+        conn.close()
