@@ -35,6 +35,18 @@ def get_connection():
 
 
 def init_library_tables(conn):
+    if getattr(conn, 'dialect', None) == 'postgres':
+        for table in ('library_items', 'library_aliases'):
+            row = conn.execute(
+                """SELECT 1 AS present
+                   FROM information_schema.tables
+                   WHERE table_schema = 'journal' AND table_name = ?""",
+                (table,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f'Postgres schema is missing journal.{table}')
+        return
+
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS library_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

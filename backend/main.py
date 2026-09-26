@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from config import Settings
 import httpx
 
-from database import init_db, get_db, row_to_dict
+from database import init_db, get_db, row_to_dict, insert_and_get_id
 from auth import AuthError, authorize_header, auth_required, validate_auth_config
 from storage import DiaryStorage
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
@@ -254,13 +254,14 @@ def create_account(data: AccountCreate, conn: sqlite3.Connection = Depends(get_c
     if data.type not in valid_types:
         raise ValueError(f"type must be one of {valid_types}")
 
-    cursor = conn.execute(
+    account_id = insert_and_get_id(
+        conn,
         "INSERT INTO accounts (name, type, color, broker) VALUES (?,?,?,?)",
-        (data.name, data.type, data.color, data.broker)
+        (data.name, data.type, data.color, data.broker),
     )
     conn.commit()
 
-    row = conn.execute("SELECT * FROM accounts WHERE id=?", (cursor.lastrowid,)).fetchone()
+    row = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
     return row_to_dict(row)
 
 
@@ -477,7 +478,7 @@ async def import_csv(
                         net_pnl=excluded.net_pnl,
                         commissions=excluded.commissions,
                         executions=excluded.executions,
-                        imported_at=datetime('now')
+                        imported_at=CURRENT_TIMESTAMP
                 """, (
                     trade['account_id'], trade['trade_group'], trade['date'],
                     trade['ticker'], trade['instrument_type'], trade['side'],
@@ -636,7 +637,7 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
     else:
         executions = json.dumps([execution])
 
-    cursor = conn.execute("""
+    trade_id = insert_and_get_id(conn, """
         INSERT INTO trades
             (account_id, trade_group, date, ticker, instrument_type, side,
              gross_pnl, net_pnl, commissions, executions,
@@ -659,7 +660,7 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         """, (trade_group, data.ticker.upper(), data.date, data.strategy, data.stop_loss, data.notes))
         conn.commit()
 
-    row = conn.execute("SELECT * FROM trades WHERE id=?", (cursor.lastrowid,)).fetchone()
+    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
     return row_to_dict(row)
 
 
@@ -867,12 +868,13 @@ def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = 
     trade = conn.execute("SELECT trade_group FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
-    cursor = conn.execute(
+    tag_id = insert_and_get_id(
+        conn,
         "INSERT INTO trade_tags (trade_group, tag_type, tag_value, source) VALUES (?,?,?,'manual')",
-        (trade_group, data.tag_type, data.tag_value)
+        (trade_group, data.tag_type, data.tag_value),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM trade_tags WHERE id=?", (cursor.lastrowid,)).fetchone()
+    row = conn.execute("SELECT * FROM trade_tags WHERE id=?", (tag_id,)).fetchone()
     return row_to_dict(row)
 
 
@@ -1159,12 +1161,12 @@ async def upload_diary(
     DIARY_STORAGE.save(safe_name, raw, content_type)
 
     # Insert diary entry row
-    cursor = conn.execute(
+    diary_entry_id = insert_and_get_id(
+        conn,
         "INSERT INTO diary_entries (account_id, entry_date, image_path) VALUES (?,?,?)",
-        (account_id, date, safe_name)
+        (account_id, date, safe_name),
     )
     conn.commit()
-    diary_entry_id = cursor.lastrowid
 
     # Build trades context for Claude
     trades_context = build_trades_context(conn, date, account_id)
@@ -2127,9 +2129,12 @@ def get_weekly_summary(
     if account_id is not None:
         try:
             conn.execute(
-                """INSERT OR REPLACE INTO daily_summaries
+                """INSERT INTO daily_summaries
                    (account_id, summary_date, ai_content, generated_at)
-                   VALUES (?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(summary_date, account_id) DO UPDATE SET
+                       ai_content = excluded.ai_content,
+                       generated_at = excluded.generated_at""",
                 (account_id, cache_key, json.dumps(result), datetime.now().isoformat()),
             )
             conn.commit()
@@ -2181,7 +2186,11 @@ def get_daily_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
     conn.execute(
-        "INSERT OR REPLACE INTO daily_summaries (summary_date, account_id, ai_content, generated_at) VALUES (?, ?, ?, datetime('now'))",
+        """INSERT INTO daily_summaries (summary_date, account_id, ai_content, generated_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(summary_date, account_id) DO UPDATE SET
+               ai_content = excluded.ai_content,
+               generated_at = CURRENT_TIMESTAMP""",
         (date, account_id, json.dumps(summary))
     )
     conn.commit()

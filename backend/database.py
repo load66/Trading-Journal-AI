@@ -11,6 +11,8 @@ from config import Settings
 
 load_dotenv()
 
+APPLICATION_SCHEMA_VERSION = '20260926_001_supabase_postgres'
+
 
 class DBAPIRow(Mapping[str, Any]):
     """sqlite3.Row-compatible mapping for remote DB-API tuple results."""
@@ -339,9 +341,32 @@ def apply_migrations(conn) -> None:
             raise
 
 
+def verify_postgres_schema(conn) -> None:
+    """Fail closed unless the versioned Supabase schema has been applied."""
+    try:
+        row = conn.execute(
+            'SELECT 1 AS present FROM schema_migrations WHERE migration_id=?',
+            (APPLICATION_SCHEMA_VERSION,),
+        ).fetchone()
+    except Exception as exc:
+        raise RuntimeError(
+            f'Postgres schema is not initialized to application version {APPLICATION_SCHEMA_VERSION}'
+        ) from exc
+
+    if row is None:
+        raise RuntimeError(
+            f'Postgres schema is not initialized to application version {APPLICATION_SCHEMA_VERSION}'
+        )
+
+
 def init_db(settings: Settings | None = None):
+    settings = settings or Settings.from_env()
     conn = get_db(settings)
     try:
+        if settings.database_mode == 'postgres':
+            verify_postgres_schema(conn)
+            return
+
         for statement in SCHEMA_STATEMENTS:
             conn.execute(statement)
         conn.commit()
