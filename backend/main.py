@@ -1255,6 +1255,8 @@ class AnalysisUpdate(BaseModel):
     idea_source: str | None = None
     stop_loss: float | None = None
     target_price: float | None = None
+    risk_per_trade: float | None = None
+    risk_reward: float | None = None
     emotional_state: str | None = None
     entry_reason: str | None = None
     exit_reason: str | None = None
@@ -1264,11 +1266,19 @@ class AnalysisUpdate(BaseModel):
 
 @app.patch("/api/trades/{trade_group:path}/analysis")
 def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.Connection = Depends(get_connection)):
-    trade = conn.execute("SELECT trade_group, ticker, date FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
+    trade = conn.execute("SELECT trade_group, ticker, date, net_pnl FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
 
     updates = data.model_dump(exclude_unset=True)
+    if "risk_per_trade" in updates:
+        risk = updates.get("risk_per_trade")
+        if risk is not None and risk <= 0:
+            raise ValueError("Planned risk must be greater than zero.")
+        updates["r_multiple"] = (
+            round(float(trade["net_pnl"] or 0) / float(risk), 6)
+            if risk else None
+        )
 
     existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
     if not existing:
