@@ -1439,6 +1439,17 @@ async def get_chart(
                 "vw": bar.get("vw"),
             })
 
+        if not bars:
+            return {
+                "ticker": alpaca_ticker,
+                "original_ticker": ticker,
+                "date": date,
+                "bars": [],
+                "warning": (
+                    f"No Alpaca {tf} bars were returned for {alpaca_ticker} on "
+                    f"{date} using the {params.get('feed', ALPACA_DATA_FEED)} feed."
+                ),
+            }
         return {"ticker": alpaca_ticker, "original_ticker": ticker, "date": date, "bars": bars}
 
     except httpx.HTTPStatusError as e:
