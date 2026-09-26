@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createChart, ColorType, CrosshairMode, LineStyle } from 'lightweight-charts';
-import { chartApi } from '../api';
+import { chartApi, tradesApi } from '../api';
 
 // lightweight-charts paints to canvas and cannot resolve CSS var(), so colours
 // are read from the design tokens at render time. Fallbacks are the token values.
@@ -24,6 +24,8 @@ function chartTheme() {
     up: cssVar('--result-pos', '#66D7AC'),
     down: cssVar('--result-neg', '#F28B94'),
     vwap: cssVar('--text-secondary', '#96A4B6'),
+    prevLevel: cssVar('--accent-line', '#91A8FF'),
+    premarketLevel: cssVar('--caution', '#E9BA78'),
     stop: cssVar('--caution', '#E9BA78'),
     target: cssVar('--accent-line', '#91A8FF'),
   };
@@ -94,12 +96,20 @@ const SESSION_TFS = new Set(['1Min', '3Min', '5Min', '10Min', '15Min']);
 // times parse as literal UTC.
 const etWallTs = (dateStr, hhmm) => Math.floor(new Date(`${dateStr}T${hhmm}:00Z`).getTime() / 1000);
 // Legend entries that can be switched on and off. Not remembered between trades.
-const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, sl: true, target: true };
+const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, prevLevels: true, premarketLevels: true, sl: true, target: true };
 
 // Show or hide the toggleable layers on an existing chart.
 function applyLayers(layers, visible) {
   if (!layers) return;
   (layers.vwap || []).forEach(line => line.applyOptions({ visible: visible.vwap }));
+  (layers.levels || []).forEach(({ line, group, name }) => {
+    const shown = visible[group];
+    line.applyOptions({
+      lineVisible: shown,
+      axisLabelVisible: shown,
+      title: shown ? name : '',
+    });
+  });
   if (layers.sl) layers.sl.applyOptions({ lineVisible: visible.sl, axisLabelVisible: visible.sl, title: visible.sl ? 'SL' : '' });
   if (layers.target) layers.target.applyOptions({ lineVisible: visible.target, axisLabelVisible: visible.target, title: visible.target ? 'Target' : '' });
   if (layers.candles) {
@@ -111,7 +121,7 @@ function applyLayers(layers, visible) {
 }
 
 export default function TradingChart({
-  ticker, date, defaultTimeframe = '5Min',
+  ticker, date, tradeGroup = null, defaultTimeframe = '5Min',
   executions = [], side = 'LONG', analysis = null,
   height = 320,
 }) {
@@ -121,13 +131,16 @@ export default function TradingChart({
   const [bars, setBars] = useState([]);
   const [daysBack, setDaysBack] = useState(() => INITIAL_DAYS_BACK[defaultTimeframe] || 1);
   const [warning, setWarning] = useState(null);
+  const [leLevels, setLeLevels] = useState({});
+  const [levelFeed, setLevelFeed] = useState(null);
+  const [levelWarning, setLevelWarning] = useState(null);
   const [loading, setLoading] = useState(true);
   const isWide = WIDE_RANGE_TFS.has(timeframe);
   const [visible, setVisible] = useState(DEFAULT_VISIBLE);
   const visibleRef = useRef(DEFAULT_VISIBLE);
   // Handles to everything a legend toggle controls, so toggling never rebuilds
   // the chart (and never loses the current zoom).
-  const layersRef = useRef({ candles: null, vwap: [], markers: [], sl: null, target: null });
+  const layersRef = useRef({ candles: null, vwap: [], levels: [], markers: [], sl: null, target: null });
   // Set right before a zoom-out-triggered fetch, holding the visible window so
   // it can be restored once the wider dataset lands — otherwise the chart would
   // jump back to fitContent() every time more history streams in.
@@ -145,6 +158,29 @@ export default function TradingChart({
   // fired the fetch once with the stale daysBack and again with the reset
   // value once it caught up.
   const selectionKeyRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLeLevels({});
+    setLevelFeed(null);
+    setLevelWarning(null);
+
+    if (!tradeGroup) return () => { cancelled = true; };
+
+    tradesApi.getLeLevels(tradeGroup)
+      .then(r => {
+        if (cancelled) return;
+        setLeLevels(r.data?.levels || {});
+        setLevelFeed(r.data?.feed || null);
+        const warnings = Array.isArray(r.data?.warnings) ? r.data.warnings : [];
+        setLevelWarning(warnings[0] || null);
+      })
+      .catch(() => {
+        if (!cancelled) setLevelWarning('LE chart levels unavailable.');
+      });
+
+    return () => { cancelled = true; };
+  }, [tradeGroup]);
 
   useEffect(() => {
     const key = `${ticker}|${date}|${timeframe}`;
@@ -183,7 +219,7 @@ export default function TradingChart({
 
     const barTs = isWide ? toDayTs : toTs;
     const T = chartTheme();
-    layersRef.current = { candles: null, vwap: [], markers: [], sl: null, target: null };
+    layersRef.current = { candles: null, vwap: [], levels: [], markers: [], sl: null, target: null };
 
     const chart = createChart(containerRef.current, {
       layout: {
@@ -302,6 +338,33 @@ export default function TradingChart({
     if (analysis?.stop_loss) layersRef.current.sl = candleSeries.createPriceLine({ price: Number(analysis.stop_loss), color: T.stop, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: 'SL' });
     if (analysis?.target_price) layersRef.current.target = candleSeries.createPriceLine({ price: Number(analysis.target_price), color: T.target, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: 'Target' });
 
+    // ── LE reference levels: PDH / PDL / PMH / PML ─────────────────────
+    // These are fetched from the same deterministic SIP-first LE engine used
+    // by LE Review, so the visual chart and rule analysis share one source.
+    if (!isWide) {
+      const levelSpecs = [
+        { name: 'PDH', value: leLevels?.PDH, group: 'prevLevels', color: T.prevLevel, style: LineStyle.Dashed },
+        { name: 'PDL', value: leLevels?.PDL, group: 'prevLevels', color: T.prevLevel, style: LineStyle.Dashed },
+        { name: 'PMH', value: leLevels?.PMH, group: 'premarketLevels', color: T.premarketLevel, style: LineStyle.Dotted },
+        { name: 'PML', value: leLevels?.PML, group: 'premarketLevels', color: T.premarketLevel, style: LineStyle.Dotted },
+      ];
+
+      layersRef.current.levels = levelSpecs
+        .filter(spec => Number.isFinite(Number(spec.value)) && Number(spec.value) > 0)
+        .map(spec => ({
+          name: spec.name,
+          group: spec.group,
+          line: candleSeries.createPriceLine({
+            price: Number(spec.value),
+            color: spec.color,
+            lineWidth: 2,
+            lineStyle: spec.style,
+            axisLabelVisible: true,
+            title: spec.name,
+          }),
+        }));
+    }
+
     // ── Execution markers ────────────────────────────────────────────────
     // Colored and shaped by the actual fill action (matches the Buy/Sell legend
     // below the chart), not by entry/exit role — a short's opening fill is a SELL,
@@ -387,7 +450,7 @@ export default function TradingChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, executions, side, analysis, height, loading, date, timeframe, isWide, daysBack]);
+  }, [bars, executions, side, analysis, leLevels, height, loading, date, timeframe, isWide, daysBack]);
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -395,10 +458,21 @@ export default function TradingChart({
   }, [visible]);
 
   const toggle = (key) => setVisible(v => ({ ...v, [key]: !v[key] }));
+  const hasPrevLevels = ['PDH', 'PDL'].some(k => Number.isFinite(Number(leLevels?.[k])));
+  const hasPremarketLevels = ['PMH', 'PML'].some(k => Number.isFinite(Number(leLevels?.[k])));
+  const feedLabel = levelFeed === 'sip'
+    ? 'SIP'
+    : levelFeed === 'delayed_sip'
+      ? 'Delayed SIP'
+      : levelFeed === 'iex'
+        ? 'IEX fallback'
+        : levelFeed ? String(levelFeed).toUpperCase() : null;
   const legendItems = [
     { key: 'buy', label: 'Buy fill', swatch: { width: 9, height: 9, borderRadius: '50%', background: 'var(--result-pos)' } },
     { key: 'sell', label: 'Sell fill', swatch: { width: 9, height: 9, borderRadius: '50%', background: 'var(--result-neg)' } },
     !isWide && { key: 'vwap', label: 'VWAP', swatch: { width: 16, height: 2, background: 'var(--text-secondary)' } },
+    !isWide && hasPrevLevels && { key: 'prevLevels', label: 'PDH / PDL', swatch: { width: 16, height: 2, borderTop: '2px dashed var(--accent-line)' } },
+    !isWide && hasPremarketLevels && { key: 'premarketLevels', label: 'PMH / PML', swatch: { width: 16, height: 2, borderTop: '2px dotted var(--caution)' } },
     analysis?.stop_loss && { key: 'sl', label: 'SL', swatch: { width: 16, height: 2, background: 'var(--caution)' } },
     analysis?.target_price && { key: 'target', label: 'Target', swatch: { width: 16, height: 2, background: 'var(--accent-line)' } },
   ].filter(Boolean);
@@ -455,6 +529,11 @@ export default function TradingChart({
                 {item.label}
               </button>
             ))}
+            {!isWide && feedLabel && (hasPrevLevels || hasPremarketLevels) && (
+              <span className="text-muted" title={levelWarning || undefined} style={{ fontSize: 11.5, marginLeft: 4 }}>
+                LE levels · {feedLabel}
+              </span>
+            )}
           </div>
           <div ref={containerRef} style={{ width: '100%', background: 'var(--surface-panel)', borderRadius: 'var(--radius-md)' }} />
         </>
