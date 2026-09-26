@@ -30,7 +30,7 @@ function StatsRow({ data }) {
   const d = data?.two_traders?.disciplined;
   const x = data?.two_traders?.destructive;
   return (
-    <div className="grid-4" style={{ gap: 10 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
       {[
         ['Completed trades', data?.meta?.trade_count ?? 0, ''],
         ['Timestamp coverage', `${data?.meta?.timestamp_coverage ?? 0}%`, ''],
