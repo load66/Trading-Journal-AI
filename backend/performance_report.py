@@ -84,6 +84,10 @@ def enrich_trade(trade):
     if entry_qty > 0:
         avg_entry = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries) / entry_qty
 
+    qty_bot = sum(float(e.get("qty") or 0) for e in execs if e.get("action") == "BOT")
+    qty_sold = sum(float(e.get("qty") or 0) for e in execs if e.get("action") == "SOLD")
+    is_open = abs(qty_bot - qty_sold) > 1e-6
+
     t.update({
         "execs": execs,
         "entries": entries,
@@ -95,6 +99,8 @@ def enrich_trade(trade):
         "avg_entry": avg_entry,
         "entry_notional": entry_qty * (avg_entry or 0),
         "pnl": float(t.get("net_pnl") or 0),
+        "is_open": is_open,
+        "open_quantity": round(abs(qty_bot - qty_sold), 6),
     })
     return t
 
@@ -402,8 +408,9 @@ def by_day_ticker_sorted(trades):
 
 
 def build_performance_report(trades):
-    rows = [enrich_trade(t) for t in trades]
-    rows = [t for t in rows if t.get("net_pnl") is not None]
+    enriched = [enrich_trade(t) for t in trades]
+    open_positions = [t for t in enriched if t.get("is_open")]
+    rows = [t for t in enriched if not t.get("is_open") and t.get("net_pnl") is not None]
     hold_order = [x[0] for x in HOLD_BUCKETS]
     option_order = [x[0] for x in OPTION_SIZE_BUCKETS]
     share_order = [x[0] for x in SHARE_NOTIONAL_BUCKETS]
@@ -454,8 +461,19 @@ def build_performance_report(trades):
     return {
         "meta": {
             "trade_count": len(rows),
+            "open_position_count": len(open_positions),
             "timestamp_coverage": round(sum(t.get("hold_sec") is not None for t in rows) / len(rows) * 100, 1) if rows else 0,
             "note": "All source metrics are deterministic from stored trades/executions. AI should interpret these values, not recalculate them.",
+        },
+        "matching": {
+            "completed_trades": len(rows),
+            "open_positions": [
+                {
+                    "trade_group": t.get("trade_group"), "ticker": t.get("ticker"),
+                    "instrument_type": t.get("instrument_type"), "side": t.get("side"),
+                    "open_quantity": t.get("open_quantity"), "date": t.get("date"),
+                } for t in open_positions
+            ],
         },
         "hold_time": hold,
         "position_size": {"options": option_sizes, "shares_by_notional": share_sizes, "cross_reference": cross},
