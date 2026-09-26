@@ -37,6 +37,8 @@ from library import router as library_router, init_library_tables, apply_aliases
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 SETTINGS = Settings.from_env()
 UPLOAD_DIR = SETTINGS.upload_dir
 
@@ -83,7 +85,6 @@ async def authentication_middleware(request, call_next):
             return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
     return await call_next(request)
 
-install_auth_middleware(app, SETTINGS)
 
 # Serve uploaded diary screenshots (create the folder on first run)
 Path(UPLOAD_DIR).mkdir(exist_ok=True)
