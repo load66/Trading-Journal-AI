@@ -665,6 +665,39 @@ def analyze_context(
     }
 
 
+async def _fetch_market_calendar(entry_dt: datetime) -> dict:
+    """Use Alpaca's official trading calendar for prior session and early-close boundaries."""
+    key = (os.getenv("APCA_API_KEY_ID") or "").strip()
+    secret = (os.getenv("APCA_API_SECRET_KEY") or "").strip()
+    if not key or not secret or key == "your_alpaca_api_key_here":
+        return {"verified": False, "current": None, "previous": None, "error": "Alpaca calendar credentials unavailable."}
+
+    start_day = entry_dt.date() - timedelta(days=14)
+    end_day = entry_dt.date()
+    url = f"{ALPACA_TRADING_BASE_URL}/v2/calendar"
+    headers = {
+        "APCA-API-KEY-ID": key,
+        "APCA-API-SECRET-KEY": secret,
+    }
+    params = {
+        "start": start_day.isoformat(),
+        "end": end_day.isoformat(),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            rows = response.json()
+        if not isinstance(rows, list):
+            return {"verified": False, "current": None, "previous": None, "error": "Unexpected calendar response."}
+        context = _calendar_context(rows, entry_dt.date())
+        context["error"] = None if context["verified"] else "Trade day or previous trading session missing from market calendar."
+        return context
+    except Exception as exc:
+        return {"verified": False, "current": None, "previous": None, "error": str(exc)}
+
+
 def _historical_feed_order() -> list[str]:
     """Prefer consolidated historical data, then degrade explicitly."""
     order = ["sip", "delayed_sip", ALPACA_FALLBACK_FEED, "iex"]
@@ -950,7 +983,11 @@ async def build_le_levels(trade: dict) -> dict:
         }
 
     try:
-        underlying_bars, feed = await _fetch_alpaca_1m(ticker, when)
+        underlying_result, market_calendar = await asyncio.gather(
+            _fetch_alpaca_1m(ticker, when),
+            _fetch_market_calendar(when),
+        )
+        underlying_bars, feed = underlying_result
     except Exception as exc:
         return {
             "ruleset_version": LE_RULESET_VERSION,
@@ -961,8 +998,17 @@ async def build_le_levels(trade: dict) -> dict:
             "warnings": [str(exc)],
         }
 
-    context = analyze_context(trade, underlying_bars, [], [])
-    levels = (context.get("evidence") or {}).get("levels") or {}
+    context = analyze_context(
+        trade,
+        underlying_bars,
+        [],
+        [],
+        market_calendar=market_calendar,
+        underlying_feed=feed,
+    )
+    ev = context.get("evidence") or {}
+    levels = ev.get("levels") or {}
+    level_meta = ev.get("level_meta") or {}
     warnings: list[str] = []
     if levels.get("PDH") is None or levels.get("PDL") is None:
         warnings.append("Previous-day high/low could not be established.")
@@ -977,11 +1023,23 @@ async def build_le_levels(trade: dict) -> dict:
             "Chart levels use delayed SIP; consolidated historical levels are valid, while newest bars may lag."
         )
 
+    verified_levels = {
+        name: value
+        for name, value in levels.items()
+        if value is not None and _status_is_verified((level_meta.get(name) or {}).get("status"))
+    }
+    if not market_calendar.get("verified"):
+        warnings.append(
+            "Official market calendar could not be verified; unverified reference levels are withheld from the chart."
+        )
+
     return {
         "ruleset_version": LE_RULESET_VERSION,
-        "available": any(levels.get(name) is not None for name in ("PDH", "PDL", "PMH", "PML")),
-        "levels": levels,
+        "available": bool(verified_levels),
+        "levels": verified_levels,
+        "level_meta": level_meta,
         "feed": feed,
+        "calendar_verified": bool(market_calendar.get("verified")),
         "warnings": warnings,
     }
 
@@ -1006,10 +1064,11 @@ async def build_le_review(trade: dict) -> dict:
         }
 
     try:
-        underlying_result, spy_result, qqq_result = await asyncio.gather(
+        underlying_result, spy_result, qqq_result, market_calendar = await asyncio.gather(
             _fetch_alpaca_1m(ticker, when),
             _fetch_alpaca_1m("SPY", when),
             _fetch_alpaca_1m("QQQ", when),
+            _fetch_market_calendar(when),
         )
         underlying_bars, underlying_feed = underlying_result
         spy_bars, spy_feed = spy_result
@@ -1025,7 +1084,14 @@ async def build_le_review(trade: dict) -> dict:
             "ai": None,
         }
 
-    context = analyze_context(trade, underlying_bars, spy_bars, qqq_bars)
+    context = analyze_context(
+        trade,
+        underlying_bars,
+        spy_bars,
+        qqq_bars,
+        market_calendar=market_calendar,
+        underlying_feed=underlying_feed,
+    )
     if context.get("available"):
         context["evidence"]["market_data_feed"] = {
             "underlying": underlying_feed,
