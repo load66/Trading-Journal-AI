@@ -53,6 +53,7 @@ function JournalApp({ onSignOut }) {
       .catch(() => {});
   }, []);
   const [brainOpen, setBrainOpen] = useState(false);
+  const [reportsInitialTab, setReportsInitialTab] = useState('overview');
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -76,9 +77,10 @@ function JournalApp({ onSignOut }) {
     setPage('day-review');
   };
 
-  const navigate = (p) => {
+  const navigate = (p, options = {}) => {
     if (p !== 'trades') setTradesFilter({ dateFrom: '', dateTo: '' });
     if (p !== 'trade-detail') setSelectedTrade(null);
+    if (p === 'reports') setReportsInitialTab(options.tab || 'overview');
     setPage(p);
   };
 
@@ -113,6 +115,7 @@ function JournalApp({ onSignOut }) {
             onDayClick={handleCalendarDayClick}
             onOpenDetail={handleOpenDetail}
             onViewAllTrades={() => navigate('trades')}
+            onViewSmokingGun={() => navigate('reports', { tab: 'smoking-gun' })}
           />
         )}
         {page === 'trades' && (
@@ -157,7 +160,7 @@ function JournalApp({ onSignOut }) {
             onOpenDetail={handleOpenDetail}
           />
         )}
-        {page === 'reports' && <Reports accountId={selectedAccountId} />}
+        {page === 'reports' && <Reports accountId={selectedAccountId} initialTab={reportsInitialTab} />}
         {page === 'help' && <Help />}
         {page === 'settings' && <Settings />}
       </main>
