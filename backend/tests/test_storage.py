@@ -33,7 +33,7 @@ def test_local_storage_round_trip(tmp_path):
 
 def test_supabase_storage_requires_server_credentials(tmp_path):
     settings = cfg(tmp_path, STORAGE_MODE="supabase", SUPABASE_URL="https://p.supabase.co")
-    with pytest.raises(ConfigError, match="SUPABASE_SERVICE_ROLE_KEY"):
+    with pytest.raises(ConfigError, match="SUPABASE_SECRET_KEY"):
         DiaryStorage(settings)
 
 
@@ -48,7 +48,7 @@ def test_supabase_private_read_uses_authenticated_endpoint(tmp_path, monkeypatch
         tmp_path,
         STORAGE_MODE="supabase",
         SUPABASE_URL="https://p.supabase.co",
-        SUPABASE_SERVICE_ROLE_KEY="service-role-secret",
+        SUPABASE_SECRET_KEY="sb_secret_server",
         SUPABASE_STORAGE_BUCKET="diary",
     )
     seen = {}
@@ -76,4 +76,5 @@ def test_supabase_private_read_uses_authenticated_endpoint(tmp_path, monkeypatch
         "https://p.supabase.co/storage/v1/object/authenticated/"
         "diary/2026/entry.jpg"
     )
-    assert seen["headers"]["Authorization"] == "Bearer service-role-secret"
+    assert seen["headers"]["apikey"] == "sb_secret_server"
+    assert "Authorization" not in seen["headers"]
