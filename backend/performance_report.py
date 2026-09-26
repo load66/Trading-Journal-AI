@@ -21,9 +21,9 @@ HOLD_BUCKETS = [
 ]
 
 OPTION_SIZE_BUCKETS = [
-    ("1-3", 1, 3), ("4-5", 4, 5), ("6-10", 6, 10), ("11-15", 11, 15),
-    ("16-20", 16, 20), ("21-25", 21, 25), ("26-30", 26, 30),
-    ("31-50", 31, 50), ("50+", 51, inf),
+    ("1-3", 1, 4), ("4-5", 4, 6), ("6-10", 6, 11), ("11-15", 11, 16),
+    ("16-20", 16, 21), ("21-25", 21, 26), ("26-30", 26, 31),
+    ("31-50", 31, 51), ("50+", 51, inf),
 ]
 
 SHARE_NOTIONAL_BUCKETS = [
@@ -33,8 +33,8 @@ SHARE_NOTIONAL_BUCKETS = [
 ]
 
 DAY_COUNT_BUCKETS = [
-    ("1-10", 1, 10), ("11-20", 11, 20), ("21-30", 21, 30),
-    ("31-50", 31, 50), ("50+", 51, inf),
+    ("1-10", 1, 11), ("11-20", 11, 21), ("21-30", 21, 31),
+    ("31-50", 31, 51), ("50+", 51, inf),
 ]
 
 
@@ -109,9 +109,7 @@ def _bucket_label(value, defs):
     if value is None:
         return None
     for label, lo, hi in defs:
-        if lo <= value < hi or (hi != inf and value == hi and lo == hi):
-            return label
-        if hi != inf and lo <= value <= hi:
+        if lo <= value < hi:
             return label
     return defs[-1][0]
 
