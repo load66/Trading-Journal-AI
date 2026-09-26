@@ -14,8 +14,17 @@ import DailySummary from './components/DailySummary';
 import Reports from './components/Reports';
 import Help from './components/Help';
 import Settings from './components/Settings';
+import Login from './components/Login';
+import {
+  AUTH_CHANGED_EVENT,
+  authConfigured,
+  authRequired,
+  clearSession,
+  getSession,
+  signInWithPassword,
+} from './auth';
 
-export default function App() {
+function JournalApp({ onSignOut }) {
   const [page, setPage] = useState('dashboard');
   const [accounts, setAccounts] = useState([]);
   const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -75,6 +84,9 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {onSignOut && (
+        <button className="auth-signout" type="button" onClick={onSignOut}>Sign out</button>
+      )}
       <AppHeader
         page={page}
         onNavigate={navigate}
@@ -158,4 +170,40 @@ export default function App() {
       )}
     </div>
   );
+}
+
+
+export default function App() {
+  const required = authRequired();
+  const [session, setSession] = useState(() => getSession());
+
+  useEffect(() => {
+    if (!required) return undefined;
+    const sync = () => setSession(getSession());
+    window.addEventListener(AUTH_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, sync);
+  }, [required]);
+
+  if (!required) return <JournalApp />;
+  if (!authConfigured()) {
+    return (
+      <main className="login-shell">
+        <div className="login-card" role="alert">
+          <h1>Deployment configuration required</h1>
+          <p>Supabase public authentication settings are missing from this build.</p>
+        </div>
+      </main>
+    );
+  }
+  if (!session?.access_token) {
+    return <Login onSignIn={async (email, password) => {
+      const next = await signInWithPassword(email, password);
+      setSession(next);
+    }} />;
+  }
+
+  return <JournalApp onSignOut={() => {
+    clearSession();
+    setSession(null);
+  }} />;
 }

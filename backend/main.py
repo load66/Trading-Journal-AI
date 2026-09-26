@@ -1,4 +1,6 @@
 import os
+import logging
+import tempfile
 import json
 import sqlite3
 import aiofiles
@@ -9,13 +11,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+from config import Settings
 import httpx
 
-from database import init_db, get_db, row_to_dict
+from database import (init_db, get_db, row_to_dict, insert_and_get_id,
+                      year_filter_clause, is_integrity_error)
+from auth import AuthError, authorize_header, auth_required, validate_auth_config
+from storage import DiaryStorage
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
@@ -32,11 +38,16 @@ from library import router as library_router, init_library_tables, apply_aliases
 
 load_dotenv()
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+logger = logging.getLogger(__name__)
+
+SETTINGS = Settings.from_env()
+UPLOAD_DIR = SETTINGS.upload_dir
+DIARY_STORAGE = DiaryStorage(SETTINGS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_auth_config()
     init_db()
     _conn = get_db()
     try:
@@ -52,7 +63,7 @@ app = FastAPI(title="Trading Journal AI API", lifespan=lifespan)
 # This runs on your own machine, so any localhost port is accepted: when 3010 is
 # busy the dev server offers 3011, and the app should still work. FRONTEND_ORIGINS
 # (comma separated) adds non-localhost origins, e.g. another machine on your LAN.
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "").split(",") if o.strip()]
+ALLOWED_ORIGINS = list(SETTINGS.frontend_origins)
 LOCALHOST_ANY_PORT = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 
 app.add_middleware(
@@ -63,6 +74,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def authentication_middleware(request, call_next):
+    path = request.url.path
+    protected = path == "/api" or path.startswith("/api/") or path.startswith("/uploads/")
+    if protected and auth_required():
+        try:
+            authorize_header(request.headers.get("Authorization"))
+        except AuthError as exc:
+            return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+    return await call_next(request)
+
 
 # Serve uploaded diary screenshots (create the folder on first run)
 Path(UPLOAD_DIR).mkdir(exist_ok=True)
@@ -96,6 +120,9 @@ async def not_found_handler(request, exc):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
+    logger.exception("Unhandled application error", exc_info=exc)
+    if os.getenv("APP_ENV", "").strip().lower() == "production":
+        return JSONResponse(status_code=500, content={"error": "Internal server error"})
     return JSONResponse(
         status_code=500,
         content={"error": str(exc), "type": type(exc).__name__}
@@ -105,6 +132,7 @@ async def global_exception_handler(request, exc):
 # ── Health check ───────────────────────────────────────────────────────────────
 
 @app.get("/")
+@app.get("/health")
 def health():
     return {"status": "ok"}
 
@@ -227,13 +255,14 @@ def create_account(data: AccountCreate, conn: sqlite3.Connection = Depends(get_c
     if data.type not in valid_types:
         raise ValueError(f"type must be one of {valid_types}")
 
-    cursor = conn.execute(
+    account_id = insert_and_get_id(
+        conn,
         "INSERT INTO accounts (name, type, color, broker) VALUES (?,?,?,?)",
-        (data.name, data.type, data.color, data.broker)
+        (data.name, data.type, data.color, data.broker),
     )
     conn.commit()
 
-    row = conn.execute("SELECT * FROM accounts WHERE id=?", (cursor.lastrowid,)).fetchone()
+    row = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
     return row_to_dict(row)
 
 
@@ -327,7 +356,11 @@ def create_custom_setup(body: CustomSetupBody,
             "INSERT INTO custom_setups (name, side, notes) VALUES (?,?,?)",
             (name, side, body.notes))
         conn.commit()
-    except sqlite3.IntegrityError:
+    except Exception as exc:
+        if not is_integrity_error(exc):
+            raise
+        # Postgres requires clearing the failed transaction before issuing another statement.
+        conn.rollback()
         # Already exists — reactivate rather than erroring, so re-adding is harmless.
         conn.execute("UPDATE custom_setups SET active=1 WHERE name=?", (name,))
         conn.commit()
@@ -450,7 +483,7 @@ async def import_csv(
                         net_pnl=excluded.net_pnl,
                         commissions=excluded.commissions,
                         executions=excluded.executions,
-                        imported_at=datetime('now')
+                        imported_at=CURRENT_TIMESTAMP
                 """, (
                     trade['account_id'], trade['trade_group'], trade['date'],
                     trade['ticker'], trade['instrument_type'], trade['side'],
@@ -609,7 +642,7 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
     else:
         executions = json.dumps([execution])
 
-    cursor = conn.execute("""
+    trade_id = insert_and_get_id(conn, """
         INSERT INTO trades
             (account_id, trade_group, date, ticker, instrument_type, side,
              gross_pnl, net_pnl, commissions, executions,
@@ -632,7 +665,7 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         """, (trade_group, data.ticker.upper(), data.date, data.strategy, data.stop_loss, data.notes))
         conn.commit()
 
-    row = conn.execute("SELECT * FROM trades WHERE id=?", (cursor.lastrowid,)).fetchone()
+    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
     return row_to_dict(row)
 
 
@@ -840,12 +873,13 @@ def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = 
     trade = conn.execute("SELECT trade_group FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
-    cursor = conn.execute(
+    tag_id = insert_and_get_id(
+        conn,
         "INSERT INTO trade_tags (trade_group, tag_type, tag_value, source) VALUES (?,?,?,'manual')",
-        (trade_group, data.tag_type, data.tag_value)
+        (trade_group, data.tag_type, data.tag_value),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM trade_tags WHERE id=?", (cursor.lastrowid,)).fetchone()
+    row = conn.execute("SELECT * FROM trade_tags WHERE id=?", (tag_id,)).fetchone()
     return row_to_dict(row)
 
 
@@ -1128,16 +1162,16 @@ async def upload_diary(
                 "Could not convert this HEIC photo. On iPhone, Settings > Camera > "
                 f"Formats > Most Compatible saves as JPEG instead. ({exc})")
 
-    async with aiofiles.open(save_path, 'wb') as f:
-        await f.write(raw)
+    content_type = file.content_type or "application/octet-stream"
+    DIARY_STORAGE.save(safe_name, raw, content_type)
 
     # Insert diary entry row
-    cursor = conn.execute(
+    diary_entry_id = insert_and_get_id(
+        conn,
         "INSERT INTO diary_entries (account_id, entry_date, image_path) VALUES (?,?,?)",
-        (account_id, date, safe_name)
+        (account_id, date, safe_name),
     )
     conn.commit()
-    diary_entry_id = cursor.lastrowid
 
     # Build trades context for Claude
     trades_context = build_trades_context(conn, date, account_id)
@@ -1150,7 +1184,10 @@ async def upload_diary(
             text_content = raw.decode('utf-8', errors='replace')
             analysis = analyze_diary_text(text_content, date, trades_context)
         else:
-            analysis = analyze_diary_entry(str(save_path.absolute()), date, trades_context)
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=True) as temp_image:
+                temp_image.write(raw)
+                temp_image.flush()
+                analysis = analyze_diary_entry(temp_image.name, date, trades_context)
         analysis = apply_aliases(conn, analysis)
         # Persist analysis
         conn.execute(
@@ -1174,6 +1211,12 @@ async def upload_diary(
 
 
 # ── Diary List ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/diary-files/{filename:path}")
+def get_diary_file(filename: str):
+    data, content_type = DIARY_STORAGE.read(filename)
+    return Response(content=data, media_type=content_type)
+
 
 @app.get("/api/diary")
 def list_diary(
@@ -1211,6 +1254,11 @@ def delete_diary_by_date(
     if account_id is not None:
         where += " AND account_id=?"
         params.append(account_id)
+    files = [
+        row["image_path"]
+        for row in conn.execute(f"SELECT image_path FROM diary_entries WHERE {where}", params).fetchall()
+        if row["image_path"]
+    ]
     # trade_analysis.diary_entry_id points back here, so unlink first: the
     # analysis (including anything edited by hand) stays on the trade.
     conn.execute(
@@ -1218,16 +1266,21 @@ def delete_diary_by_date(
         f"(SELECT id FROM diary_entries WHERE {where})", params)
     conn.execute(f"DELETE FROM diary_entries WHERE {where}", params)
     conn.commit()
+    for name in files:
+        DIARY_STORAGE.delete(name)
     return {"ok": True}
 
 
 @app.delete("/api/diary/{entry_id}")
 def delete_diary_entry(entry_id: int, conn: sqlite3.Connection = Depends(get_connection)):
+    row = conn.execute("SELECT image_path FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
     # Unlink the analyses this entry produced, otherwise the foreign key blocks
     # the delete with a 500. The analysis stays on the trade.
     conn.execute("UPDATE trade_analysis SET diary_entry_id = NULL WHERE diary_entry_id = ?", (entry_id,))
     conn.execute("DELETE FROM diary_entries WHERE id=?", (entry_id,))
     conn.commit()
+    if row and row["image_path"]:
+        DIARY_STORAGE.delete(row["image_path"])
     return {"ok": True}
 
 
@@ -1450,7 +1503,7 @@ def get_yearly_kpis(
     account_id: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    sql = "SELECT date, net_pnl, gross_pnl FROM trades WHERE strftime('%Y', date) = ?"
+    sql = f"SELECT date, net_pnl, gross_pnl FROM trades WHERE {year_filter_clause('date')}"
     params = [str(year)]
     if account_id is not None:
         sql += " AND account_id = ?"
@@ -2081,9 +2134,12 @@ def get_weekly_summary(
     if account_id is not None:
         try:
             conn.execute(
-                """INSERT OR REPLACE INTO daily_summaries
+                """INSERT INTO daily_summaries
                    (account_id, summary_date, ai_content, generated_at)
-                   VALUES (?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(summary_date, account_id) DO UPDATE SET
+                       ai_content = excluded.ai_content,
+                       generated_at = excluded.generated_at""",
                 (account_id, cache_key, json.dumps(result), datetime.now().isoformat()),
             )
             conn.commit()
@@ -2135,7 +2191,11 @@ def get_daily_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
     conn.execute(
-        "INSERT OR REPLACE INTO daily_summaries (summary_date, account_id, ai_content, generated_at) VALUES (?, ?, ?, datetime('now'))",
+        """INSERT INTO daily_summaries (summary_date, account_id, ai_content, generated_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(summary_date, account_id) DO UPDATE SET
+               ai_content = excluded.ai_content,
+               generated_at = CURRENT_TIMESTAMP""",
         (date, account_id, json.dumps(summary))
     )
     conn.commit()
