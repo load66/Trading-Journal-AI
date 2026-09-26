@@ -59,6 +59,14 @@ class Settings:
         if storage_mode not in {'local', 'supabase'}:
             raise ConfigError('STORAGE_MODE must be local or supabase')
 
+        turso_database_url = env.get('TURSO_DATABASE_URL', '').strip()
+        turso_auth_token = env.get('TURSO_AUTH_TOKEN', '').strip()
+        if database_mode == 'turso':
+            if not turso_database_url:
+                raise ConfigError('TURSO_DATABASE_URL is required when DATABASE_MODE=turso')
+            if not turso_auth_token:
+                raise ConfigError('TURSO_AUTH_TOKEN is required when DATABASE_MODE=turso')
+
         supabase_url = env.get('SUPABASE_URL', '').strip().rstrip('/')
         allowed_user_id = env.get('ALLOWED_USER_ID', '').strip()
         if auth_mode == 'supabase':
@@ -76,8 +84,8 @@ class Settings:
             frontend_origins=_csv(env.get('FRONTEND_ORIGINS', '')),
             database_mode=database_mode,
             database_path=env.get('DATABASE_PATH', 'trading_journal.db').strip() or 'trading_journal.db',
-            turso_database_url=env.get('TURSO_DATABASE_URL', '').strip(),
-            turso_auth_token=env.get('TURSO_AUTH_TOKEN', '').strip(),
+            turso_database_url=turso_database_url,
+            turso_auth_token=turso_auth_token,
             storage_mode=storage_mode,
             upload_dir=env.get('UPLOAD_DIR', 'uploads').strip() or 'uploads',
             supabase_service_role_key=env.get('SUPABASE_SERVICE_ROLE_KEY', '').strip(),
