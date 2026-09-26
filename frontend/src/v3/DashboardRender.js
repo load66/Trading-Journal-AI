@@ -86,7 +86,7 @@ function MonthPanel({ accountId, onDayClick, latestDate }) {
         </div>
       ) : (
         <div className="v3-scroll">
-          <MonthGrid year={year} month={month} byDay={byDay} today={todayKey} onPick={onDayClick} />
+          <MonthGrid year={year} month={month} byDay={byDay} today={todayKey} onPick={onDayClick} showWeek={false} />
         </div>
       )}
     </>
