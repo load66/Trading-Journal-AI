@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil } from 'lucide-react';
-import { tradesApi, chartApi } from '../api';
+import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Upload, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { tradesApi, chartApi, riskPlanApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
@@ -269,7 +269,7 @@ function barETMinutes(timestamp) {
   return Number(parts.hour) * 60 + Number(parts.minute);
 }
 
-const TABS = ['Stats', 'Strategy', 'Tags', 'LE Review', 'Executions', 'What If'];
+const TABS = ['Stats', 'Risk Plan', 'Strategy', 'Tags', 'LE Review', 'Executions', 'What If'];
 
 const SCENARIOS = [
   { label: '+5 min',    offsetMin: 5 },
@@ -406,6 +406,15 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [strategyForm, setStrategyForm]       = useState({});
   const [savingStrategy, setSavingStrategy]   = useState(false);
 
+  // TradingView risk-plan extraction
+  const [riskPlanResult, setRiskPlanResult] = useState(null);
+  const [riskPlanSaved, setRiskPlanSaved] = useState(null);
+  const [riskPlanForm, setRiskPlanForm] = useState({});
+  const [riskPlanImageUrl, setRiskPlanImageUrl] = useState(null);
+  const [riskPlanLoading, setRiskPlanLoading] = useState(false);
+  const [riskPlanApplying, setRiskPlanApplying] = useState(false);
+  const [riskPlanError, setRiskPlanError] = useState(null);
+
   // Tags
   const [addingTag, setAddingTag]   = useState(false);
   const [tagForm, setTagForm]       = useState({ tag_type: 'strategy', tag_value: '' });
@@ -424,6 +433,18 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       setAnalysis(r.data.analysis || {});
       setTags(r.data.tags || []);
     }).catch(() => setAnalysis({}));
+
+    riskPlanApi.get(trade.trade_group)
+      .then(r => setRiskPlanSaved(r.data || null))
+      .catch(() => setRiskPlanSaved(null));
+
+    setRiskPlanResult(null);
+    setRiskPlanForm({});
+    setRiskPlanError(null);
+    setRiskPlanImageUrl(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
   }, [trade.trade_group]);
 
   // ── Execution handlers ────────────────────────────────────────────────────
@@ -521,6 +542,85 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       console.error(e);
     } finally {
       setSavingStrategy(false);
+    }
+  };
+
+
+  const asOptionalNumber = (value) => {
+    if (value === '' || value == null) return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const handleRiskPlanUpload = async (file) => {
+    if (!file) return;
+    setRiskPlanLoading(true);
+    setRiskPlanError(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await riskPlanApi.extract(trade.trade_group, form);
+      const payload = res.data;
+      const p = payload.preview || {};
+      setRiskPlanResult(payload);
+      setRiskPlanForm({
+        direction: p.direction || '',
+        entry_price: p.entry_price ?? '',
+        stop_price: p.stop_price ?? '',
+        target_price: p.target_price ?? '',
+        risk_distance: p.risk_distance ?? '',
+        reward_distance: p.reward_distance ?? '',
+        risk_reward_ratio: p.calculated_risk_reward ?? p.risk_reward_ratio ?? '',
+        cash_risk: p.cash_risk ?? '',
+        replace_existing: false,
+        allow_direction_mismatch: false,
+      });
+      setRiskPlanImageUrl(prev => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(file);
+      });
+    } catch (e) {
+      setRiskPlanError(e.response?.data?.detail || e.response?.data?.error || e.message || 'Could not analyze this screenshot.');
+    } finally {
+      setRiskPlanLoading(false);
+    }
+  };
+
+  const handleApplyRiskPlan = async () => {
+    if (!riskPlanResult?.evidence_id) return;
+    setRiskPlanApplying(true);
+    setRiskPlanError(null);
+    try {
+      const body = {
+        evidence_id: riskPlanResult.evidence_id,
+        direction: riskPlanForm.direction || null,
+        entry_price: asOptionalNumber(riskPlanForm.entry_price),
+        stop_price: asOptionalNumber(riskPlanForm.stop_price),
+        target_price: asOptionalNumber(riskPlanForm.target_price),
+        risk_distance: asOptionalNumber(riskPlanForm.risk_distance),
+        reward_distance: asOptionalNumber(riskPlanForm.reward_distance),
+        risk_reward_ratio: asOptionalNumber(riskPlanForm.risk_reward_ratio),
+        cash_risk: asOptionalNumber(riskPlanForm.cash_risk),
+        replace_existing: !!riskPlanForm.replace_existing,
+        allow_direction_mismatch: !!riskPlanForm.allow_direction_mismatch,
+      };
+      const res = await riskPlanApi.apply(trade.trade_group, body);
+      setAnalysis(res.data.analysis || {});
+      setRiskPlanResult(prev => prev ? { ...prev, preview: res.data.preview } : prev);
+      const saved = await riskPlanApi.get(trade.trade_group);
+      setRiskPlanSaved(saved.data || null);
+      if (onTradeUpdate) {
+        onTradeUpdate({
+          ...trade,
+          r_multiple: res.data.analysis?.r_multiple,
+          risk_reward: res.data.analysis?.risk_reward,
+        });
+      }
+    } catch (e) {
+      const message = e.response?.data?.detail || e.response?.data?.error || e.message || 'Could not apply risk plan.';
+      setRiskPlanError(message);
+    } finally {
+      setRiskPlanApplying(false);
     }
   };
 
@@ -819,6 +919,181 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     />
                     <StatRow label="Emotional State" value={analysis.emotional_state} />
                   </>
+                )}
+              </div>
+            )}
+
+            {/* ── Risk Plan tab ─────────────────────────────────────────── */}
+            {tab === 'Risk Plan' && (
+              <div style={{ paddingTop: 10 }}>
+                <div className="notice accent" style={{ marginBottom: 14, lineHeight: 1.55 }}>
+                  <strong>Fast TradingView workflow:</strong> upload a screenshot with the Long/Short Position tool.
+                  Groq Vision reads the box, then the journal verifies the math. Nothing is written until you approve it.
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 16 }}>
+                  <div className="card" style={{ padding: 12 }}>
+                    <div className="field-label">Current stop</div>
+                    <div className="num" style={{ marginTop: 5, fontSize: 18 }}>{analysis?.stop_loss != null ? `${Number(analysis.stop_loss).toFixed(2)}` : '—'}</div>
+                  </div>
+                  <div className="card" style={{ padding: 12 }}>
+                    <div className="field-label">Current target</div>
+                    <div className="num" style={{ marginTop: 5, fontSize: 18 }}>{analysis?.target_price != null ? `${Number(analysis.target_price).toFixed(2)}` : '—'}</div>
+                  </div>
+                  <div className="card" style={{ padding: 12 }}>
+                    <div className="field-label">Planned risk</div>
+                    <div className="num" style={{ marginTop: 5, fontSize: 18 }}>{analysis?.risk_per_trade != null ? fmt$(analysis.risk_per_trade) : '—'}</div>
+                  </div>
+                  <div className="card" style={{ padding: 12 }}>
+                    <div className="field-label">Realized R</div>
+                    <div className={`num ${analysis?.r_multiple == null ? '' : analysis.r_multiple >= 0 ? 'pos' : 'neg'}`} style={{ marginTop: 5, fontSize: 18 }}>
+                      {analysis?.r_multiple != null ? `${analysis.r_multiple >= 0 ? '+' : ''}${Number(analysis.r_multiple).toFixed(2)}R` : '—'}
+                    </div>
+                  </div>
+                </div>
+
+                {riskPlanSaved?.evidence?.status === 'applied' && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+                    <span className="chip pos"><ShieldCheck size={12} /> RECORDED</span>
+                    <span className="text-muted" style={{ fontSize: 12 }}>
+                      Risk plan approved from TradingView screenshot · {riskPlanSaved.evidence.model}
+                    </span>
+                  </div>
+                )}
+
+                <label className="card" style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                  minHeight: 92, padding: 18, cursor: riskPlanLoading ? 'wait' : 'pointer',
+                  borderStyle: 'dashed', marginBottom: 14,
+                }}>
+                  <Upload size={18} />
+                  <span style={{ fontWeight: 600 }}>{riskPlanLoading ? 'Reading TradingView chart…' : 'Upload TradingView Risk Chart'}</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    disabled={riskPlanLoading}
+                    onChange={e => handleRiskPlanUpload(e.target.files?.[0])}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+
+                {riskPlanError && (
+                  <div className="notice neg" role="alert" style={{ marginBottom: 14 }}>
+                    <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                    {riskPlanError}
+                  </div>
+                )}
+
+                {riskPlanResult && (
+                  <div className="card" style={{ padding: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>Extraction preview</div>
+                        <div className="text-muted" style={{ fontSize: 12, marginTop: 3 }}>
+                          Review these values. Edit anything Groq read incorrectly before applying.
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <span className="chip">AI EXTRACTED</span>
+                        {riskPlanResult.preview?.math_verified
+                          ? <span className="chip pos">VERIFIED MATH</span>
+                          : <span className="chip">INSUFFICIENT DATA</span>}
+                        <span className="chip">
+                          Confidence {Math.round(Number(riskPlanResult.preview?.confidence || 0) * 100)}%
+                        </span>
+                      </div>
+                    </div>
+
+                    {riskPlanImageUrl && (
+                      <img
+                        src={riskPlanImageUrl}
+                        alt="Uploaded TradingView risk plan"
+                        style={{ width: '100%', maxHeight: 340, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--divider)', marginBottom: 14 }}
+                      />
+                    )}
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+                      <EditField
+                        label="Direction"
+                        value={riskPlanForm.direction || ''}
+                        onChange={v => setRiskPlanForm(f => ({ ...f, direction: v }))}
+                        options={['LONG', 'SHORT']}
+                      />
+                      <EditField label="Entry price" type="number" value={String(riskPlanForm.entry_price ?? '')} onChange={v => setRiskPlanForm(f => ({ ...f, entry_price: v }))} />
+                      <EditField label="Stop price" type="number" value={String(riskPlanForm.stop_price ?? '')} onChange={v => setRiskPlanForm(f => ({ ...f, stop_price: v }))} />
+                      <EditField label="Target price" type="number" value={String(riskPlanForm.target_price ?? '')} onChange={v => setRiskPlanForm(f => ({ ...f, target_price: v }))} />
+                      <EditField label="Risk distance" type="number" value={String(riskPlanForm.risk_distance ?? '')} onChange={v => setRiskPlanForm(f => ({ ...f, risk_distance: v }))} />
+                      <EditField label="Reward distance" type="number" value={String(riskPlanForm.reward_distance ?? '')} onChange={v => setRiskPlanForm(f => ({ ...f, reward_distance: v }))} />
+                      <EditField label="Planned R:R" type="number" value={String(riskPlanForm.risk_reward_ratio ?? '')} onChange={v => setRiskPlanForm(f => ({ ...f, risk_reward_ratio: v }))} />
+                      <EditField label="Planned Risk ($)" type="number" value={String(riskPlanForm.cash_risk ?? '')} onChange={v => setRiskPlanForm(f => ({ ...f, cash_risk: v }))} />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+                      {riskPlanResult.preview?.direction_match === true && <span className="chip pos">VERIFIED direction match</span>}
+                      {riskPlanResult.preview?.direction_match === false && <span className="chip neg">Direction mismatch</span>}
+                      <span className="chip">
+                        Cash risk: {riskPlanResult.preview?.evidence_badges?.cash_risk || 'INSUFFICIENT DATA'}
+                      </span>
+                    </div>
+
+                    {(riskPlanResult.preview?.warnings || []).length > 0 && (
+                      <div className="notice" style={{ marginTop: 12 }}>
+                        {(riskPlanResult.preview.warnings || []).map((w, i) => (
+                          <div key={i} style={{ marginBottom: i === riskPlanResult.preview.warnings.length - 1 ? 0 : 5 }}>• {w}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {riskPlanResult.existing_plan && (
+                      <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 14, fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          checked={!!riskPlanForm.replace_existing}
+                          onChange={e => setRiskPlanForm(f => ({ ...f, replace_existing: e.target.checked }))}
+                        />
+                        <span>
+                          Replace the existing risk plan. Existing stop/target/risk values will not be overwritten unless this is checked.
+                        </span>
+                      </label>
+                    )}
+
+                    {riskPlanResult.preview?.direction_match === false && (
+                      <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 10, fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          checked={!!riskPlanForm.allow_direction_mismatch}
+                          onChange={e => setRiskPlanForm(f => ({ ...f, allow_direction_mismatch: e.target.checked }))}
+                        />
+                        <span>I reviewed the screenshot and intentionally want to apply this direction despite the mismatch warning.</span>
+                      </label>
+                    )}
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handleApplyRiskPlan}
+                        disabled={
+                          riskPlanApplying
+                          || (riskPlanResult.existing_plan && !riskPlanForm.replace_existing)
+                          || (riskPlanResult.preview?.direction_match === false && !riskPlanForm.allow_direction_mismatch)
+                        }
+                      >
+                        <ShieldCheck size={15} />
+                        {riskPlanApplying ? 'Applying…' : 'Apply Risk Plan'}
+                      </button>
+                      <span className="text-muted" style={{ fontSize: 12 }}>
+                        Applied values become RECORDED evidence; R:R and eligible cash-risk math are deterministic.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {!riskPlanResult && (
+                  <div className="text-muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
+                    For options, an underlying TradingView chart can verify direction, entry/stop/target geometry and planned R:R.
+                    Cash risk is left blank unless the screenshot explicitly shows dollars or you enter Planned Risk ($).
+                  </div>
                 )}
               </div>
             )}
