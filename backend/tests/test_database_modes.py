@@ -106,3 +106,110 @@ def test_init_db_is_idempotent(tmp_path):
     ).fetchone()['n']
     assert migrations == len(database.MIGRATIONS)
     conn.close()
+
+
+class _FakeCursor:
+    def __init__(self, rows=(), description=()):
+        self._rows = list(rows)
+        self.description = description
+        self.rowcount = len(self._rows)
+
+    def execute(self, sql, params=()):
+        self.last_sql = sql
+        self.last_params = params
+        return self
+
+    def fetchone(self):
+        return self._rows.pop(0) if self._rows else None
+
+    def fetchall(self):
+        rows = list(self._rows)
+        self._rows.clear()
+        return rows
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _FakePostgresConnection:
+    def __init__(self):
+        self.calls = []
+        self.commits = 0
+        self.rollbacks = 0
+        self.closed = False
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, params))
+        if sql == 'SELECT lastval()':
+            return _FakeCursor([(42,)], [('lastval',)])
+        if sql.startswith('SELECT'):
+            return _FakeCursor([(7, 'QQQ')], [('id',), ('name',)])
+        return _FakeCursor()
+
+    def cursor(self):
+        parent = self
+
+        class Cursor(_FakeCursor):
+            def execute(self, sql, params=()):
+                parent.calls.append((sql, params))
+                return super().execute(sql, params)
+
+        return Cursor()
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+    def close(self):
+        self.closed = True
+
+
+def test_postgres_mode_uses_psycopg_and_private_schema(monkeypatch):
+    fake = _FakePostgresConnection()
+    seen = {}
+
+    class FakePsycopg:
+        @staticmethod
+        def connect(dsn, **kwargs):
+            seen['dsn'] = dsn
+            seen['kwargs'] = kwargs
+            return fake
+
+    monkeypatch.setitem(sys.modules, 'psycopg', FakePsycopg)
+    conn = database.get_db(settings(
+        DATABASE_MODE='postgres',
+        SUPABASE_DB_URL='postgresql://example/session-pooler',
+    ))
+
+    assert seen['dsn'] == 'postgresql://example/session-pooler'
+    assert seen['kwargs'] == {'autocommit': False}
+    assert fake.calls[0][0] == 'SET search_path TO journal, public'
+    conn.close()
+    assert fake.closed is True
+
+
+def test_postgres_adapter_translates_qmark_parameters_and_wraps_rows():
+    fake = _FakePostgresConnection()
+    conn = database.PostgresConnectionAdapter(fake)
+
+    row = conn.execute('SELECT id, name FROM trades WHERE id=? AND ticker=?', (7, 'QQQ')).fetchone()
+
+    assert fake.calls[-1] == (
+        'SELECT id, name FROM trades WHERE id=%s AND ticker=%s',
+        (7, 'QQQ'),
+    )
+    assert row[0] == 7
+    assert row['name'] == 'QQQ'
+    assert dict(row) == {'id': 7, 'name': 'QQQ'}
+
+
+def test_postgres_insert_cursor_exposes_sequence_lastrowid():
+    fake = _FakePostgresConnection()
+    conn = database.PostgresConnectionAdapter(fake)
+
+    cursor = conn.execute('INSERT INTO accounts (name) VALUES (?)', ('Primary',))
+
+    assert cursor.lastrowid == 42
+    assert ('SELECT lastval()', ()) in fake.calls
