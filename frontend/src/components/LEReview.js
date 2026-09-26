@@ -4,6 +4,12 @@ import { tradesApi } from '../api';
 
 const money = (value) => value == null ? '—' : `$${Number(value).toFixed(2)}`;
 const pct = (value) => value == null ? '—' : `${Number(value).toFixed(2)}%`;
+const confidenceLabel = (value) => {
+  if (value == null) return 'Unknown';
+  if (value >= 90) return 'High';
+  if (value >= 70) return 'Medium';
+  return 'Low';
+};
 
 function EvidenceRow({ label, value, tone }) {
   if (value == null || value === '') return null;
@@ -37,7 +43,7 @@ function ReviewTag({ tag, existing, applying, onApply }) {
             {tag.source === 'rule' ? (
               <span className="text-muted" style={{ fontSize: 11.5 }}>RULE</span>
             ) : tag.confidence != null ? (
-              <span className="num text-muted" style={{ fontSize: 11.5 }}>Model {tag.confidence}%</span>
+              <span className="text-muted" style={{ fontSize: 11.5 }}>AI confidence: {confidenceLabel(tag.confidence)}</span>
             ) : null}
           </div>
           {tag.reason && (
@@ -193,11 +199,27 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
     .join(', ') || 'None confirmed';
 
   const benchmark = (item) => {
-    if (!item || item.price == null) return 'Unknown';
-    if (item.above_ema8 === true) return `Above 10m 8 EMA · ${money(item.price)}`;
-    if (item.below_ema8 === true) return `Below 10m 8 EMA · ${money(item.price)}`;
-    return `At/near 10m 8 EMA · ${money(item.price)}`;
+    if (!item || item.price == null || item.vwap == null) return 'Unknown';
+    const pos = item.position_vs_vwap;
+    const relation = pos === 'above' ? 'Above VWAP' : pos === 'below' ? 'Below VWAP' : 'At VWAP';
+    return `${relation} · Price ${money(item.price)} · VWAP ${money(item.vwap)}`;
   };
+
+  const marketSign = ev.market_sign?.status || 'unknown';
+  const marketSignLabel = marketSign === 'confirmed'
+    ? 'CONFIRMED'
+    : marketSign === 'failed'
+      ? 'FAILED'
+      : marketSign === 'mixed'
+        ? 'MIXED'
+        : 'UNKNOWN';
+  const marketSignTone = marketSign === 'confirmed'
+    ? 'var(--result-pos)'
+    : marketSign === 'failed'
+      ? 'var(--result-neg)'
+      : marketSign === 'mixed'
+        ? 'var(--warning)'
+        : undefined;
 
   return (
     <div style={{ paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -226,10 +248,21 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
         <EvidenceRow label="Last completed 1m close" value={money(ev.underlying_price_last_completed_1m)} />
         <EvidenceRow label="Last completed 10m 8 EMA" value={money(ev.ema8_10m_last_completed)} />
         <EvidenceRow label="Distance from 8 EMA" value={pct(ev.ema_distance_pct)} tone={ev.ema_distance_pct > 1 ? 'var(--result-neg)' : undefined} />
-        <EvidenceRow label="SPY" value={benchmark(ev.spy)} />
-        <EvidenceRow label="QQQ" value={benchmark(ev.qqq)} />
+        <EvidenceRow label="SPY vs VWAP" value={benchmark(ev.spy)} />
+        <EvidenceRow label="QQQ vs VWAP" value={benchmark(ev.qqq)} />
+        <EvidenceRow label="Market Sign" value={marketSignLabel} tone={marketSignTone} />
         <EvidenceRow label="Market data feed" value={ev.market_data_feed?.underlying?.toUpperCase()} />
+        <EvidenceRow
+          label="Evidence quality"
+          value={ev.evidence_quality ? `${ev.evidence_quality.level} · ${ev.evidence_quality.completeness_pct}% complete` : 'Unknown'}
+        />
       </div>
+
+      {ev.evidence_quality?.reason && (
+        <div className="text-muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+          Evidence quality: {ev.evidence_quality.reason}
+        </div>
+      )}
 
       {(review.data_warnings || []).length > 0 && (
         <div className="notice caution" style={{ fontSize: 13 }}>
@@ -296,7 +329,7 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700 }}>
                     {strategy?.value === 'NONE' ? 'No strategy suggested' : strategy?.value}
-                    {strategy?.confidence != null && <span className="num text-muted" style={{ marginLeft: 7, fontSize: 12 }}>Model {strategy.confidence}%</span>}
+                    {strategy?.confidence != null && <span className="text-muted" style={{ marginLeft: 7, fontSize: 12 }}>AI confidence: {confidenceLabel(strategy.confidence)}</span>}
                   </div>
                   {strategy?.reason && <div className="text-muted" style={{ fontSize: 13, lineHeight: 1.5, marginTop: 5 }}>{strategy.reason}</div>}
                 </div>
