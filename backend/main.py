@@ -804,6 +804,36 @@ def _avg_trade_pl_percent(trades: list[dict]) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
 
 
+def _trade_closed_at_key(trade: dict) -> tuple[str, str, int]:
+    """Deterministic broker-execution close key for recent-trade ordering.
+
+    Prefer the final exit execution for the trade. If malformed legacy data has
+    no recognizable exit action, fall back to the final recorded execution.
+    date/time are broker-recorded fields, so this does not depend on import time.
+    """
+    side = str(trade.get("side") or "LONG").upper()
+    exit_action = "SOLD" if side == "LONG" else "BOT"
+    executions = trade.get("executions") or []
+    exits = [e for e in executions if str(e.get("action") or "").upper() == exit_action]
+    candidates = exits or executions
+    if not candidates:
+        return (str(trade.get("date") or ""), "", int(trade.get("id") or 0))
+
+    def key(e):
+        return (
+            str(e.get("date") or trade.get("date") or ""),
+            str(e.get("time") or ""),
+            int(e.get("source_row") or 0),
+        )
+
+    last = max(candidates, key=key)
+    return (
+        str(last.get("date") or trade.get("date") or ""),
+        str(last.get("time") or ""),
+        int(trade.get("id") or 0),
+    )
+
+
 @app.get("/api/trades")
 def list_trades(
     account_id: int | None = Query(None),
@@ -812,6 +842,8 @@ def list_trades(
     date_to: str | None = Query(None),
     ticker: str | None = Query(None),
     open_only: bool = Query(False),
+    closed_only: bool = Query(False),
+    sort_by: str | None = Query(None),
     limit: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
@@ -840,8 +872,15 @@ def list_trades(
         sql += " AND t.ticker LIKE ?"
         params.append(f"%{ticker.upper()}%")
 
+    if open_only and closed_only:
+        raise HTTPException(status_code=400, detail="open_only and closed_only cannot both be true")
+    if sort_by not in (None, "closed_at_desc"):
+        raise HTTPException(status_code=400, detail="sort_by must be closed_at_desc")
+
     sql += " ORDER BY t.date DESC, t.imported_at DESC"
-    if limit is not None and not open_only:
+    # Broker-close ordering is computed after executions are parsed, so SQL must
+    # not trim the candidate set first.
+    if limit is not None and not open_only and not closed_only and sort_by is None:
         sql += f" LIMIT {int(limit)}"
 
     rows = conn.execute(sql, params).fetchall()
@@ -852,12 +891,18 @@ def list_trades(
             d['executions'] = json.loads(d.get('executions') or '[]')
         except Exception:
             d['executions'] = []
-        if open_only and not _is_open_position(d):
+        is_open = _is_open_position(d)
+        if open_only and not is_open:
+            continue
+        if closed_only and is_open:
             continue
         d["pl_pct"] = _trade_pl_percent(d)
         result.append(d)
 
-    if limit is not None and open_only:
+    if sort_by == "closed_at_desc":
+        result.sort(key=_trade_closed_at_key, reverse=True)
+
+    if limit is not None and (open_only or closed_only or sort_by is not None):
         result = result[:limit]
 
     return result
