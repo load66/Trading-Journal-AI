@@ -1,7 +1,14 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from le_analysis import analyze_context, entry_datetime, market_direction, _le_json_schema
+from le_analysis import (
+    _le_json_schema,
+    _market_sign_status,
+    _session_vwap_snapshot,
+    analyze_context,
+    entry_datetime,
+    market_direction,
+)
 
 
 ET = ZoneInfo("America/New_York")
@@ -94,6 +101,93 @@ def test_entry_snapshot_uses_only_completed_one_minute_bar():
     bars.append(bar(datetime(2026, 9, 25, 9, 47, tzinfo=ET), 102.0, 150.0, 90.0, 149.0))
     review = analyze_context(base_trade("CALL", entry="08:47:04"), bars, bars, bars)
     assert review["evidence"]["underlying_price_last_completed_1m"] == 102.0
+
+
+def test_exact_10m_boundary_is_not_used_as_pre_entry_confirmation():
+    prev = minute_run(
+        (2026, 9, 24), 9, 30, 90, 98.0,
+        high=lambda i: 100.0 if i == 10 else 99.0,
+        low=lambda i: 95.0 if i == 20 else 97.0,
+    )
+    pre = [
+        bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 98.0, 101.0, 96.0, 98.5),
+        bar(datetime(2026, 9, 25, 9, 29, tzinfo=ET), 98.5, 100.0, 97.0, 99.0),
+    ]
+    # No break through 09:49. The 09:50–10:00 candle breaks both levels,
+    # but an entry exactly at 10:00:00 ET must not use that candle.
+    rth = minute_run(
+        (2026, 9, 25), 9, 30, 30,
+        lambda i: 99.0 if i < 20 else 102.0,
+    )
+    trade = base_trade("CALL", entry="09:00:00")  # CT -> 10:00:00 ET
+    review = analyze_context(trade, prev + pre + rth, rth, rth)
+    names = tag_names(review)
+
+    assert review["evidence"]["level_breaks_before_entry"]["PDH"] is False
+    assert review["evidence"]["level_breaks_before_entry"]["PMH"] is False
+    assert ("setup", "Outside Day") not in names
+    assert ("mistake", "No Level Break") in names
+
+
+def test_vwap_snapshot_uses_only_completed_regular_session_bars():
+    bars = minute_run(
+        (2026, 9, 25), 9, 30, 20,
+        lambda i: 100.0 + i * 0.1,
+    )
+    entry = datetime(2026, 9, 25, 9, 47, 4, tzinfo=ET)
+    snap = _session_vwap_snapshot(bars, entry)
+
+    assert snap["vwap"] is not None
+    assert snap["price"] is not None
+    assert snap["position_vs_vwap"] == "above"
+
+
+def test_vwap_market_sign_confirmed_failed_and_mixed():
+    rising = minute_run(
+        (2026, 9, 25), 9, 30, 20,
+        lambda i: 100.0 + i * 0.1,
+    )
+    falling = minute_run(
+        (2026, 9, 25), 9, 30, 20,
+        lambda i: 102.0 - i * 0.1,
+    )
+    entry = datetime(2026, 9, 25, 9, 47, 4, tzinfo=ET)
+    above = _session_vwap_snapshot(rising, entry)
+    below = _session_vwap_snapshot(falling, entry)
+
+    assert _market_sign_status("bullish", above, above) == "confirmed"
+    assert _market_sign_status("bullish", below, below) == "failed"
+    assert _market_sign_status("bullish", above, below) == "mixed"
+    assert _market_sign_status("bearish", below, below) == "confirmed"
+    assert _market_sign_status("bearish", above, above) == "failed"
+
+
+def test_failed_vwap_market_sign_adds_deterministic_mistake_tag():
+    underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    falling = minute_run(
+        (2026, 9, 25), 9, 30, 20,
+        lambda i: 102.0 - i * 0.1,
+    )
+    review = analyze_context(base_trade("CALL"), underlying, falling, falling)
+
+    assert review["evidence"]["market_sign"]["status"] == "failed"
+    assert ("mistake", "No Market Sign") in tag_names(review)
+
+
+def test_mixed_vwap_market_sign_does_not_add_no_market_sign_tag():
+    underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    rising = minute_run(
+        (2026, 9, 25), 9, 30, 20,
+        lambda i: 100.0 + i * 0.1,
+    )
+    falling = minute_run(
+        (2026, 9, 25), 9, 30, 20,
+        lambda i: 102.0 - i * 0.1,
+    )
+    review = analyze_context(base_trade("CALL"), underlying, rising, falling)
+
+    assert review["evidence"]["market_sign"]["status"] == "mixed"
+    assert ("mistake", "No Market Sign") not in tag_names(review)
 
 
 def test_outside_day_requires_both_directional_levels_before_entry():

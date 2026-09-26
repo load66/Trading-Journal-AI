@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v1"
+LE_RULESET_VERSION = "LE_2026_09_v2_VWAP_SIGN"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
@@ -36,7 +36,6 @@ AI_TAGS = {
     "mistake": {
         "Chased Entry",
         "Forced Setup",
-        "No Market Sign",
         "Sold Too Early",
     },
 }
@@ -52,6 +51,7 @@ _RULE_TAGS = {
     ("mistake", "Airgapped from 8 EMA"),
     ("mistake", "No Level Break"),
     ("mistake", "Traded Chop"),
+    ("mistake", "No Market Sign"),
     ("outcome", "Break-Even"),
 }
 
@@ -160,12 +160,88 @@ def _ema(values: list[float], period: int = 8) -> float | None:
 
 
 def _last_completed_1m_bar(bars: list[dict], when: datetime) -> dict | None:
-    """Return only a fully closed one-minute bar to avoid intraminute lookahead."""
+    """Return only bars whose close is strictly before the execution timestamp."""
     eligible = [
         b for b in bars
-        if _bar_dt(b) + timedelta(minutes=1) <= when
+        if _bar_dt(b) + timedelta(minutes=1) < when
     ]
     return max(eligible, key=_bar_dt) if eligible else None
+
+
+def _session_vwap_snapshot(bars: list[dict], entry_dt: datetime) -> dict:
+    """Regular-session HLC3 VWAP using only one-minute bars closed before entry."""
+    completed = []
+    for bar in bars:
+        dt = _bar_dt(bar)
+        if (
+            dt.date() == entry_dt.date()
+            and _is_rth(dt)
+            and dt + timedelta(minutes=1) < entry_dt
+        ):
+            completed.append(bar)
+
+    if not completed:
+        return {
+            "price": None,
+            "vwap": None,
+            "position_vs_vwap": "unknown",
+            "distance_from_vwap_pct": None,
+        }
+
+    last = max(completed, key=_bar_dt)
+    price = float(last.get("c") or 0)
+    pv = 0.0
+    volume = 0.0
+    for bar in completed:
+        v = float(bar.get("v") or 0)
+        if v <= 0:
+            continue
+        typical = (
+            float(bar.get("h") or 0)
+            + float(bar.get("l") or 0)
+            + float(bar.get("c") or 0)
+        ) / 3.0
+        pv += typical * v
+        volume += v
+
+    vwap = pv / volume if volume > 0 else None
+    if vwap is None:
+        position = "unknown"
+        distance = None
+    else:
+        distance = abs(price - vwap) / vwap * 100 if vwap else None
+        if price > vwap:
+            position = "above"
+        elif price < vwap:
+            position = "below"
+        else:
+            position = "at"
+
+    return {
+        "price": price,
+        "vwap": vwap,
+        "position_vs_vwap": position,
+        "distance_from_vwap_pct": distance,
+    }
+
+
+def _market_sign_status(direction: str, spy: dict, qqq: dict) -> str:
+    positions = [spy.get("position_vs_vwap"), qqq.get("position_vs_vwap")]
+    if any(p in (None, "unknown") for p in positions):
+        return "unknown"
+
+    if direction == "bullish":
+        confirms = [p == "above" for p in positions]
+        opposes = [p == "below" for p in positions]
+    else:
+        confirms = [p == "below" for p in positions]
+        opposes = [p == "above" for p in positions]
+
+    if all(confirms):
+        return "confirmed"
+    if all(opposes):
+        return "failed"
+    return "mixed"
 
 
 def _first_completed_break(
@@ -178,7 +254,7 @@ def _first_completed_break(
     if level is None:
         return None
     for bar in bars_10m:
-        if bar["start"].date() != trade_day or bar["end"] > entry_dt:
+        if bar["start"].date() != trade_day or bar["end"] >= entry_dt:
             continue
         close = float(bar["c"])
         if direction == "up" and close > level:
@@ -201,20 +277,6 @@ def _session_window(entry_dt: datetime) -> str:
     if time(15, 0) <= t < time(15, 45):
         return "close_window"
     return "outside_primary_window"
-
-
-def _benchmark_snapshot(bars: list[dict], entry_dt: datetime) -> dict:
-    bars_10m = _aggregate_10m(bars)
-    completed = [b for b in bars_10m if b["end"] <= entry_dt]
-    ema8 = _ema([b["c"] for b in completed])
-    last_bar = _last_completed_1m_bar(bars, entry_dt)
-    price = float(last_bar["c"]) if last_bar else None
-    return {
-        "price": price,
-        "ema8_10m": ema8,
-        "above_ema8": None if price is None or ema8 is None else price > ema8,
-        "below_ema8": None if price is None or ema8 is None else price < ema8,
-    }
 
 
 def analyze_context(
@@ -256,7 +318,11 @@ def analyze_context(
     ]
     current_to_entry = [
         b for b, dt in dated
-        if dt.date() == trade_day and time(9, 30) <= dt.time() < time(16, 0) and dt <= entry_dt
+        if (
+            dt.date() == trade_day
+            and time(9, 30) <= dt.time() < time(16, 0)
+            and dt + timedelta(minutes=1) < entry_dt
+        )
     ]
 
     pdh = max((float(b["h"]) for b in previous_rth), default=None)
@@ -265,7 +331,7 @@ def analyze_context(
     pml = min((float(b["l"]) for b in premarket), default=None)
 
     bars_10m = _aggregate_10m(underlying_bars)
-    completed_before_entry = [b for b in bars_10m if b["end"] <= entry_dt]
+    completed_before_entry = [b for b in bars_10m if b["end"] < entry_dt]
     ema8 = _ema([b["c"] for b in completed_before_entry])
     entry_bar = _last_completed_1m_bar(current_to_entry, entry_dt)
     underlying_price = float(entry_bar["c"]) if entry_bar else None
@@ -385,10 +451,17 @@ def analyze_context(
     if ema8 is None:
         data_warnings.append("10-minute 8 EMA could not be calculated.")
 
-    spy = _benchmark_snapshot(spy_bars, entry_dt)
-    qqq = _benchmark_snapshot(qqq_bars, entry_dt)
-    if spy["price"] is None or qqq["price"] is None:
-        data_warnings.append("SPY/QQQ market-confirmation evidence is incomplete.")
+    spy = _session_vwap_snapshot(spy_bars, entry_dt)
+    qqq = _session_vwap_snapshot(qqq_bars, entry_dt)
+    market_sign = _market_sign_status(direction, spy, qqq)
+    if spy["vwap"] is None or qqq["vwap"] is None:
+        data_warnings.append("SPY/QQQ VWAP market-confirmation evidence is incomplete.")
+
+    if market_sign == "failed":
+        add_rule_tag(
+            "mistake", "No Market Sign",
+            "Both SPY and QQQ were on the wrong side of regular-session VWAP for the trade direction before entry.",
+        )
 
     evidence = {
         "underlying": trade.get("ticker"),
@@ -411,6 +484,14 @@ def analyze_context(
         "nearest_broken_level": nearest_broken_level,
         "spy": spy,
         "qqq": qqq,
+        "market_sign": {
+            "basis": "SPY/QQQ regular-session HLC3 VWAP",
+            "status": market_sign,
+            "rule": (
+                "Bullish: both SPY and QQQ above VWAP = confirmed; both below = failed; otherwise mixed. "
+                "Bearish: both below VWAP = confirmed; both above = failed; otherwise mixed."
+            ),
+        },
         "net_pnl": trade.get("net_pnl"),
         "instrument_type": trade.get("instrument_type"),
         "option_type": trade.get("option_type"),
@@ -548,10 +629,11 @@ Strategy rules:
 - If the evidence cannot distinguish these reliably, choose NONE.
 
 Tag rules:
-- The deterministic rule engine already handles Outside/Inside Day, level breaks, first-10m, airgapped >1%, no-level-break, chop-range and break-even. Do not repeat those.
+- The deterministic rule engine already handles Outside/Inside Day, level breaks, first-10m, airgapped >1%, no-level-break, chop-range, VWAP-based No Market Sign, and break-even. Do not repeat those.
+- Market Sign is a custom trader rule supplied in objective evidence: bullish requires both SPY and QQQ above regular-session VWAP; bearish requires both below. Mixed is not a failed sign.
 - Suggest A++ Level + EMA only when broken-level and EMA confluence is genuinely supported.
-- Suggest Flag-Line-Sign only when all three elements are supported; SPY/QQQ evidence alone is not enough.
-- Suggest Clean/Early/Late Entry, Chased Entry, Forced Setup, No Market Sign, or Sold Too Early only when the evidence supports the claim.
+- Suggest Flag-Line-Sign only when Flag and Line are supported and objective market_sign.status is confirmed.
+- Suggest Clean/Early/Late Entry, Chased Entry, Forced Setup, or Sold Too Early only when the evidence supports the claim.
 - Missing evidence means omit the tag and add a concise item to insufficient_evidence.
 
 Be conservative. A false positive is worse than returning NONE.
@@ -686,11 +768,45 @@ async def build_le_review(trade: dict) -> dict:
             "SPY": spy_feed,
             "QQQ": qqq_feed,
         }
-        if "iex" in {underlying_feed, spy_feed, qqq_feed}:
+        feeds = {underlying_feed, spy_feed, qqq_feed}
+        if "iex" in feeds:
             context["data_warnings"].append(
                 "Alpaca IEX is an exchange-limited feed, not consolidated SIP data. "
-                "PDH/PDL/PMH/PML and benchmark bars can differ from Schwab or TradingView; "
+                "PDH/PDL/PMH/PML, VWAP, and benchmark bars can differ from Schwab or TradingView; "
                 "review level-based tags before applying them."
             )
+
+        ev = context["evidence"]
+        required = [
+            ev.get("levels", {}).get("PDH"),
+            ev.get("levels", {}).get("PDL"),
+            ev.get("levels", {}).get("PMH"),
+            ev.get("levels", {}).get("PML"),
+            ev.get("underlying_price_last_completed_1m"),
+            ev.get("ema8_10m_last_completed"),
+            ev.get("spy", {}).get("vwap"),
+            ev.get("qqq", {}).get("vwap"),
+        ]
+        present = sum(value is not None for value in required)
+        completeness_pct = round(present / len(required) * 100)
+        if completeness_pct >= 90 and "iex" not in feeds and not context["data_warnings"]:
+            quality = "High"
+            quality_reason = "Core LE evidence is complete and based on consolidated market data."
+        elif completeness_pct >= 75:
+            quality = "Moderate"
+            quality_reason = (
+                "Core LE evidence is mostly complete, but feed quality or missing fields limit certainty."
+            )
+        else:
+            quality = "Low"
+            quality_reason = "Material LE evidence is missing; classifications should be treated cautiously."
+        if "iex" in feeds and quality == "High":
+            quality = "Moderate"
+        ev["evidence_quality"] = {
+            "level": quality,
+            "completeness_pct": completeness_pct,
+            "reason": quality_reason,
+        }
+
     ai = await _groq_classify(context) if context.get("available") else None
     return {**context, "ai": ai}
