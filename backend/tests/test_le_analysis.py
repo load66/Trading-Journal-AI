@@ -76,11 +76,12 @@ def market_bars(*, pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0):
     prev = minute_run(
         (2026, 9, 24), 9, 30, 90,
         lambda i: 98.0 + (i % 5) * 0.02,
-        high=lambda i: pdh if i == 10 else 99.0,
-        low=lambda i: pdl if i == 20 else 97.0,
+        high=lambda i: pdh if i in {10, 11} else 99.0,
+        low=lambda i: pdl if i in {20, 21} else 97.0,
     )
     pre = [
         bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 98.0, pmh, pml, 98.5),
+        bar(datetime(2026, 9, 25, 4, 1, tzinfo=ET), 98.1, pmh, pml, 98.6),
         bar(datetime(2026, 9, 25, 9, 29, tzinfo=ET), 98.5, 100.0, 97.0, 99.0),
     ]
     rth = minute_run((2026, 9, 25), 9, 30, 30, current)
@@ -230,8 +231,8 @@ def test_entry_snapshot_uses_only_completed_one_minute_bar():
 def test_exact_10m_boundary_is_not_used_as_pre_entry_confirmation():
     prev = minute_run(
         (2026, 9, 24), 9, 30, 90, 98.0,
-        high=lambda i: 100.0 if i == 10 else 99.0,
-        low=lambda i: 95.0 if i == 20 else 97.0,
+        high=lambda i: 100.0 if i in {10, 11} else 99.0,
+        low=lambda i: 95.0 if i in {20, 21} else 97.0,
     )
     pre = [
         bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 98.0, 101.0, 96.0, 98.5),
@@ -347,6 +348,30 @@ def test_chop_and_no_level_break_are_proven_without_ai():
     assert review["evidence"]["inside_premarket_range_at_entry"] is True
     assert ("mistake", "No Level Break") in names
     assert ("mistake", "Traded Chop") in names
+
+
+def test_isolated_premarket_low_requires_review_and_is_not_trusted_for_rules():
+    prev = minute_run(
+        (2026, 9, 24), 9, 30, 90, 98.0,
+        high=lambda i: 100.0 if i in {10, 11} else 99.0,
+        low=lambda i: 95.0 if i in {20, 21} else 97.0,
+    )
+    pre = [
+        bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 98.0, 101.0, 194.75, 98.5),
+        bar(datetime(2026, 9, 25, 4, 1, tzinfo=ET), 98.1, 101.0, 194.85, 98.6),
+    ]
+    rth = minute_run((2026, 9, 25), 9, 30, 20, 202.0)
+
+    review = review_context(base_trade("CALL"), prev + pre + rth)
+    meta = review["evidence"]["level_meta"]["PML"]
+
+    assert meta["status"] == "VERIFIED"
+    assert meta["review_required"] is True
+    assert meta["trusted_for_rules"] is False
+    assert meta["source_bar_count"] == 1
+    assert meta["next_distinct_extreme"] == 194.85
+    assert round(meta["gap_to_next"], 2) == 0.10
+    assert any("PML" in warning and "isolated" in warning for warning in review["data_warnings"])
 
 
 def test_first_ten_minutes_is_a_deterministic_violation_tag():
