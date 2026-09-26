@@ -816,11 +816,11 @@ def _performance_prompt(performance_report: dict) -> str:
 def _strip_json_fence(raw: str) -> str:
     raw = (raw or "").strip()
     if raw.startswith("~~~"):
-        raw = re.sub(r"^~~~(?:json)?\\n?", "", raw)
-        raw = re.sub(r"\\n?~~~$", "", raw)
+        raw = re.sub(r"^~~~(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?~~~$", "", raw)
     if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\\n?", "", raw)
-        raw = re.sub(r"\\n?```$", "", raw)
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
     return raw.strip()
 
 
