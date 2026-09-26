@@ -170,8 +170,11 @@ export function startSessionAutoRefresh({ onSession, onSignedOut } = {}) {
     schedule();
   };
 
+  const reschedule = () => schedule();
+
   document.addEventListener('visibilitychange', refreshWhenActive);
   window.addEventListener('focus', refreshWhenActive);
+  window.addEventListener(AUTH_EVENT, reschedule);
   schedule();
 
   return () => {
@@ -179,6 +182,7 @@ export function startSessionAutoRefresh({ onSession, onSignedOut } = {}) {
     if (timer) clearTimeout(timer);
     document.removeEventListener('visibilitychange', refreshWhenActive);
     window.removeEventListener('focus', refreshWhenActive);
+    window.removeEventListener(AUTH_EVENT, reschedule);
   };
 }
 
