@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { calendarApi } from '../api';
 import {
-  Measures, BarRow, Tabs, Seg, EquityCurve, DailyPnlBars, TimeOfDayBars, MonthGrid,
+  Measures, Tabs, EquityCurve, DailyPnlBars, TimeOfDayBars, MonthGrid,
   money, money2, moneyK, tone, shortDate, MONTH_NAMES,
 } from './parts';
 
@@ -93,90 +93,130 @@ function MonthPanel({ accountId, onDayClick, latestDate }) {
   );
 }
 
-/* ── the three breakdowns, sharing one space ───────────────────────────── */
-function Patterns({ edge, byStrategy, onViewAll }) {
-  const [tab, setTab] = useState('tod');
-  const [view, setView] = useState('bars');
+/* ── recorded context edges ────────────────────────────────────────────── */
+function Patterns({ dimensions, onViewAll }) {
+  const [tab, setTab] = useState('strategy');
   const tabs = [
-    { id: 'tod', label: 'Time of day' },
-    { id: 'dow', label: 'Day of week' },
-    { id: 'str', label: 'Strategy' },
+    { id: 'strategy', label: 'Strategy' },
+    { id: 'source', label: 'Source' },
+    { id: 'setup', label: 'Setup' },
+    { id: 'emotion', label: 'Emotion' },
   ];
+  const titles = {
+    strategy: 'Which recorded strategy is most repeatable',
+    source: 'Which idea source is producing the strongest outcomes',
+    setup: 'Which setup is working — kept separate from strategy',
+    emotion: 'Recorded emotional state only — never inferred',
+  };
+  const columnNames = {
+    strategy: 'Strategy',
+    source: 'Source',
+    setup: 'Setup',
+    emotion: 'Emotion',
+  };
 
-  const rows = (() => {
-    if (tab === 'tod') {
-      return (edge?.time_of_day || []).map((r) => ({ name: r.bucket, n: r.trade_count, v: r.net_pnl }));
-    }
-    if (tab === 'dow') {
-      return (edge?.day_of_week || []).map((r) => ({ name: r.day, n: r.trade_count, v: r.net_pnl }));
-    }
-    return (byStrategy || []).map((r) => ({
-      name: r.strategy || r.setup || 'Untagged', n: r.count, v: r.net_pnl, wr: r.win_rate, avgR: r.avg_r,
-    }));
-  })();
+  const meta = dimensions?.[tab] || {};
+  const rows = meta.rows || [];
+  const bestWin = meta.best_win_rate || null;
+  const strongest = meta.strongest || null;
+  const weakest = meta.weakest && (!strongest || meta.weakest.label !== strongest.label)
+    ? meta.weakest : null;
 
-  const peak = Math.max(1, ...rows.map((r) => Math.abs(r.v || 0)));
+  const fmtPct = (v) => v == null ? '—' : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(1)}%`;
+  const fmtPf = (v) => v == null ? '—' : Number(v).toFixed(2);
 
   return (
     <>
       <div className="v3-sec-head">
         <div>
-          <h2 className="v3-h">Patterns</h2>
-          <p className="v3-h-sub">
-            {tab === 'tod' && 'Net P&L by the hour you entered'}
-            {tab === 'dow' && 'Net P&L by weekday'}
-            {tab === 'str' && 'Net P&L by the strategy on the trade'}
-          </p>
+          <h2 className="v3-h">What works</h2>
+          <p className="v3-h-sub">{titles[tab]}</p>
         </div>
         <div className="v3-acts">
-          <Seg
-            label="How to show this breakdown"
-            value={view}
-            onChange={setView}
-            options={[{ id: 'bars', label: 'Bars' }, { id: 'table', label: 'Table' }]}
-          />
+          <span className="v3-chip">
+            Coverage {Number(meta.coverage_pct || 0).toFixed(0)}%
+          </span>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onViewAll}>Full report</button>
         </div>
       </div>
-      <Tabs tabs={tabs} active={tab} onChange={setTab} label="Breakdown" />
+
+      <Tabs tabs={tabs} active={tab} onChange={setTab} label="Recorded context breakdown" />
+
+      <div className="v3-edge-note">
+        <span>{meta.coverage_count || 0} of {meta.total_trades || 0} trades recorded</span>
+        <span>Ranking requires {meta.min_sample || 1}+ trades per label</span>
+      </div>
+
+      {(bestWin || strongest || weakest) && (
+        <div className="v3-edge-insights">
+          <article>
+            <span className="v3-lab">Highest win rate</span>
+            {bestWin ? (
+              <>
+                <b>{bestWin.label}</b>
+                <strong>{Number(bestWin.win_rate || 0).toFixed(1)}%</strong>
+                <small>{bestWin.count} trades · expectancy {money(bestWin.expectancy)}</small>
+              </>
+            ) : <small>Need more recorded trades.</small>}
+          </article>
+
+          <article>
+            <span className="v3-lab">Strongest expectancy</span>
+            {strongest ? (
+              <>
+                <b>{strongest.label}</b>
+                <strong className={tone(strongest.expectancy)}>{money(strongest.expectancy)} / trade</strong>
+                <small>WR {Number(strongest.win_rate || 0).toFixed(0)}% · PF {fmtPf(strongest.profit_factor)}</small>
+              </>
+            ) : <small>Need more recorded trades.</small>}
+          </article>
+
+          <article>
+            <span className="v3-lab">Needs attention</span>
+            {weakest ? (
+              <>
+                <b>{weakest.label}</b>
+                <strong className={tone(weakest.expectancy)}>{money(weakest.expectancy)} / trade</strong>
+                <small>WR {Number(weakest.win_rate || 0).toFixed(0)}% · PF {fmtPf(weakest.profit_factor)}</small>
+              </>
+            ) : <small>No separate qualified weak sample yet.</small>}
+          </article>
+        </div>
+      )}
+
       {!rows.length ? (
-        <div className="v3-empty">Nothing recorded in this range.</div>
+        <div className="v3-empty">Nothing recorded for {columnNames[tab].toLowerCase()} in this range.</div>
       ) : (
         <div className="v3-scroll">
-          <table className="v3-t">
+          <table className="v3-t v3-edge-table">
             <thead>
               <tr>
-                <th>{tab === 'tod' ? 'Hour' : tab === 'dow' ? 'Day' : 'Strategy'}</th>
+                <th>{columnNames[tab]}</th>
                 <th className="r">Trades</th>
-                {tab === 'str' && <th className="r">Win rate</th>}
-                {view === 'table' && <th className="r">Avg / trade</th>}
-                {view === 'table' && tab === 'str' && <th className="r v3-hide-s">Avg R</th>}
-                {view === 'bars' && <th>Net</th>}
-                <th className="r">Total</th>
+                <th className="r v3-hide-s">W-L</th>
+                <th className="r">Win rate</th>
+                <th className="r v3-hide-s">PF</th>
+                <th className="r">Expectancy</th>
+                <th className="r v3-hide-s">Avg P/L %</th>
+                <th className="r">Net P&amp;L</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i}>
-                  <td className="v3-tick">{r.name}</td>
-                  <td className="r v3-mono">{r.n ?? ''}</td>
-                  {tab === 'str' && (
-                    <td className="r v3-mono">{r.wr != null ? `${Number(r.wr).toFixed(0)}%` : '—'}</td>
-                  )}
-                  {view === 'table' && (
-                    <td className={`r v3-mono ${r.n ? tone((r.v || 0) / r.n) : 'v3-flat'}`}>
-                      {r.n ? money((r.v || 0) / r.n) : '—'}
-                    </td>
-                  )}
-                  {view === 'table' && tab === 'str' && (
-                    <td className={`r v3-mono v3-hide-s ${r.avgR != null ? tone(r.avgR) : 'v3-flat'}`}>
-                      {r.avgR != null ? `${r.avgR > 0 ? '+' : ''}${Number(r.avgR).toFixed(2)}R` : '—'}
-                    </td>
-                  )}
-                  {view === 'bars' && (
-                    <td><BarRow frac={Math.abs(r.v || 0) / peak} negative={(r.v || 0) < 0} /></td>
-                  )}
-                  <td className={`r v3-mono ${tone(r.v)}`} style={{ fontWeight: 600 }}>{money(r.v)}</td>
+                <tr key={`${r.label}-${i}`} className={r.sample_qualified ? '' : 'v3-edge-low-sample'}>
+                  <td className="v3-tick">
+                    <span>{r.label}</span>
+                    {!r.sample_qualified && <small title={`Ranking requires ${meta.min_sample || 1}+ trades`}>small sample</small>}
+                  </td>
+                  <td className="r v3-mono">{r.count}</td>
+                  <td className="r v3-mono v3-hide-s">{r.wins}-{r.losses}</td>
+                  <td className="r v3-mono" style={{ fontWeight: 600 }}>{Number(r.win_rate || 0).toFixed(1)}%</td>
+                  <td className="r v3-mono v3-hide-s">{fmtPf(r.profit_factor)}</td>
+                  <td className={`r v3-mono ${tone(r.expectancy)}`}>{money(r.expectancy)}</td>
+                  <td className={`r v3-mono v3-hide-s ${r.avg_pl_pct == null ? 'v3-flat' : tone(r.avg_pl_pct)}`}>
+                    {fmtPct(r.avg_pl_pct)}
+                  </td>
+                  <td className={`r v3-mono ${tone(r.net_pnl)}`} style={{ fontWeight: 600 }}>{money(r.net_pnl)}</td>
                 </tr>
               ))}
             </tbody>
@@ -348,7 +388,8 @@ export default function DashboardRender(p) {
     ? Math.abs(Number(worstDay.net_pnl || 0)) / avgRedDay
     : null;
 
-  const strategyTagged = (k.by_strategy || []).reduce((s, r) => s + Number(r.count || 0), 0);
+  const strategyTagged = k.edge_dimensions?.strategy?.coverage_count
+    ?? (k.by_strategy || []).reduce((s, r) => s + Number(r.count || 0), 0);
   const strategyCoverage = k.total_trades ? strategyTagged / k.total_trades : 0;
   const rSamples = k.r_sample_count != null
     ? Number(k.r_sample_count)
@@ -695,7 +736,7 @@ export default function DashboardRender(p) {
 
       {/* 6. edge breakdowns */}
       <section className="v3-band">
-        <Patterns edge={edgeReport} byStrategy={k.by_strategy} onViewAll={onViewAllTrades} />
+        <Patterns dimensions={k.edge_dimensions} onViewAll={onViewAllTrades} />
       </section>
     </div>
   );
