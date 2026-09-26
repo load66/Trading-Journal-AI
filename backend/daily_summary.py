@@ -18,10 +18,16 @@ DAILY_SUMMARY_PROMPT = """You are a professional trading coach producing an end-
 You will receive structured data: the date, all trades with their analysis, the day's KPIs, and optionally a diary entry. Your job is to produce a thorough, honest coaching report in JSON format.
 
 Rules:
-- Reference actual tickers, prices, and dollar amounts — never speak in generalities when you have specifics
-- trade_grades must contain exactly one entry per trade provided (use the trade_group key)
-- overall_grade reflects PROCESS quality, not just P&L (a losing day with great discipline can earn a B)
-- Be direct and specific. If a trade was bad, name exactly why
+- Reference actual tickers, prices, timestamps, and dollar amounts only when they are present in the supplied data.
+- Never infer emotion, confidence, fear, tilt, intent, setup quality, stop discipline, chasing, breakout quality, or rule-breaking from P&L alone.
+- A missing stop_loss, strategy, entry reason, exit reason, diary, or emotional_state means UNKNOWN — it is not evidence of a mistake.
+- trade_grades must contain exactly one entry per trade provided (use the trade_group key).
+- Grades measure PROCESS, never outcome. A profitable trade can be poor process and a losing trade can be good process.
+- If a trade has process_evidence: none, its grade MUST be "N/A" and the reason must say there is insufficient process evidence.
+- If there is no diary or emotional-state evidence for the day, mental_game MUST say "Insufficient evidence" and must not infer psychology from wins/losses.
+- mistakes may contain only evidence-backed process problems from recorded fields. Do not turn missing documentation into a violation.
+- overall_grade must be "N/A" when there is not enough process evidence to grade the day.
+- Be direct and specific, but separate facts from interpretation.
 - Return ONLY valid JSON — no markdown fences, no explanation
 
 Required JSON schema:
@@ -35,11 +41,11 @@ Required JSON schema:
     {
       "trade_group": "exact trade_group key from input",
       "ticker": "SYMBOL",
-      "grade": "A|B|C|D|F",
+      "grade": "A|B|C|D|F|N/A",
       "one_line": "One specific sentence explaining the grade."
     }
   ],
-  "overall_grade": "A+|A|A-|B+|B|B-|C+|C|C-|D|F",
+  "overall_grade": "A+|A|A-|B+|B|B-|C+|C|C-|D|F|N/A",
   "tomorrow_focus": ["specific focus point 1", "specific focus point 2"],
   "patterns": ["pattern identified today 1", "pattern identified today 2"]
 }"""
@@ -194,8 +200,15 @@ def generate_daily_summary(context: dict) -> dict:
     for t in trades:
         execs = t.get("executions", [])
         first_time = next((e.get("time", "") for e in execs), "")
+        process_fields = [
+            t.get("strategy"), t.get("stop_loss"), t.get("risk_per_trade"),
+            t.get("entry_reason"), t.get("exit_reason"), t.get("mistakes"),
+            t.get("emotional_state"),
+        ]
+        process_evidence = "present" if any(v not in (None, "", "N/A") for v in process_fields) else "none"
         line = (
             f"  - trade_group: {t['trade_group']} | ticker: {t['ticker']} | "
+            f"process_evidence: {process_evidence} | "
             f"side: {t['side']} | net_pnl: ${t.get('net_pnl') or 0:.2f} | "
             f"strategy: {t.get('strategy') or 'N/A'} | "
             f"r_multiple: {t.get('r_multiple') or 'N/A'} | "
@@ -271,8 +284,64 @@ Generate the daily coaching summary JSON."""
     result.setdefault("mistakes", [])
     result.setdefault("coaching", [])
     result.setdefault("trade_grades", [])
-    result.setdefault("overall_grade", "C")
+    result.setdefault("overall_grade", "N/A")
     result.setdefault("tomorrow_focus", [])
     result.setdefault("patterns", [])
     result.setdefault("mental_game", "")
+
+    # Evidence lock: model output may interpret supplied evidence, but it cannot
+    # create process evidence that does not exist.
+    by_group = {t["trade_group"]: t for t in trades}
+    any_process_evidence = False
+    for t in trades:
+        fields = (
+            t.get("strategy"), t.get("stop_loss"), t.get("risk_per_trade"),
+            t.get("entry_reason"), t.get("exit_reason"), t.get("mistakes"),
+            t.get("emotional_state"),
+        )
+        if any(v not in (None, "", "N/A") for v in fields):
+            any_process_evidence = True
+
+    locked_grades = []
+    returned = {g.get("trade_group"): g for g in result.get("trade_grades", []) if isinstance(g, dict)}
+    for trade_group, trade in by_group.items():
+        g = returned.get(trade_group, {})
+        fields = (
+            trade.get("strategy"), trade.get("stop_loss"), trade.get("risk_per_trade"),
+            trade.get("entry_reason"), trade.get("exit_reason"), trade.get("mistakes"),
+            trade.get("emotional_state"),
+        )
+        has_process = any(v not in (None, "", "N/A") for v in fields)
+        if not has_process:
+            locked_grades.append({
+                "trade_group": trade_group,
+                "ticker": trade.get("ticker", ""),
+                "grade": "N/A",
+                "one_line": "Insufficient process evidence: no strategy, stop, entry/exit reason, mistake, or emotional state was recorded.",
+            })
+        else:
+            locked_grades.append({
+                "trade_group": trade_group,
+                "ticker": trade.get("ticker", ""),
+                "grade": g.get("grade") or "N/A",
+                "one_line": g.get("one_line") or "Insufficient evidence to explain the process grade.",
+            })
+    result["trade_grades"] = locked_grades
+
+    has_emotion_evidence = bool(diary) or any(
+        (t.get("emotional_state") or "").strip() for t in trades
+    )
+    if not has_emotion_evidence:
+        result["mental_game"] = (
+            "Insufficient evidence — no diary or emotional-state data was recorded for this day."
+        )
+
+    if not any_process_evidence and not diary:
+        result["mistakes"] = []
+        result["overall_grade"] = "N/A"
+
+    result["evidence_locked"] = True
+    result["evidence_note"] = (
+        "Missing process or psychological data is treated as unknown, never as a rule violation."
+    )
     return result
