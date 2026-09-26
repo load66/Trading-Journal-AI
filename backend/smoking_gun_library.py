@@ -284,7 +284,7 @@ def _normalize_scope_filters(filters: dict | None) -> dict:
     return normalized
 
 
-def _source_trades_for_range(
+def load_source_trades_for_range(
     conn,
     account_id: int,
     date_from: str,
@@ -321,7 +321,7 @@ def current_fingerprint_for_range(
     date_to: str,
     filters: dict | None = None,
 ) -> str:
-    rows, normalized = _source_trades_for_range(
+    rows, normalized = load_source_trades_for_range(
         conn, account_id, date_from, date_to, filters
     )
     return build_source_fingerprint(
