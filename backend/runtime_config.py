@@ -77,7 +77,8 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         supabase_url=get("SUPABASE_URL").rstrip("/"),
         supabase_secret_key=get("SUPABASE_SECRET_KEY"),
         supabase_storage_bucket=get(
-            "SUPABASE_STORAGE_BUCKET", "trading-journal-diary"
+            "SUPABASE_STORAGE_BUCKET",
+            "" if app_env == "production" else "trading-journal-diary",
         ),
         turso_database_url=get("TURSO_DATABASE_URL"),
         turso_auth_token=get("TURSO_AUTH_TOKEN"),
