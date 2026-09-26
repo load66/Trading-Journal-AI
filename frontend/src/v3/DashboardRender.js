@@ -1,10 +1,10 @@
 /* The V3 Today page. Presentation only: every value, handler and piece of
    state is passed in from Dashboard.js, so no behaviour lives here. */
 import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { X, Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { calendarApi } from '../api';
 import {
-  Measures, Tabs, EquityCurve, DailyPnlBars, TimeOfDayBars, MonthGrid,
+  Measures, EquityCurve, DailyPnlBars, MonthGrid,
   money, money2, moneyK, tone, shortDate, MONTH_NAMES,
 } from './parts';
 
@@ -86,171 +86,327 @@ function MonthPanel({ accountId, onDayClick, latestDate }) {
         </div>
       ) : (
         <div className="v3-scroll">
-          <MonthGrid year={year} month={month} byDay={byDay} today={todayKey} onPick={onDayClick} />
+          <MonthGrid year={year} month={month} byDay={byDay} today={todayKey} onPick={onDayClick} showWeek={false} />
         </div>
       )}
     </>
   );
 }
 
-/* ── recorded context edges ────────────────────────────────────────────── */
-function Patterns({ dimensions, onViewAll }) {
-  const [tab, setTab] = useState('strategy');
-  const tabs = [
-    { id: 'strategy', label: 'Strategy' },
-    { id: 'source', label: 'Source' },
-    { id: 'setup', label: 'Setup' },
-    { id: 'emotion', label: 'Emotion' },
-  ];
-  const titles = {
-    strategy: 'Which recorded strategy is most repeatable',
-    source: 'Which recorded idea source is producing consistent outcomes',
-    setup: 'Which recorded setup is working — kept separate from strategy',
-    emotion: 'Recorded emotional state only — never inferred',
-  };
-  const columnNames = {
-    strategy: 'Strategy',
-    source: 'Source',
-    setup: 'Setup',
-    emotion: 'Emotion',
-  };
 
-  const meta = dimensions?.[tab] || {};
-  const rows = meta.rows || [];
-  const bestWin = meta.best_win_rate || null;
-  const strongest = meta.strongest || null;
-  const weakest = meta.weakest && (!strongest || meta.weakest.label !== strongest.label)
-    ? meta.weakest : null;
-  const minSample = Number(meta.min_sample || 5);
-  const reliableMin = Number(meta.reliable_min_sample || 15);
-  const metricStatus = meta.metric_status || ((meta.total_trades || 0) > 0 ? 'VERIFIED' : 'INSUFFICIENT DATA');
-  const contextStatus = meta.context_status || ((meta.coverage_count || 0) > 0 ? 'RECORDED' : 'INSUFFICIENT DATA');
+/* ── management training cards ─────────────────────────────────────────── */
+const absMoney = (value) => {
+  const n = Math.abs(Number(value) || 0);
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
 
-  const fmtPct = (v) => v == null ? '—' : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(1)}%`;
-  const fmtPf = (v) => v == null ? '—' : Number(v).toFixed(2);
-  const statusClass = (value) => String(value || '').toLowerCase().replaceAll(' ', '-');
+const compactDateTime = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+};
+
+function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
+  const data = kpis || {};
+  const hold = edge?.hold_time || {};
+  const capture = data.exit_efficiency == null ? null : Number(data.exit_efficiency);
+  const captureBar = capture == null ? 0 : Math.max(0, Math.min(100, capture));
+  const captureGoal = Number(goals?.exit_efficiency ?? 60);
+  const leftOnTable = capture == null ? null : Math.max(0, 100 - Math.min(100, capture));
+
+  const winnerHold = hold.winners_avg_min == null ? null : Number(hold.winners_avg_min);
+  const loserHold = hold.losers_avg_min == null ? null : Number(hold.losers_avg_min);
+  const holdRatio = winnerHold > 0 && loserHold != null ? loserHold / winnerHold : null;
+
+  const mfe = data.avg_mfe == null ? null : Number(data.avg_mfe);
+  const mae = data.avg_mae == null ? null : Number(data.avg_mae);
+  const excursionN = Number(data.excursion_n || 0);
+
+  const bottom = [];
+  if (capture != null) {
+    bottom.push(
+      capture >= captureGoal
+        ? 'You captured ' + capture.toFixed(0) + '% of the available favorable move on winning trades with excursion data, above your ' + captureGoal.toFixed(0) + '% goal.'
+        : 'You captured ' + capture.toFixed(0) + '% of the available favorable move on winning trades with excursion data, below your ' + captureGoal.toFixed(0) + '% goal by ' + (captureGoal - capture).toFixed(0) + ' points.'
+    );
+  }
+  if (holdRatio != null) {
+    if (holdRatio > 1.05) {
+      bottom.push(
+        'Losing trades averaged ' + loserHold.toFixed(1) + ' minutes versus ' + winnerHold.toFixed(1) +
+        ' minutes for winners — about ' + Math.round((holdRatio - 1) * 100) +
+        '% longer. The clearest management leak in this sample is time spent in losing trades.'
+      );
+    } else if (holdRatio < 0.95) {
+      bottom.push(
+        'Losers averaged ' + loserHold.toFixed(1) + ' minutes versus ' + winnerHold.toFixed(1) +
+        ' minutes for winners. You are cutting losing trades faster than winning trades in this sample.'
+      );
+    } else {
+      bottom.push(
+        'Winner and loser hold times are similar (' + winnerHold.toFixed(1) + ' vs ' +
+        loserHold.toFixed(1) + ' minutes), so duration is not a strong differentiator in this sample.'
+      );
+    }
+  }
+  if (mfe != null && mae != null) {
+    bottom.push(
+      'Across ' + excursionN + ' trades with market-path data, average favorable excursion was +' +
+      mfe.toFixed(2) + '% and average adverse excursion was -' + mae.toFixed(2) + '% before exit.'
+    );
+  }
+  if (!bottom.length) {
+    bottom.push(
+      'Trade-management evidence is incomplete for this window. Review trades with timestamps and excursion data before drawing a management conclusion.'
+    );
+  }
 
   return (
     <>
       <div className="v3-sec-head">
         <div>
-          <h2 className="v3-h">What works</h2>
-          <p className="v3-h-sub">{titles[tab]}</p>
+          <h2 className="v3-h v3-icon-title"><Target size={18} /> Trade management</h2>
+          <p className="v3-h-sub">How well do you manage trades after you enter?</p>
         </div>
-        <div className="v3-acts v3-edge-statuses">
-          <span className={`v3-chip v3-edge-status ${statusClass(metricStatus)}`} title="Performance math comes from reconciled closed-trade data">
-            {metricStatus}
-          </span>
-          <span className={`v3-chip v3-edge-status ${statusClass(contextStatus)}`} title="Context values are stored in the journal; missing values are not inferred">
-            {contextStatus}
-          </span>
-          <span className="v3-chip">
-            Coverage {Number(meta.coverage_pct || 0).toFixed(0)}%
-          </span>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={onViewAll}>Full report</button>
+        <div className="v3-management-range" role="group" aria-label="Trade management range">
+          {['7D', '30D', '90D', 'ALL'].map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={range === option ? 'active' : ''}
+              aria-pressed={range === option}
+              onClick={() => onRangeChange?.(option)}
+            >
+              {option}
+            </button>
+          ))}
         </div>
       </div>
 
-      <Tabs tabs={tabs} active={tab} onChange={setTab} label="Recorded context breakdown" />
+      <div className="v3-management-grid">
+        <article className="v3-management-card">
+          <div className="v3-management-label"><Trophy size={17} /><span>Profit capture</span></div>
+          <p>How much of the available move you actually keep on winning trades.</p>
+          <div className="v3-management-value v3-pos">{capture == null ? 'N/A' : capture.toFixed(0) + '%'}</div>
+          <div className="v3-management-progress"><i style={{ '--w': captureBar + '%' }} /></div>
+          <div className="v3-management-meta">
+            <span>Goal ≥ {captureGoal.toFixed(0)}%</span>
+            <span>{excursionN ? excursionN + ' measured trades' : 'No excursion sample'}</span>
+          </div>
+          <div className={'v3-management-callout ' + (capture != null && capture >= captureGoal ? 'good' : 'caution')}>
+            {capture == null
+              ? 'Excursion data is required to score profit capture.'
+              : capture >= captureGoal
+                ? 'You are retaining a solid share of winning-trade opportunity.'
+                : 'There is room to improve winner monetization without assuming every peak was executable.'}
+          </div>
+        </article>
 
-      <div className="v3-edge-note">
-        <span>{meta.coverage_count || 0} of {meta.total_trades || 0} closed trades have recorded {columnNames[tab].toLowerCase()}</span>
-        <span>LOW 1–{Math.max(1, minSample - 1)} · DEVELOPING {minSample}–{Math.max(minSample, reliableMin - 1)} · RELIABLE {reliableMin}+</span>
-        <span>Comparisons ignore LOW samples</span>
+        <article className="v3-management-card">
+          <div className="v3-management-label"><Clock3 size={17} /><span>Holding behavior</span></div>
+          <p>How long you hold winners versus losers.</p>
+          <div className="v3-hold-pair">
+            <div><span>Winners</span><strong className="v3-pos">{winnerHold == null ? 'N/A' : winnerHold.toFixed(1) + ' min'}</strong></div>
+            <div><span>Losers</span><strong className="v3-neg">{loserHold == null ? 'N/A' : loserHold.toFixed(1) + ' min'}</strong></div>
+          </div>
+          <div className={'v3-management-callout ' + (holdRatio != null && holdRatio > 1.05 ? 'bad' : 'good')}>
+            {holdRatio == null
+              ? 'Need closed trades with usable entry and exit timestamps.'
+              : holdRatio > 1.05
+                ? 'Losers stay open about ' + Math.round((holdRatio - 1) * 100) + '% longer than winners.'
+                : 'Losers are not being held materially longer than winners.'}
+          </div>
+        </article>
+
+        <article className="v3-management-card">
+          <div className="v3-management-label"><Target size={17} /><span>Profit vs. left on table</span></div>
+          <p>On winning trades, how much favorable movement you captured versus what remained.</p>
+          <div className="v3-capture-split" aria-label="Captured versus left on table">
+            <div className="captured" style={{ '--w': captureBar + '%' }}>
+              {capture == null ? 'No data' : captureBar.toFixed(0) + '% Captured'}
+            </div>
+            <div className="left">{leftOnTable == null ? '' : leftOnTable.toFixed(0) + '% Left'}</div>
+          </div>
+          <div className="v3-capture-numbers">
+            <div><span>Captured</span><strong className="v3-pos">{capture == null ? '—' : capture.toFixed(0) + '%'}</strong></div>
+            <div><span>Left on table</span><strong>{leftOnTable == null ? '—' : leftOnTable.toFixed(0) + '%'}</strong></div>
+          </div>
+          <div className="v3-management-callout good">
+            {capture == null
+              ? 'This becomes available after excursion metrics are calculated.'
+              : 'Use this as a coaching metric, not a demand to sell at the exact intraday high.'}
+          </div>
+        </article>
+
+        <article className="v3-management-card">
+          <div className="v3-management-label"><ShieldAlert size={17} /><span>Risk during trade</span></div>
+          <p>How much the market moved for and against you while the trade was open.</p>
+          <div className="v3-risk-pair">
+            <div><span>Avg favorable move (MFE)</span><strong className="v3-pos">{mfe == null ? 'N/A' : '+' + mfe.toFixed(2) + '%'}</strong></div>
+            <div><span>Avg adverse move (MAE)</span><strong className="v3-neg">{mae == null ? 'N/A' : '-' + mae.toFixed(2) + '%'}</strong></div>
+          </div>
+          <div className="v3-management-callout caution">
+            {excursionN
+              ? 'Based on ' + excursionN + ' measured trades.' + (data.excursion_option_n ? ' Options use the underlying directional path.' : '')
+              : 'No measured excursion sample in this window.'}
+          </div>
+        </article>
       </div>
 
-      {(bestWin || strongest || weakest) && (
-        <div className="v3-edge-insights">
-          <article>
-            <span className="v3-lab">Highest win rate · qualified sample</span>
-            {bestWin ? (
-              <>
-                <div className="v3-edge-insight-title">
-                  <b>{bestWin.label}</b>
-                  <small className={`v3-edge-confidence ${String(bestWin.confidence || '').toLowerCase()}`}>{bestWin.confidence}</small>
-                </div>
-                <strong>{Number(bestWin.win_rate || 0).toFixed(1)}%</strong>
-                <small>{bestWin.count} trades · expectancy {money(bestWin.expectancy)}</small>
-              </>
-            ) : <small>INSUFFICIENT DATA</small>}
-          </article>
-
-          <article>
-            <span className="v3-lab">Strongest expectancy · qualified sample</span>
-            {strongest ? (
-              <>
-                <div className="v3-edge-insight-title">
-                  <b>{strongest.label}</b>
-                  <small className={`v3-edge-confidence ${String(strongest.confidence || '').toLowerCase()}`}>{strongest.confidence}</small>
-                </div>
-                <strong className={tone(strongest.expectancy)}>{money(strongest.expectancy)} / trade</strong>
-                <small>WR {Number(strongest.win_rate || 0).toFixed(0)}% · PF {fmtPf(strongest.profit_factor)}</small>
-              </>
-            ) : <small>INSUFFICIENT DATA</small>}
-          </article>
-
-          <article>
-            <span className="v3-lab">Needs attention · qualified sample</span>
-            {weakest ? (
-              <>
-                <div className="v3-edge-insight-title">
-                  <b>{weakest.label}</b>
-                  <small className={`v3-edge-confidence ${String(weakest.confidence || '').toLowerCase()}`}>{weakest.confidence}</small>
-                </div>
-                <strong className={tone(weakest.expectancy)}>{money(weakest.expectancy)} / trade</strong>
-                <small>WR {Number(weakest.win_rate || 0).toFixed(0)}% · PF {fmtPf(weakest.profit_factor)}</small>
-              </>
-            ) : <small>No separate qualified weak sample yet.</small>}
-          </article>
+      <div className="v3-bottom-line">
+        <div className="v3-bottom-line-head">
+          <Lightbulb size={20} />
+          <div><strong>Bottom line</strong><span>Rule-based analysis from the selected management window</span></div>
         </div>
-      )}
+        <div className="v3-bottom-line-copy">
+          {bottom.map((line, index) => (
+            <p key={index}><CheckCircle2 size={15} /><span>{line}</span></p>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
 
-      {!rows.length ? (
-        <div className="v3-empty"><strong>INSUFFICIENT DATA</strong> · No recorded {columnNames[tab].toLowerCase()} values in this range.</div>
+function LatestSmokingGunSummary({ report, onOpen }) {
+  if (!report) {
+    return (
+      <>
+        <div className="v3-sec-head">
+          <div>
+            <h2 className="v3-h v3-icon-title"><FileText size={18} /> Latest Smoking Gun report summary</h2>
+            <p className="v3-h-sub">Key takeaways from your most recent saved audit.</p>
+          </div>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onOpen}>Open reports</button>
+        </div>
+        <div className="v3-empty">No saved Smoking Gun report yet.</div>
+      </>
+    );
+  }
+
+  const metrics = report.source_metrics || {};
+  const board = metrics.scoreboard || {};
+  const diagnosis = report.diagnosis || {};
+  const actionPlan = Array.isArray(report.action_plan)
+    ? report.action_plan
+    : Array.isArray(diagnosis.action_plan) ? diagnosis.action_plan : [];
+
+  const unique = (items) => [...new Set(items.filter(Boolean).map((x) => String(x).trim()).filter(Boolean))];
+  const strengths = unique([...(diagnosis.edge?.where_it_lives || []), report.primary_edge]).slice(0, 3);
+  const opportunities = unique([
+    ...(diagnosis.edge?.where_it_dies || []),
+    report.primary_leak,
+    ...actionPlan.map((x) => x?.rule || x?.mechanical_rule),
+  ]).slice(0, 3);
+
+  const metricRows = [
+    ['Net P&L', money2(board.net_pnl ?? report.net_pnl), tone(board.net_pnl ?? report.net_pnl)],
+    ['Win rate', board.win_rate == null ? '—' : Number(board.win_rate).toFixed(1) + '%', ''],
+    ['Profit factor', board.profit_factor == null ? '—' : Number(board.profit_factor).toFixed(2), ''],
+    ['Trades', report.trade_count ?? '—', ''],
+    ['Avg winner', board.avg_winner == null ? '—' : absMoney(board.avg_winner), 'v3-pos'],
+    ['Max drawdown', board.max_drawdown == null ? '—' : money2(board.max_drawdown), 'v3-neg'],
+  ];
+
+  return (
+    <>
+      <div className="v3-sec-head">
+        <div>
+          <h2 className="v3-h v3-icon-title"><FileText size={18} /> Latest Smoking Gun report summary</h2>
+          <p className="v3-h-sub">Key takeaways from your most recent saved detailed analysis.</p>
+        </div>
+        <div className="v3-smoking-head-actions">
+          <span className={'v3-evidence ' + (report.is_stale ? 'insufficient' : 'verified')}>
+            {report.is_stale ? 'SOURCE CHANGED' : 'CURRENT'}
+          </span>
+          <button type="button" className="btn btn-primary btn-sm" onClick={onOpen}>View full report →</button>
+        </div>
+      </div>
+
+      <div className="v3-smoking-meta">
+        <div className="v3-smoking-cover">
+          <span className="v3-kicker">TRADING SMOKING GUN REPORT</span>
+          <strong>{report.title || 'Latest report'}</strong>
+          <small>{report.date_from} → {report.date_to}</small>
+          <small>Generated {compactDateTime(report.generated_at)}</small>
+          {(report.analysis_provider || report.analysis_model) && (
+            <small>Analysis: {[report.analysis_provider, report.analysis_model].filter(Boolean).join(' · ')}</small>
+          )}
+        </div>
+
+        <div className="v3-smoking-scoreboard">
+          <span className="v3-lab">Overall performance</span>
+          <div>
+            {metricRows.map(([label, value, cls]) => (
+              <div key={label}>
+                <span>{label}</span>
+                <strong className={cls}>{value}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="v3-smoking-list strengths">
+          <div className="v3-smoking-list-title"><Trophy size={15} /> Top strengths</div>
+          {strengths.length ? (
+            <ol>{strengths.map((item, i) => <li key={i}><b>{i + 1}</b><span>{item}</span></li>)}</ol>
+          ) : <p>No AI strength summary was saved with this report.</p>}
+        </div>
+
+        <div className="v3-smoking-list opportunities">
+          <div className="v3-smoking-list-title"><AlertTriangle size={15} /> Biggest opportunities</div>
+          {opportunities.length ? (
+            <ol>{opportunities.map((item, i) => <li key={i}><b>{i + 1}</b><span>{item}</span></li>)}</ol>
+          ) : <p>No AI opportunity summary was saved with this report.</p>}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function RecentTradesPanel({ recentTrades, onViewAllTrades, onOpenDetail }) {
+  return (
+    <div>
+      <div className="v3-sec-head">
+        <div>
+          <h2 className="v3-h">Recent trades</h2>
+          <p className="v3-h-sub">The actual ten most recent closed trades</p>
+        </div>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onViewAllTrades}>View all</button>
+      </div>
+      {!recentTrades?.length ? (
+        <div className="v3-empty">No closed trades.</div>
       ) : (
         <div className="v3-scroll">
-          <table className="v3-t v3-edge-table">
+          <table className="v3-t v3-recent-compact">
             <thead>
-              <tr>
-                <th>{columnNames[tab]}</th>
-                <th className="r">Trades</th>
-                <th className="r v3-hide-s">W-L</th>
-                <th className="r">Win rate</th>
-                <th className="r v3-hide-s">PF</th>
-                <th className="r">Expectancy</th>
-                <th className="r v3-hide-s">Avg P/L %</th>
-                <th className="r">Net P&amp;L</th>
-              </tr>
+              <tr><th>Ticker</th><th className="v3-hide-s">Side</th><th className="r">Date</th><th className="r">P&amp;L</th></tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={`${r.label}-${i}`} className={r.sample_qualified ? '' : 'v3-edge-low-sample'}>
-                  <td className="v3-tick">
-                    <span>{r.label}</span>
-                    <span className="v3-edge-badges">
-                      <small className="v3-edge-badge recorded">{r.context_status || 'RECORDED'}</small>
-                      <small className={`v3-edge-badge confidence ${String(r.confidence || 'LOW').toLowerCase()}`}>{r.confidence || 'LOW'}</small>
-                      {r.evidence_status === 'INSUFFICIENT DATA' && (
-                        <small className="v3-edge-badge insufficient-data">INSUFFICIENT DATA</small>
-                      )}
-                    </span>
-                  </td>
-                  <td className="r v3-mono">{r.count}</td>
-                  <td className="r v3-mono v3-hide-s">{r.wins}-{r.losses}</td>
-                  <td className="r v3-mono" style={{ fontWeight: 600 }}>{Number(r.win_rate || 0).toFixed(1)}%</td>
-                  <td className="r v3-mono v3-hide-s">{fmtPf(r.profit_factor)}</td>
-                  <td className={`r v3-mono ${tone(r.expectancy)}`}>{money(r.expectancy)}</td>
-                  <td className={`r v3-mono v3-hide-s ${r.avg_pl_pct == null ? 'v3-flat' : tone(r.avg_pl_pct)}`}>
-                    {fmtPct(r.avg_pl_pct)}
-                  </td>
-                  <td className={`r v3-mono ${tone(r.net_pnl)}`} style={{ fontWeight: 600 }}>{money(r.net_pnl)}</td>
+              {recentTrades.slice(0, 10).map((t, i) => (
+                <tr
+                  key={i}
+                  className="clickable"
+                  tabIndex={0}
+                  onClick={() => onOpenDetail?.(t)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenDetail?.(t); }
+                  }}
+                  aria-label={'Open ' + t.ticker + ' trade'}
+                >
+                  <td className="v3-tick">{t.ticker}</td>
+                  <td className="v3-hide-s v3-side">{(t.side || '').toLowerCase() === 'short' ? 'Short' : 'Long'}</td>
+                  <td className="r v3-mono v3-read">{t.date}</td>
+                  <td className={'r v3-mono ' + tone(t.net_pnl)} style={{ fontWeight: 600 }}>{money2(t.net_pnl)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -387,174 +543,71 @@ export default function DashboardRender(p) {
     kpis, accountLabel, span, RangePicker,
     goalsNode, onToggleGoals, showGoals,
     accountId, onDayClick, onOpenDetail, onViewAllTrades,
-    recentTrades, edgeReport, goals,
+    recentTrades, goals,
+    managementRange, onManagementRangeChange, managementKpis, managementEdge,
+    latestSmokingGun, onViewSmokingGun,
   } = p;
 
   const k = kpis || {};
   const days = k.daily_pnl || [];
-  const net = k.total_net_pnl || 0;
-  const cents = Math.abs(net % 1).toFixed(2).slice(1);
-
-  const awin = Math.abs(k.avg_win || 0);
-  const aloss = Math.abs(k.avg_loss || 0);
-  const ratio = aloss > 0 ? awin / aloss : null;
+  const net = Number(k.total_net_pnl || 0);
   const avgR = k.avg_r == null ? null : Number(k.avg_r);
-
-  const greenDays = days.filter((d) => Number(d.net_pnl || 0) > 0);
-  const redDays = days.filter((d) => Number(d.net_pnl || 0) < 0);
-  const bestDay = days.length
-    ? days.reduce((a, b) => Number(a.net_pnl || 0) >= Number(b.net_pnl || 0) ? a : b)
-    : null;
-  const worstDay = days.length
-    ? days.reduce((a, b) => Number(a.net_pnl || 0) <= Number(b.net_pnl || 0) ? a : b)
-    : null;
-  const avgRedDay = redDays.length
-    ? Math.abs(redDays.reduce((s, d) => s + Number(d.net_pnl || 0), 0) / redDays.length)
-    : 0;
-  const lossOutlierRatio = worstDay && avgRedDay > 0
-    ? Math.abs(Number(worstDay.net_pnl || 0)) / avgRedDay
-    : null;
-
-  const strategyTagged = k.edge_dimensions?.strategy?.coverage_count
-    ?? (k.by_strategy || []).reduce((s, r) => s + Number(r.count || 0), 0);
-  const strategyCoverage = k.total_trades ? strategyTagged / k.total_trades : 0;
-  const rSamples = k.r_sample_count != null
-    ? Number(k.r_sample_count)
-    : (edgeReport?.r_multiple_dist || []).reduce((s, r) => s + Number(r.count || 0), 0);
-  const rCoverage = k.total_trades ? rSamples / k.total_trades : 0;
-  const processReady = k.total_trades >= 10 && strategyCoverage >= 0.6 && rCoverage >= 0.6;
-  const lossContainGoal = goals?.loss_containment ?? 2.0;
-
-  const trainingFocus = [];
-  if (rCoverage < 0.6) {
-    trainingFocus.push({
-      title: 'Record planned risk',
-      body: `${rSamples} of ${k.total_trades || 0} trades have R data. Initial stop/risk is required before a process score is trustworthy.`,
-      evidence: 'INSUFFICIENT DATA',
-    });
-  }
-  if (strategyCoverage < 0.6) {
-    trainingFocus.push({
-      title: 'Tag the setup before review',
-      body: `${strategyTagged} of ${k.total_trades || 0} trades are strategy-tagged. Setup coverage is too low to identify your best repeatable edge.`,
-      evidence: 'RECORDED',
-    });
-  }
-  if (lossOutlierRatio != null && lossOutlierRatio > lossContainGoal) {
-    trainingFocus.push({
-      title: 'Reduce outlier losing days',
-      body: `Your worst session was ${lossOutlierRatio.toFixed(1)}× the average red day. Consistency improves fastest by containing the tail loss.`,
-      evidence: 'VERIFIED',
-    });
-  }
-  if (ratio != null && ratio < 1) {
-    trainingFocus.push({
-      title: 'Improve payoff',
-      body: 'Average winners are smaller than average losers. Protect downside or allow high-quality winners more room.',
-      evidence: 'VERIFIED',
-    });
-  }
-  if (!trainingFocus.length) {
-    trainingFocus.push({
-      title: 'Protect the repeatable process',
-      body: 'No major verified gap stands out in this range. Keep size, setups and planned risk consistent.',
-      evidence: 'VERIFIED',
-    });
-  }
-
-  // These are the names the goals API actually returns. An earlier version
-  // invented *_goal keys, so every goal silently fell back to a default and a
-  // saved change never appeared on the card.
-  const g = goals || {};
-  const gWin = g.win_rate ?? 65;
-  const gPf = g.profit_factor ?? 1.5;
-  const gRatio = g.avg_win_loss_ratio ?? 1.5;
-  const gExp = g.expectancy ?? 50;
-  const gAvgR = g.avg_r ?? 0.5;
-  const gLossContain = g.loss_containment ?? lossContainGoal;
-  const cap = (x) => Math.max(0, Math.min(1, x));
-  // Keep the goal marker inside a readable scale instead of pinning every
-  // baseline to the far edge. Avg R is higher-is-better; loss containment is
-  // lower-is-better, so its bar grows toward the warning side.
-  const avgRScale = Math.max(gAvgR / 0.8, Math.abs(avgR || 0) * 1.05, 0.1);
-  const lossScale = Math.max(gLossContain / 0.35, (lossOutlierRatio || 0) * 1.05, 0.1);
 
   const measures = [
     {
-      label: 'Expectancy', value: money2(k.expectancy || 0),
-      fill: cap((k.expectancy || 0) / gExp), goal: `$${gExp}`, goalPct: 100,
-      met: (k.expectancy || 0) >= gExp,
-      read: 'Average net value of each completed trade',
+      label: 'Average win',
+      value: absMoney(k.avg_win),
+      tone: 'pos',
+      read: 'Average profit on winning trades · ' + (k.winning_trades || 0) + ' wins',
+    },
+    {
+      label: 'Average loss',
+      value: absMoney(k.avg_loss),
+      tone: 'neg',
+      read: 'Average loss on losing trades · ' + (k.losing_trades || 0) + ' losses',
+    },
+    {
+      label: 'Win rate',
+      value: Number(k.win_rate || 0).toFixed(1) + '%',
+      read: (k.winning_trades || 0) + ' wins / ' + (k.total_trades || 0) + ' trades',
     },
     {
       label: 'Profit factor',
       value: k.profit_factor == null ? '—' : Number(k.profit_factor).toFixed(2),
-      fill: cap((k.profit_factor || 0) / gPf), goal: Number(gPf).toFixed(2), goalPct: 100,
-      met: (k.profit_factor || 0) >= gPf,
-      read: `$${Number(k.profit_factor || 0).toFixed(2)} won for every $1.00 lost`,
+      read: k.profit_factor == null ? 'Needs both wins and losses' : 'Net winning P&L ÷ absolute net losing P&L',
     },
     {
-      label: 'Trade win rate', value: `${(k.win_rate || 0).toFixed(1)}%`,
-      fill: cap((k.win_rate || 0) / 100), goal: `${gWin}%`, goalPct: cap(gWin / 100) * 100,
-      met: (k.win_rate || 0) >= gWin,
-      read: `${(k.winning_trades || 0).toLocaleString()} won, ${(k.losing_trades || 0).toLocaleString()} lost`,
-    },
-    {
-      label: 'Payoff ratio', value: ratio == null ? '—' : ratio.toFixed(2),
-      fill: cap((ratio || 0) / gRatio), goal: Number(gRatio).toFixed(2), goalPct: 100,
-      met: ratio != null && ratio >= gRatio,
-      read: (
-        <>Average win <b>$${Math.round(awin).toLocaleString()}</b> · average loss{' '}
-          <b>$${Math.round(aloss).toLocaleString()}</b></>
-      ),
+      label: 'Expectancy',
+      value: money2(k.expectancy || 0),
+      tone: Number(k.expectancy || 0) < 0 ? 'neg' : 'pos',
+      read: 'Average net P&L per completed trade',
     },
     {
       label: 'Avg R / trade',
-      value: avgR == null ? 'N/A' : `${avgR > 0 ? '+' : ''}${avgR.toFixed(2)}R`,
-      fill: cap(Math.max(avgR || 0, 0) / avgRScale),
-      goal: `${Number(gAvgR).toFixed(2)}R`,
-      goalPct: cap(gAvgR / avgRScale) * 100,
+      value: avgR == null ? 'N/A' : (avgR > 0 ? '+' : '') + avgR.toFixed(2) + 'R',
       tone: avgR != null && avgR < 0 ? 'neg' : undefined,
-      met: avgR != null && avgR >= gAvgR,
-      read: avgR == null
-        ? `Record planned risk to unlock this metric · 0 of ${k.total_trades || 0} trades`
-        : `Average realized R across ${rSamples} recorded trade${rSamples === 1 ? '' : 's'}`,
+      read: avgR == null ? 'Record planned risk to unlock' : (k.r_sample_count || 0) + ' trades with recorded R',
     },
     {
-      label: 'Loss containment',
-      value: lossOutlierRatio == null ? 'N/A' : `${lossOutlierRatio.toFixed(1)}×`,
-      fill: cap((lossOutlierRatio || 0) / lossScale),
-      goal: `≤${Number(gLossContain).toFixed(1)}×`,
-      goalPct: cap(gLossContain / lossScale) * 100,
-      tone: lossOutlierRatio != null && lossOutlierRatio > gLossContain ? 'neg' : undefined,
-      met: lossOutlierRatio != null && lossOutlierRatio <= gLossContain,
-      read: lossOutlierRatio == null
-        ? 'Needs at least one losing session'
-        : 'Worst red day vs average red day',
+      label: 'Max drawdown',
+      value: money2(k.max_drawdown || 0),
+      tone: 'neg',
+      read: 'Largest realized peak-to-trough drawdown',
     },
   ];
 
-  const readout = (() => {
-    if (!days.length) return null;
-    const last = days[days.length - 1];
-    return { label: 'Last session', value: last.net_pnl, when: shortDate(last.date) };
-  })();
+  const readout = days.length ? days[days.length - 1] : null;
 
   return (
     <div>
-      {/* 1. the account band */}
-      <div className="v3-hero">
+      <div className="v3-hero v3-hero-compact">
         <div className="v3-eyeline">
           <div>
-            <p className="v3-acct">{accountLabel}{span ? ` · ${span}` : ''}</p>
-            <h1 className={`v3-money ${tone(net)}`}>
-              {money(net)}<span className="cents">{cents}</span>
-            </h1>
+            <p className="v3-acct">{accountLabel}{span ? ' · ' + span : ''}</p>
+            <h1 className={'v3-money ' + tone(net)}>{money2(net)}</h1>
             <p className="v3-money-sub">
-              <b>{(k.trading_days || 0).toLocaleString()} sessions</b>, {(k.total_trades || 0).toLocaleString()} trades.
-              {' '}You kept <b>${Math.round(net).toLocaleString()}</b> of{' '}
-              <b>${Math.round(k.total_gross_pnl || 0).toLocaleString()}</b> gross; commissions took{' '}
-              <b>${Math.round(Math.abs(k.total_commissions || 0)).toLocaleString()}</b>.
+              Avg win <b className="v3-pos">{absMoney(k.avg_win)}</b> / Avg loss <b className="v3-neg">{absMoney(k.avg_loss)}</b>
+              {' '}· {(k.total_trades || 0).toLocaleString()} completed trades
             </p>
           </div>
           <div className="v3-heroside">
@@ -572,198 +625,86 @@ export default function DashboardRender(p) {
             </div>
             {readout && (
               <dl className="v3-readout">
-                <dt className="v3-lab">{readout.label}</dt>
-                <dd className={tone(readout.value)}>{money(readout.value)}</dd>
-                <div className="when">{readout.when}</div>
+                <dt className="v3-lab">Last session</dt>
+                <dd className={tone(readout.net_pnl)}>{money2(readout.net_pnl)}</dd>
+                <div className="when">{shortDate(readout.date)}</div>
               </dl>
             )}
           </div>
         </div>
-
-
       </div>
 
-      {/* 2. the measures line */}
-      <Measures items={measures} />
-
+      <Measures items={measures} className="v3-measures-dashboard" />
       {goalsNode}
 
-      {/* 3. performance trend — the same verified daily P&L, two useful views */}
-      <section className="v3-band">
-        <div className="v3-sec-head">
-          <div>
-            <h2 className="v3-h">Performance trend</h2>
-            <p className="v3-h-sub">Is the edge compounding, and which sessions are moving the account?</p>
-          </div>
-          <span className="v3-evidence verified">VERIFIED</span>
-        </div>
-        <div className="v3-chart-grid">
-          <div className="v3-chart-panel">
-            <div className="v3-chart-title">
+      <div className="v3-dashboard-core">
+        <main className="v3-dashboard-main">
+          <section className="v3-band v3-dashboard-section">
+            <div className="v3-sec-head">
               <div>
-                <div className="v3-lab">Equity curve</div>
-                <strong>Net account growth</strong>
+                <h2 className="v3-h">Performance trend</h2>
+                <p className="v3-h-sub">Is the edge compounding, and which sessions are moving the account?</p>
               </div>
-              <span>after commissions</span>
-            </div>
-            <EquityCurve days={days} height={210} onPick={onDayClick} />
-          </div>
-          <div className="v3-chart-panel">
-            <div className="v3-chart-title">
-              <div>
-                <div className="v3-lab">Daily net P&amp;L</div>
-                <strong>{k.trading_days || 0} sessions</strong>
-              </div>
-              <span>click a bar to review the day</span>
-            </div>
-            <DailyPnlBars days={days} height={210} onPick={onDayClick} />
-          </div>
-        </div>
-        <div className="v3-tod-panel">
-          <div className="v3-chart-title v3-tod-title">
-            <div>
-              <div className="v3-lab">Time-of-day edge</div>
-              <strong>Entry window performance</strong>
-            </div>
-            <span>30-minute buckets · first broker-recorded entry · {k.entry_time_timezone || 'CT'}</span>
-          </div>
-          <TimeOfDayBars rows={k.by_entry_time || []} timezone={k.entry_time_timezone || 'CT'} />
-        </div>
-      </section>
-
-      {/* 4. training system — verified facts first, process score only when evidence exists */}
-      <section className="v3-band">
-        <div className="v3-sec-head">
-          <div>
-            <h2 className="v3-h">Consistency &amp; training</h2>
-            <p className="v3-h-sub">Use repeatability, risk control and process coverage to decide what to practice next.</p>
-          </div>
-        </div>
-        <div className="v3-training-grid">
-          <article className="v3-training-card">
-            <div className="v3-training-head">
-              <span className="v3-lab">Consistency</span>
               <span className="v3-evidence verified">VERIFIED</span>
             </div>
-            <div className="v3-training-value">{Number(k.day_win_rate || 0).toFixed(1)}%</div>
-            <p>{greenDays.length} green sessions · {redDays.length} red sessions</p>
-            <dl className="v3-training-stats">
-              <div><dt>Best day</dt><dd className={bestDay ? tone(bestDay.net_pnl) : 'v3-flat'}>{bestDay ? money(bestDay.net_pnl) : '—'}</dd></div>
-              <div><dt>Worst day</dt><dd className={worstDay ? tone(worstDay.net_pnl) : 'v3-flat'}>{worstDay ? money(worstDay.net_pnl) : '—'}</dd></div>
-            </dl>
-          </article>
-
-          <article className="v3-training-card">
-            <div className="v3-training-head">
-              <span className="v3-lab">Risk control</span>
-              <span className="v3-evidence verified">VERIFIED</span>
+            <div className="v3-chart-grid v3-chart-grid-dashboard">
+              <div className="v3-chart-panel">
+                <div className="v3-chart-title">
+                  <div>
+                    <div className="v3-lab">Cumulative P&amp;L</div>
+                    <strong className={tone(net)}>{money2(net)}</strong>
+                  </div>
+                  <span>after commissions</span>
+                </div>
+                <EquityCurve days={days} height={210} onPick={onDayClick} />
+              </div>
+              <div className="v3-chart-panel">
+                <div className="v3-chart-title">
+                  <div>
+                    <div className="v3-lab">Daily net P&amp;L</div>
+                    <strong>{k.trading_days || 0} sessions</strong>
+                  </div>
+                  <span>click a bar to review the day</span>
+                </div>
+                <DailyPnlBars days={days} height={210} onPick={onDayClick} />
+              </div>
             </div>
-            <div className="v3-training-value v3-neg">{money(k.max_drawdown || 0)}</div>
-            <p>Maximum realized drawdown in the selected range</p>
-            <dl className="v3-training-stats">
-              <div><dt>Avg red day</dt><dd>{redDays.length ? money(-avgRedDay) : '—'}</dd></div>
-              <div><dt>Worst / avg red</dt><dd>{lossOutlierRatio == null ? '—' : `${lossOutlierRatio.toFixed(1)}×`}</dd></div>
-            </dl>
-          </article>
+          </section>
 
-          <article className="v3-training-card">
-            <div className="v3-training-head">
-              <span className="v3-lab">Process score</span>
-              <span className={`v3-evidence ${processReady ? 'recorded' : 'insufficient'}`}>
-                {processReady ? 'RECORDED' : 'INSUFFICIENT DATA'}
-              </span>
-            </div>
-            <div className="v3-training-value">{processReady ? 'Ready' : 'N/A'}</div>
-            <p>{processReady ? 'Enough setup and R evidence exists to begin process grading.' : 'The journal will not invent a discipline score without enough planned-risk and setup evidence.'}</p>
-            <dl className="v3-training-stats">
-              <div><dt>Setup coverage</dt><dd>{Math.round(strategyCoverage * 100)}%</dd></div>
-              <div><dt>R-plan coverage</dt><dd>{Math.round(rCoverage * 100)}%</dd></div>
-            </dl>
-          </article>
+          <section className="v3-band v3-dashboard-section v3-management-section">
+            <TradeManagement
+              kpis={managementKpis || k}
+              edge={managementEdge}
+              range={managementRange || '30D'}
+              onRangeChange={onManagementRangeChange}
+              goals={goals}
+            />
+          </section>
+        </main>
 
-          <article className="v3-training-card v3-training-focus">
-            <div className="v3-training-head">
-              <span className="v3-lab">Training focus</span>
-            </div>
-            <ol>
-              {trainingFocus.slice(0, 3).map((item, i) => (
-                <li key={i}>
-                  <span className={`v3-evidence ${item.evidence === 'VERIFIED' ? 'verified' : item.evidence === 'RECORDED' ? 'recorded' : 'insufficient'}`}>
-                    {item.evidence}
-                  </span>
-                  <b>{item.title}</b>
-                  <p>{item.body}</p>
-                </li>
-              ))}
-            </ol>
-          </article>
-        </div>
-      </section>
-
-      {/* 5. calendar and live account activity */}
-      <section className="v3-band">
-        <div className="v3-split">
-          <div>
+        <aside className="v3-dashboard-side">
+          <section className="v3-side-section">
             <MonthPanel
               accountId={accountId}
               onDayClick={onDayClick}
               latestDate={days.length ? days[days.length - 1].date : null}
             />
-          </div>
-          <div className="v3-rightcol">
-            <div>
-              <div className="v3-sec-head">
-                <div>
-                  <h2 className="v3-h">Recent trades</h2>
-                  <p className="v3-h-sub">The last ten closed</p>
-                </div>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={onViewAllTrades}>View all</button>
-              </div>
-              {!recentTrades?.length ? (
-                <div className="v3-empty">No trades in this range.</div>
-              ) : (
-                <div className="v3-scroll">
-                  <table className="v3-t">
-                    <thead>
-                      <tr>
-                        <th>Ticker</th>
-                        <th className="v3-hide-s">Side</th>
-                        <th className="r">Date</th>
-                        <th className="r">P&amp;L</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {recentTrades.slice(0, 10).map((t, i) => (
-                        <tr
-                          key={i}
-                          className="clickable"
-                          tabIndex={0}
-                          onClick={() => onOpenDetail && onOpenDetail(t)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenDetail && onOpenDetail(t); }
-                          }}
-                          aria-label={`Open ${t.ticker} trade`}
-                        >
-                          <td className="v3-tick">{t.ticker}</td>
-                          <td className="v3-hide-s v3-side">{(t.side || '').toLowerCase() === 'short' ? 'Short' : 'Long'}</td>
-                          <td className="r v3-mono v3-read">{t.date}</td>
-                          <td className={`r v3-mono ${tone(t.net_pnl)}`} style={{ fontWeight: 600 }}>{money2(t.net_pnl)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
+          </section>
+          <section className="v3-side-section">
+            <RecentTradesPanel
+              recentTrades={recentTrades}
+              onViewAllTrades={onViewAllTrades}
+              onOpenDetail={onOpenDetail}
+            />
+          </section>
+          <section className="v3-side-section">
             <OpenPositions {...p} />
-          </div>
-        </div>
-      </section>
+          </section>
+        </aside>
+      </div>
 
-      {/* 6. edge breakdowns */}
-      <section className="v3-band">
-        <Patterns dimensions={k.edge_dimensions} onViewAll={onViewAllTrades} />
+      <section className="v3-band v3-smoking-band">
+        <LatestSmokingGunSummary report={latestSmokingGun} onOpen={onViewSmokingGun} />
       </section>
     </div>
   );

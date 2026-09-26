@@ -318,13 +318,13 @@ test('Smoking Gun report library preserves API order and marks stale snapshots',
 });
 
 test('Smoking Gun library has a stable empty and error state', async () => {
-  smokingGunLibraryApi.list.mockResolvedValueOnce({ data: [] });
+  smokingGunLibraryApi.list.mockResolvedValue({ data: [] });
   await renderApp();
   let subnav = await openSmokingGun();
   fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
   expect(await screen.findByText('No saved Smoking Gun reports yet. Generate one from ChatGPT to build your audit history.')).toBeInTheDocument();
 
-  smokingGunLibraryApi.list.mockRejectedValueOnce(new Error('library offline'));
+  smokingGunLibraryApi.list.mockRejectedValue(new Error('library offline'));
   fireEvent.click(within(subnav).getByRole('tab', { name: 'Live Analytics' }));
   fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
   expect(await screen.findByText(/library offline/i)).toBeInTheDocument();
@@ -392,14 +392,14 @@ test('Smoking Gun saved report back navigation preserves the loaded library stat
   const subnav = await openSmokingGun();
   fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
   const card = await screen.findByRole('article', { name: 'Smoking Gun report: September Smoking Gun' });
-  expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(1);
+  const callsBeforeOpen = smokingGunLibraryApi.list.mock.calls.length;
   fireEvent.click(within(card).getByRole('button', { name: 'Open Report' }));
   const terminal = await screen.findByRole('region', { name: 'Saved Smoking Gun report' });
   fireEvent.click(within(terminal).getByRole('button', { name: 'Back to Report Library' }));
 
   expect(await screen.findByRole('article', { name: 'Smoking Gun report: September Smoking Gun' })).toBeVisible();
   expect(screen.getByRole('article', { name: 'Smoking Gun report: August Smoking Gun' })).toBeVisible();
-  expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(1);
+  expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(callsBeforeOpen);
 });
 
 test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
@@ -587,86 +587,40 @@ test('Goals save failure is shown and keeps the panel open', async () => {
 });
 
 
-test('Dashboard context analytics shows evidence status and sample confidence without promoting tiny samples', async () => {
-  const qualified = {
-    label: 'Repeatable',
-    strategy: 'Repeatable',
-    count: 5,
-    wins: 3,
-    losses: 2,
-    win_rate: 60,
-    net_pnl: 60,
-    expectancy: 12,
-    profit_factor: 3.75,
-    avg_pl_pct: 1.2,
-    confidence: 'DEVELOPING',
-    sample_qualified: true,
-    metric_status: 'VERIFIED',
-    context_status: 'RECORDED',
-    evidence_status: 'RECORDED',
-  };
-  const tiny = {
-    label: 'Lucky',
-    strategy: 'Lucky',
-    count: 4,
-    wins: 4,
-    losses: 0,
-    win_rate: 100,
-    net_pnl: 166,
-    expectancy: 41.5,
-    profit_factor: null,
-    avg_pl_pct: 4.1,
-    confidence: 'LOW',
-    sample_qualified: false,
-    metric_status: 'VERIFIED',
-    context_status: 'RECORDED',
-    evidence_status: 'INSUFFICIENT DATA',
-  };
-  const meta = (rows, labelKey) => ({
-    rows: rows.map((row) => ({ ...row, [labelKey]: row.label })),
-    coverage_count: rows.reduce((sum, row) => sum + row.count, 0),
-    coverage_pct: 100,
-    total_trades: rows.reduce((sum, row) => sum + row.count, 0),
-    min_sample: 5,
-    reliable_min_sample: 15,
-    metric_status: 'VERIFIED',
-    context_status: 'RECORDED',
-    best_win_rate: rows.find((row) => row.sample_qualified) || null,
-    strongest: rows.find((row) => row.sample_qualified) || null,
-    weakest: rows.find((row) => row.sample_qualified) || null,
-  });
-
-  // App account initialization can refetch the dashboard; keep the same fixture
-  // for every call in this test so a later account-state fetch cannot overwrite it.
+test('Dashboard prioritizes trade management and the latest saved Smoking Gun report', async () => {
   kpisApi.get.mockResolvedValue({
     data: {
-      total_net_pnl: 226,
-      total_trades: 9,
-      winning_trades: 7,
-      losing_trades: 2,
-      win_rate: 77.8,
-      daily_pnl: [],
-      by_strategy: [qualified, tiny],
-      edge_dimensions: {
-        strategy: meta([qualified, tiny], 'strategy'),
-        source: meta([{ ...qualified, label: 'Scanner', source: 'Scanner' }], 'source'),
-        setup: meta([{ ...qualified, label: 'ORB', setup: 'ORB' }], 'setup'),
-        emotion: meta([{ ...qualified, label: 'Focused', emotion: 'Focused' }], 'emotion'),
-      },
+      total_net_pnl: 4340.34,
+      total_trades: 191,
+      winning_trades: 111,
+      losing_trades: 80,
+      win_rate: 58.1,
+      avg_win: 222.72,
+      avg_loss: -162.63,
+      profit_factor: 1.42,
+      expectancy: 22.14,
+      avg_r: 0.28,
+      r_sample_count: 83,
+      max_drawdown: -1626.32,
+      exit_efficiency: 64,
+      avg_mfe: 2.4,
+      avg_mae: 0.8,
+      excursion_n: 83,
+      daily_pnl: [{ date: '2026-09-25', net_pnl: 528, cumulative: 4340.34 }],
+      trading_days: 28,
     },
   });
 
   await renderApp();
 
-  expect(await screen.findByRole('heading', { name: 'What works' })).toBeVisible();
-  expect(screen.getAllByText('VERIFIED').length).toBeGreaterThan(0);
-  expect(screen.getAllByText('RECORDED').length).toBeGreaterThan(0);
-  expect(screen.getAllByText('DEVELOPING').length).toBeGreaterThan(0);
-  expect(screen.getAllByText('LOW').length).toBeGreaterThan(0);
-  expect(screen.getAllByText('INSUFFICIENT DATA').length).toBeGreaterThan(0);
-  expect(screen.getByText('Comparisons ignore LOW samples')).toBeVisible();
+  expect(await screen.findByRole('heading', { name: /Trade management/i })).toBeVisible();
+  expect(screen.getByText('Profit capture')).toBeVisible();
+  expect(screen.getAllByText('64%').length).toBeGreaterThan(0);
+  expect(screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i })).toBeVisible();
+  expect(screen.getByText('September Smoking Gun')).toBeVisible();
+  expect(screen.queryByRole('heading', { name: 'What works' })).not.toBeInTheDocument();
 
-  const sourceTab = screen.getByRole('tab', { name: 'Source' });
-  fireEvent.click(sourceTab);
-  expect(sourceTab).toHaveAttribute('aria-selected', 'true');
+  fireEvent.click(screen.getByRole('button', { name: /View full report/i }));
+  const smokingTab = await screen.findByRole('tab', { name: 'Smoking Gun' });
+  expect(smokingTab).toHaveAttribute('aria-selected', 'true');
 });

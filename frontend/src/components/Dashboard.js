@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { kpisApi, tradesApi, edgeReportApi, goalsApi } from '../api';
+import { kpisApi, tradesApi, edgeReportApi, goalsApi, smokingGunLibraryApi } from '../api';
 import DateRangePicker from './DateRangePicker';
 import DashboardRender from '../v3/DashboardRender';
 import {
@@ -22,6 +22,7 @@ const GOAL_FIELDS = [
   { key: 'avg_win_loss_ratio', label: 'Payoff Ratio', suffix: '',  step: 0.1, min: 0 },
   { key: 'avg_r', label: 'Avg R / Trade', suffix: 'R', step: 0.05, min: 0 },
   { key: 'loss_containment', label: 'Loss Containment (max)', suffix: '×', step: 0.1, min: 0.1 },
+  { key: 'exit_efficiency', label: 'Profit Capture', suffix: '%', step: 1, min: 0, max: 100 },
 ];
 
 function GoalsPanel({ draft, onChange, onSave, onCancel, accountLabel, saving, error }) {
@@ -64,7 +65,7 @@ function GoalsPanel({ draft, onChange, onSave, onCancel, accountLabel, saving, e
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ accountId, accounts = [], selectedAccountId, onDayClick, onOpenDetail, onViewAllTrades }) {
+export default function Dashboard({ accountId, accounts = [], selectedAccountId, onDayClick, onOpenDetail, onViewAllTrades, onViewSmokingGun }) {
   const [kpis, setKpis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -85,6 +86,10 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   const [goalsDraft, setGoalsDraft] = useState(null);
   const [goalsSaving, setGoalsSaving] = useState(false);
   const [goalsError, setGoalsError] = useState(null);
+  const [managementRange, setManagementRange] = useState('30D');
+  const [managementKpis, setManagementKpis] = useState(null);
+  const [managementEdge, setManagementEdge] = useState(null);
+  const [latestSmokingGun, setLatestSmokingGun] = useState(null);
   // Bumped after a write so every panel refetches; also drives Retry.
   const [reloadKey, setReloadKey] = useState(0);
   const reload = useCallback(() => setReloadKey(k => k + 1), []);
@@ -92,6 +97,8 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   // so a slow reply cannot overwrite a newer account or date selection.
   const kpiRun = useRef(0);
   const positionsRun = useRef(0);
+  const managementRun = useRef(0);
+  const smokingGunRun = useRef(0);
 
   useEffect(() => {
     const run = ++kpiRun.current;
@@ -198,6 +205,60 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       .catch(() => { if (current()) setRecentTrades([]); });
   }, [accountId, reloadKey]);
 
+
+  useEffect(() => {
+    const run = ++managementRun.current;
+    const current = () => run === managementRun.current;
+    const params = {};
+    if (accountId != null) params.account_id = accountId;
+
+    const latestTradeDate = recentTrades?.[0]?.date
+      || kpis?.daily_pnl?.[kpis.daily_pnl.length - 1]?.date
+      || null;
+
+    if (managementRange !== 'ALL' && latestTradeDate) {
+      const daysBack = managementRange === '7D' ? 6 : managementRange === '90D' ? 89 : 29;
+      const [y, m, d] = latestTradeDate.split('-').map(Number);
+      const start = new Date(Date.UTC(y, m - 1, d));
+      start.setUTCDate(start.getUTCDate() - daysBack);
+      params.date_from = start.toISOString().slice(0, 10);
+      params.date_to = latestTradeDate;
+    }
+
+    Promise.all([
+      kpisApi.get(params).then(r => r.data),
+      edgeReportApi.get(params).then(r => r.data),
+    ]).then(([nextKpis, nextEdge]) => {
+      if (!current()) return;
+      setManagementKpis(nextKpis);
+      setManagementEdge(nextEdge);
+    }).catch(() => {
+      if (!current()) return;
+      setManagementKpis(null);
+      setManagementEdge(null);
+    });
+  }, [accountId, managementRange, recentTrades, kpis, reloadKey]);
+
+  useEffect(() => {
+    const run = ++smokingGunRun.current;
+    const current = () => run === smokingGunRun.current;
+    const params = accountId == null ? {} : { account_id: accountId };
+
+    smokingGunLibraryApi.list(params)
+      .then(async (response) => {
+        const latest = (response.data || [])[0];
+        if (!latest) return null;
+        const detail = await smokingGunLibraryApi.get(latest.id);
+        return detail.data;
+      })
+      .then((report) => {
+        if (current()) setLatestSmokingGun(report || null);
+      })
+      .catch(() => {
+        if (current()) setLatestSmokingGun(null);
+      });
+  }, [accountId, reloadKey]);
+
   const accountLabel = (() => {
     const a = accounts.find(x => x.id === selectedAccountId);
     return a ? a.name : 'All Accounts';
@@ -245,6 +306,12 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
           openPositions={openPositions}
           recentTrades={recentTrades}
           edgeReport={edgeReport}
+          managementRange={managementRange}
+          onManagementRangeChange={setManagementRange}
+          managementKpis={managementKpis}
+          managementEdge={managementEdge}
+          latestSmokingGun={latestSmokingGun}
+          onViewSmokingGun={onViewSmokingGun}
           showGoals={showGoals}
           onToggleGoals={() => { setGoalsDraft({ ...goals }); setShowGoals(v => !v); }}
           goalsNode={showGoals ? (

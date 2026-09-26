@@ -244,15 +244,17 @@ function DrawdownCurve({ curve }) {
   );
 }
 
-export default function Reports({ accountId }) {
+export default function Reports({ accountId, initialTab = 'overview' }) {
   // one view mode for the whole page: you are either scanning or reading numbers
   const [view, setView] = useState('bars');
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useState(initialTab);
   const [data, setData] = useState(null);
   const [edge, setEdge] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+
+  useEffect(() => { setTab(initialTab); }, [initialTab]);
 
   useEffect(() => {
     setLoading(true);
