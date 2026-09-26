@@ -22,8 +22,21 @@ const feedLabel = (feed) => {
 const levelStatusLabel = (meta) => {
   if (!meta) return 'UNVERIFIED';
   const status = String(meta.status || 'UNVERIFIED').replaceAll('_', ' ');
+  const review = meta.review_required ? ' · REVIEW EXTREME' : '';
   const feed = feedLabel(meta.feed);
-  return `${status} · ${feed}`;
+  return `${status}${review} · ${feed}`;
+};
+
+const levelAuditLabel = (meta) => {
+  if (!meta?.review_required) return null;
+  const source = meta.source_bar?.time_et
+    ? new Date(meta.source_bar.time_et).toLocaleTimeString([], {
+        hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York'
+      }) + ' ET'
+    : 'unknown minute';
+  const next = meta.next_distinct_extreme == null ? '—' : money(meta.next_distinct_extreme);
+  const gap = meta.gap_to_next == null ? '—' : money(meta.gap_to_next);
+  return `Source ${source} · next extreme ${next} · gap ${gap}`;
 };
 
 function EvidenceRow({ label, value, tone }) {
@@ -259,9 +272,13 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
         <EvidenceRow label="Broker time zone" value={ev.execution_time_zone} />
         <EvidenceRow label="Session" value={(ev.session_window || '').replaceAll('_', ' ')} />
         <EvidenceRow label="PDH" value={`${money(levels.PDH)} · ${levelStatusLabel(levelMeta.PDH)}`} />
+        {levelAuditLabel(levelMeta.PDH) && <EvidenceRow label="PDH audit" value={levelAuditLabel(levelMeta.PDH)} tone="var(--warning)" />}
         <EvidenceRow label="PDL" value={`${money(levels.PDL)} · ${levelStatusLabel(levelMeta.PDL)}`} />
+        {levelAuditLabel(levelMeta.PDL) && <EvidenceRow label="PDL audit" value={levelAuditLabel(levelMeta.PDL)} tone="var(--warning)" />}
         <EvidenceRow label="PMH" value={`${money(levels.PMH)} · ${levelStatusLabel(levelMeta.PMH)}`} />
+        {levelAuditLabel(levelMeta.PMH) && <EvidenceRow label="PMH audit" value={levelAuditLabel(levelMeta.PMH)} tone="var(--warning)" />}
         <EvidenceRow label="PML" value={`${money(levels.PML)} · ${levelStatusLabel(levelMeta.PML)}`} />
+        {levelAuditLabel(levelMeta.PML) && <EvidenceRow label="PML audit" value={levelAuditLabel(levelMeta.PML)} tone="var(--warning)" />}
         <EvidenceRow label="Official market calendar" value={ev.market_calendar_verified ? 'VERIFIED' : 'UNVERIFIED'} />
         <EvidenceRow label="Level breaks before entry" value={breakSummary} />
         <EvidenceRow label="Last completed 1m close" value={money(ev.underlying_price_last_completed_1m)} />
@@ -279,7 +296,7 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
         <EvidenceRow label="Market data feed" value={feedLabel(ev.market_data_feed?.underlying)} />
         <EvidenceRow
           label="Evidence quality"
-          value={ev.evidence_quality ? `${ev.evidence_quality.level} · ${ev.evidence_quality.completeness_pct}% complete` : 'Unknown'}
+          value={ev.evidence_quality ? `${ev.evidence_quality.level} · ${ev.evidence_quality.completeness_pct}% trusted` : 'Unknown'}
         />
       </div>
 
