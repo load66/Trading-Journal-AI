@@ -11,7 +11,7 @@ from config import Settings
 
 load_dotenv()
 
-APPLICATION_SCHEMA_VERSION = '20260926_001_supabase_postgres'
+APPLICATION_SCHEMA_VERSION = '20260926_002_smoking_gun_reports'
 
 
 class DBAPIRow(Mapping[str, Any]):
@@ -263,10 +263,39 @@ SCHEMA_STATEMENTS = (
         active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )""",
+    """CREATE TABLE IF NOT EXISTS smoking_gun_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        title TEXT NOT NULL,
+        date_from TEXT NOT NULL,
+        date_to TEXT NOT NULL,
+        generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        report_version TEXT NOT NULL,
+        analytics_engine_version TEXT NOT NULL,
+        behavior_version TEXT NOT NULL,
+        analysis_provider TEXT,
+        analysis_model TEXT,
+        trade_count INTEGER NOT NULL,
+        gross_pnl REAL,
+        net_pnl REAL,
+        primary_edge TEXT,
+        primary_leak TEXT,
+        data_fingerprint TEXT NOT NULL,
+        filters_json TEXT NOT NULL DEFAULT '{}',
+        source_metrics_json TEXT NOT NULL,
+        diagnosis_json TEXT,
+        action_plan_json TEXT,
+        export_manifest_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'complete'
+            CHECK(status IN ('complete','draft','failed')),
+        UNIQUE(account_id, date_from, date_to, data_fingerprint, report_version)
+    )""",
     'CREATE INDEX IF NOT EXISTS idx_trades_account_date ON trades(account_id, date)',
     'CREATE INDEX IF NOT EXISTS idx_trades_group ON trades(trade_group)',
     'CREATE INDEX IF NOT EXISTS idx_analysis_group ON trade_analysis(trade_group)',
     'CREATE INDEX IF NOT EXISTS idx_tags_group ON trade_tags(trade_group)',
+    'CREATE INDEX IF NOT EXISTS idx_smoking_gun_reports_account_generated ON smoking_gun_reports(account_id, generated_at)',
+    'CREATE INDEX IF NOT EXISTS idx_smoking_gun_reports_fingerprint ON smoking_gun_reports(data_fingerprint)',
 )
 
 
