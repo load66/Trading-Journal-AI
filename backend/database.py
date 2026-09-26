@@ -233,6 +233,19 @@ SCHEMA_STATEMENTS = (
         match_notes TEXT,
         diary_entry_id INTEGER REFERENCES diary_entries(id)
     )""",
+    """CREATE TABLE IF NOT EXISTS risk_plan_evidence (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trade_group TEXT NOT NULL,
+        image_path TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        extraction_json TEXT NOT NULL,
+        applied_json TEXT,
+        status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending','applied','rejected')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        applied_at TEXT
+    )""",
     """CREATE TABLE IF NOT EXISTS trade_tags (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         trade_group TEXT NOT NULL,
@@ -267,6 +280,7 @@ SCHEMA_STATEMENTS = (
     'CREATE INDEX IF NOT EXISTS idx_trades_group ON trades(trade_group)',
     'CREATE INDEX IF NOT EXISTS idx_analysis_group ON trade_analysis(trade_group)',
     'CREATE INDEX IF NOT EXISTS idx_tags_group ON trade_tags(trade_group)',
+    'CREATE INDEX IF NOT EXISTS idx_risk_plan_group ON risk_plan_evidence(trade_group)',
 )
 
 
