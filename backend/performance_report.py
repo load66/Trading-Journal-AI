@@ -455,8 +455,46 @@ def build_performance_report(trades):
 
     trading_days = max(1, len({t.get("date") for t in disciplined if t.get("date")}))
     daily_edge = sum(t["pnl"] for t in disciplined) / trading_days if disciplined else 0
+
+    # Forward projection uses remaining weekdays as an explicit approximation.
+    # It deliberately does not pretend to know the exchange holiday calendar.
+    today = datetime.now().date()
+    year_end = today.replace(month=12, day=31)
+    remaining_weekdays = 0
+    cursor = today
+    from datetime import timedelta
+    while cursor <= year_end:
+        if cursor.weekday() < 5:
+            remaining_weekdays += 1
+        cursor += timedelta(days=1)
+
+    daily_totals = defaultdict(float)
+    for t in rows:
+        if t.get("date"):
+            daily_totals[t["date"]] += t["pnl"]
+    cum = peak = 0.0
+    for day in sorted(daily_totals):
+        cum += daily_totals[day]
+        peak = max(peak, cum)
+    current_drawdown = cum - peak
+
     projection_rates = [1.0, .75, .50, .33, .25]
-    projections = [{"rate": r, "daily_edge": round(daily_edge * r, 2)} for r in projection_rates]
+    projections = []
+    for r in projection_rates:
+        rate_edge = daily_edge * r
+        gross = rate_edge * remaining_weekdays
+        net_after_drawdown = gross + current_drawdown
+        monthly_edge = rate_edge * 21
+        months_to_recover = abs(current_drawdown) / monthly_edge if current_drawdown < 0 and monthly_edge > 0 else 0
+        projections.append({
+            "rate": r,
+            "daily_edge": round(rate_edge, 2),
+            "remaining_weekdays": remaining_weekdays,
+            "gross_earnings": round(gross, 2),
+            "current_drawdown": round(current_drawdown, 2),
+            "net_after_current_drawdown": round(net_after_drawdown, 2),
+            "months_to_recover": round(months_to_recover, 2) if months_to_recover else 0,
+        })
 
     return {
         "meta": {
