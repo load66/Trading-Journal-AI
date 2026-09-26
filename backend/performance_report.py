@@ -367,6 +367,26 @@ def _behavior_analysis(trades):
     add_flaw("Averaging down / adding to losers", avg_down)
     add_flaw("Sub-2-minute trades", [t for t in trades if t.get("hold_sec") is not None and t["hold_sec"] < 120])
     add_flaw("Trading after loss threshold", after_loss_rows)
+
+    # Only classify trade-count/session cohorts as flaws when the actual cohort
+    # is net negative. Presence alone is not evidence of a mistake.
+    for label, lo, hi in DAY_COUNT_BUCKETS[1:]:
+        cohort = []
+        for day_rows in by_day.values():
+            if lo <= len(day_rows) < hi:
+                cohort.extend(day_rows)
+        add_flaw(f"High-volume trading days ({label} trades)", cohort)
+
+    opening_rows = [
+        t for t in trades if t.get("entry_dt")
+        and 570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 600
+    ]
+    closing_rows = [
+        t for t in trades if t.get("entry_dt")
+        and 930 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 960
+    ]
+    add_flaw("First 30 minutes", opening_rows)
+    add_flaw("Last 30 minutes", closing_rows)
     flaws.sort(key=lambda x: x["dollar_impact"], reverse=True)
 
     return {
