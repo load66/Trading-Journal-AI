@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v4_INTEGRITY"
+LE_RULESET_VERSION = "LE_2026_09_v5_NO_MARKET_SIGN"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
@@ -27,7 +27,6 @@ ALLOWED_STRATEGIES = (
 AI_TAGS = {
     "setup": {
         "A++ Level + EMA",
-        "Flag-Line-Sign",
     },
     "execution": {
         "Clean Entry",
@@ -52,7 +51,6 @@ _RULE_TAGS = {
     ("mistake", "Airgapped from 8 EMA"),
     ("mistake", "No Level Break"),
     ("mistake", "Traded Chop"),
-    ("mistake", "No Market Sign"),
     ("outcome", "Break-Even"),
 }
 
@@ -614,33 +612,6 @@ def analyze_context(
             f"10-minute 8 EMA is {ema_status}; EMA-dependent automatic mistake tags are disabled."
         )
 
-    spy = _session_vwap_snapshot(spy_bars, entry_dt)
-    qqq = _session_vwap_snapshot(qqq_bars, entry_dt)
-    observed_market_sign = _market_sign_status(direction, spy, qqq)
-    spy_status = _level_status(spy_feed, True, entry_dt - timedelta(minutes=1))
-    qqq_status = _level_status(qqq_feed, True, entry_dt - timedelta(minutes=1))
-    market_sign_verified = (
-        _status_is_verified(spy_status)
-        and _status_is_verified(qqq_status)
-        and spy["vwap"] is not None
-        and qqq["vwap"] is not None
-    )
-    market_sign = observed_market_sign if market_sign_verified else "unverified"
-
-    if spy["vwap"] is None or qqq["vwap"] is None:
-        data_warnings.append("SPY/QQQ VWAP market-confirmation evidence is incomplete.")
-    elif not market_sign_verified:
-        data_warnings.append(
-            f"SPY/QQQ Market Sign is unverified (SPY {spy_status}, QQQ {qqq_status}); "
-            "it cannot create an automatic No Market Sign tag."
-        )
-
-    if market_sign_verified and market_sign == "failed":
-        add_rule_tag(
-            "mistake", "No Market Sign",
-            "Both verified SPY and QQQ VWAP signals opposed the trade direction before entry.",
-        )
-
     evidence = {
         "underlying": trade.get("ticker"),
         "direction": direction,
@@ -668,20 +639,6 @@ def analyze_context(
         "ema_distance_pct": ema_distance_pct,
         "ema_integrity_status": ema_status,
         "nearest_broken_level": nearest_broken_level,
-        "spy": spy,
-        "qqq": qqq,
-        "market_sign": {
-            "basis": "SPY/QQQ regular-session HLC3 VWAP",
-            "status": market_sign,
-            "observed_status": observed_market_sign,
-            "integrity_status": "VERIFIED" if market_sign_verified else "UNVERIFIED",
-            "spy_integrity_status": spy_status,
-            "qqq_integrity_status": qqq_status,
-            "rule": (
-                "Bullish: both SPY and QQQ above VWAP = confirmed; both below = failed; otherwise mixed. "
-                "Bearish: both below VWAP = confirmed; both above = failed; otherwise mixed."
-            ),
-        },
         "net_pnl": trade.get("net_pnl"),
         "instrument_type": trade.get("instrument_type"),
         "option_type": trade.get("option_type"),
@@ -928,13 +885,10 @@ Strategy rules:
 - If the evidence cannot distinguish these reliably, choose NONE.
 
 Tag rules:
-- The deterministic rule engine already handles Outside/Inside Day, level breaks, first-10m, airgapped >1%, no-level-break, chop-range, VWAP-based No Market Sign, and break-even. Do not repeat those.
+- The deterministic rule engine already handles Outside/Inside Day, level breaks, first-10m, airgapped >1%, no-level-break, chop-range, and break-even. Do not repeat those.
 - Treat PDH/PDL/PMH/PML as usable only when the corresponding level_meta status is VERIFIED or VERIFIED_HISTORICAL.
 - Treat 10-minute 8 EMA evidence as usable only when ema_integrity_status is VERIFIED or VERIFIED_HISTORICAL.
-- Treat Market Sign as usable only when market_sign.integrity_status is VERIFIED. If status is unverified, do not infer confirmation from observed_status.
-- Market Sign is a custom trader rule supplied in objective evidence: bullish requires both SPY and QQQ above regular-session VWAP; bearish requires both below. Mixed is not a failed sign.
 - Suggest A++ Level + EMA only when broken-level and EMA confluence is genuinely supported.
-- Suggest Flag-Line-Sign only when Flag and Line are supported and objective market_sign.status is confirmed.
 - Suggest Clean/Early/Late Entry, Chased Entry, Forced Setup, or Sold Too Early only when the evidence supports the claim.
 - Missing evidence means omit the tag and add a concise item to insufficient_evidence.
 
@@ -1130,15 +1084,11 @@ async def build_le_review(trade: dict) -> dict:
         }
 
     try:
-        underlying_result, spy_result, qqq_result, market_calendar = await asyncio.gather(
+        underlying_result, market_calendar = await asyncio.gather(
             _fetch_alpaca_1m(ticker, when),
-            _fetch_alpaca_1m("SPY", when),
-            _fetch_alpaca_1m("QQQ", when),
             _fetch_market_calendar(when),
         )
         underlying_bars, underlying_feed = underlying_result
-        spy_bars, spy_feed = spy_result
-        qqq_bars, qqq_feed = qqq_result
     except Exception as exc:
         return {
             "ruleset_version": LE_RULESET_VERSION,
@@ -1153,30 +1103,26 @@ async def build_le_review(trade: dict) -> dict:
     context = analyze_context(
         trade,
         underlying_bars,
-        spy_bars,
-        qqq_bars,
+        [],
+        [],
         market_calendar=market_calendar,
         underlying_feed=underlying_feed,
-        spy_feed=spy_feed,
-        qqq_feed=qqq_feed,
     )
     if context.get("available"):
         context["evidence"]["market_data_feed"] = {
             "underlying": underlying_feed,
-            "SPY": spy_feed,
-            "QQQ": qqq_feed,
         }
-        feeds = {underlying_feed, spy_feed, qqq_feed}
+        feeds = {underlying_feed}
         if "iex" in feeds:
             context["data_warnings"].append(
-                "Historical SIP was unavailable for at least one symbol, so LE Review fell back to IEX. "
-                "IEX is exchange-limited; PDH/PDL/PMH/PML, VWAP, and benchmark bars can differ from "
+                "Historical SIP was unavailable, so LE Review fell back to IEX. "
+                "IEX is exchange-limited; PDH/PDL/PMH/PML and EMA evidence can differ from "
                 "Schwab or TradingView. Refresh Evidence later to retry SIP."
             )
         if "delayed_sip" in feeds:
             context["data_warnings"].append(
-                "At least one symbol is using delayed SIP. Premarket and older bars are consolidated, "
-                "but the newest market context may lag by about 15 minutes. Refresh Evidence later for full SIP."
+                "Underlying evidence is using delayed SIP. Premarket and older bars are consolidated, "
+                "but the newest context may lag by about 15 minutes. Refresh Evidence later for full SIP."
             )
 
         ev = context["evidence"]
@@ -1187,7 +1133,6 @@ async def build_le_review(trade: dict) -> dict:
         ]
         verified_flags.extend([
             _status_is_verified(ev.get("ema_integrity_status")),
-            (ev.get("market_sign") or {}).get("integrity_status") == "VERIFIED",
             ev.get("underlying_price_last_completed_1m") is not None,
         ])
         verified_count = sum(bool(flag) for flag in verified_flags)
