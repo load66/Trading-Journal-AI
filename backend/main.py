@@ -37,6 +37,7 @@ from ai_analysis import (
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
 from library import router as library_router, init_library_tables, apply_aliases, library_names
+from smoking_gun_routes import router as smoking_gun_router
 
 load_dotenv()
 
@@ -97,6 +98,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Settings > Library (strategies, sources, tags)
 app.include_router(library_router)
+app.include_router(smoking_gun_router)
 
 
 # ── Dependency ─────────────────────────────────────────────────────────────────
