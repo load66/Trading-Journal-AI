@@ -6,6 +6,8 @@ from datetime import datetime
 from math import inf
 from statistics import mean, median
 
+from behavior_rules import detect_daily_flags
+
 
 HOLD_BUCKETS = [
     ("Under 30 sec", 0, 30),
@@ -510,6 +512,18 @@ def build_performance_report(trades):
 
     daily = _daily_rows(rows)
     behavior = _behavior_analysis(rows)
+
+    raw_by_day = defaultdict(list)
+    for t in trades:
+        if t.get("date"):
+            raw_by_day[t.get("date")].append(t)
+    verified_rule_flags = []
+    prior_counts = []
+    for day in sorted(raw_by_day):
+        for flag in detect_daily_flags(raw_by_day[day], prior_counts):
+            verified_rule_flags.append({"date": day, **flag})
+        prior_counts.append(len(raw_by_day[day]))
+    behavior["verified_rule_flags"] = verified_rule_flags
     time_blocks = _group_stats(rows, _time_bucket)
     dow = _group_stats(rows, _dow, ["Mon", "Tue", "Wed", "Thu", "Fri"])
     first10 = _stats([t for t in rows if t.get("entry_dt") and 570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 580])

@@ -95,7 +95,7 @@ def test_daily_summary_prefers_groq(monkeypatch):
     assert result["trade_grades"][0]["grade"] == "N/A"
     assert result["mental_game"].startswith("Insufficient evidence")
     assert result["evidence_locked"] is True
-    assert result["evidence_version"] == 2
+    assert result["evidence_version"] == 3
     assert seen["payload"]["model"] == "openai/gpt-oss-120b"
     assert seen["payload"]["response_format"] == {"type": "json_object"}
     assert seen["headers"]["Authorization"] == "Bearer gsk-test"

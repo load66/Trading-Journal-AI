@@ -37,6 +37,7 @@ from ai_analysis import (
 )
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
+from excursion_analysis import calculate_trade_excursion
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 from le_analysis import build_le_review
 
@@ -952,9 +953,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     MAE is reported separately for winners and losers because the gap between
     them is what calibrates the stop.
     """
-    sql = ("SELECT net_pnl, mfe_pct, mae_pct, exit_efficiency FROM trades "
-           "WHERE instrument_type='STOCK' AND mfe_pct IS NOT NULL "
-           "AND net_pnl IS NOT NULL AND net_pnl <> 0")
+    sql = ("SELECT instrument_type, net_pnl, mfe_pct, mae_pct, exit_efficiency FROM trades "
+           "WHERE mfe_pct IS NOT NULL AND net_pnl IS NOT NULL AND net_pnl <> 0")
     params = []
     if account_id is not None:
         sql += " AND account_id = ?"; params.append(account_id)
@@ -987,6 +987,14 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         "avg_mae_win": avg([r['mae_pct'] for r in wins]),
         "avg_mae_loss": avg([r['mae_pct'] for r in losses]),
         "excursion_n": len(rows),
+        "excursion_stock_n": sum(1 for r in rows if r["instrument_type"] == "STOCK"),
+        "excursion_option_n": sum(1 for r in rows if r["instrument_type"] == "OPTION"),
+        "excursion_future_n": sum(1 for r in rows if r["instrument_type"] == "FUTURE"),
+        "excursion_note": (
+            "Stocks use actual fill prices with Alpaca 1-minute highs/lows. "
+            "Options use the underlying ticker's directional 1-minute path; "
+            "futures use the configured ETF proxy."
+        ),
     }
 
 
@@ -1490,6 +1498,105 @@ async def get_chart(
             "ticker": ticker, "date": date, "bars": [],
             "warning": f"Chart unavailable: {str(e)}"
         }
+
+
+
+@app.post("/api/excursions/calculate")
+async def calculate_excursions(
+    date: str = Query(...),
+    account_id: int | None = Query(None),
+    force: bool = Query(False),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Calculate and persist missing MAE/MFE/exit-efficiency for one trading day.
+
+    This is intentionally lazy: Day Review calls it automatically. Once a trade
+    has excursion metrics they are reused by every report, avoiding repeated
+    Alpaca requests.
+    """
+    if not ALPACA_KEY or ALPACA_KEY == "your_alpaca_api_key_here":
+        return {
+            "date": date, "computed": 0, "skipped": 0, "unavailable": True,
+            "message": "Alpaca market data is not configured.",
+        }
+
+    sql = """
+        SELECT id, account_id, trade_group, date, ticker, instrument_type, side,
+               net_pnl, executions, option_type, mfe_pct, mae_pct, exit_efficiency
+        FROM trades
+        WHERE date = ?
+    """
+    params = [date]
+    if account_id is not None:
+        sql += " AND account_id = ?"
+        params.append(account_id)
+    if not force:
+        # A zero-MFE trade legitimately has no exit-efficiency denominator, so
+        # completeness is based on the excursion pair rather than efficiency.
+        sql += " AND (mfe_pct IS NULL OR mae_pct IS NULL)"
+    sql += " ORDER BY id"
+
+    rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    if not rows:
+        return {"date": date, "computed": 0, "skipped": 0, "already_complete": True}
+
+    by_ticker = {}
+    for t in rows:
+        by_ticker.setdefault(t["ticker"], []).append(t)
+
+    computed = 0
+    skipped = []
+    for ticker, ticker_trades in by_ticker.items():
+        chart = await get_chart(ticker, date, "1Min", 1)
+        bars = chart.get("bars") or []
+        if not bars:
+            warning = chart.get("warning") or "No Alpaca bars returned."
+            for t in ticker_trades:
+                skipped.append({
+                    "trade_group": t["trade_group"],
+                    "ticker": ticker,
+                    "reason": warning,
+                })
+            continue
+
+        for t in ticker_trades:
+            metric = calculate_trade_excursion(t, bars)
+            if not metric.get("available"):
+                skipped.append({
+                    "trade_group": t["trade_group"],
+                    "ticker": ticker,
+                    "reason": metric.get("reason") or "Insufficient market data.",
+                })
+                continue
+            conn.execute(
+                "UPDATE trades SET mfe_pct=?, mae_pct=?, exit_efficiency=? WHERE id=?",
+                (
+                    metric["mfe_pct"],
+                    metric["mae_pct"],
+                    metric["exit_efficiency"],
+                    t["id"],
+                ),
+            )
+            computed += 1
+
+    if computed:
+        if account_id is None:
+            conn.execute("DELETE FROM daily_summaries WHERE summary_date=?", (date,))
+        else:
+            conn.execute(
+                "DELETE FROM daily_summaries WHERE summary_date=? AND account_id=?",
+                (date, account_id),
+            )
+    conn.commit()
+    return {
+        "date": date,
+        "computed": computed,
+        "skipped": len(skipped),
+        "details": skipped[:25],
+        "method": "Alpaca 1-minute market path",
+        "option_basis": "underlying directional move",
+        "stock_basis": "actual fill price",
+    }
 
 
 # ── Calendar ───────────────────────────────────────────────────────────────────
@@ -2301,10 +2408,11 @@ def get_daily_summary(
         if row:
             try:
                 content = json.loads(row['ai_content'])
-                # Version 2 introduced deterministic evidence-locking. Older
-                # cached summaries may contain unsupported psychological/process
-                # claims, so they are regenerated instead of silently reused.
-                if int(content.get('evidence_version') or 0) >= 2:
+                # Version 3 adds deterministic strengths/behavior flags and
+                # evidence badges. Older cached summaries are regenerated so
+                # the UI never mixes the previous free-form lists with the new
+                # evidence model.
+                if int(content.get('evidence_version') or 0) >= 3:
                     content['date'] = date
                     content['cached'] = True
                     content['generated_at'] = row['generated_at']
