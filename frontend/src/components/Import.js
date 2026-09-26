@@ -18,7 +18,7 @@ const TEMPLATE_URL = '/templates/generic_trades_template.csv';
 const EXAMPLE_URL = '/templates/generic_trades_example.csv';
 
 const BROKER_HELP = {
-  auto: 'Pick a broker above, or leave Auto-detect and the importer will recognise a Thinkorswim account statement or an IBKR Activity Statement.',
+  auto: 'Leave Auto-detect on and the importer will recognise Thinkorswim account statements, Schwab transaction-history exports, or IBKR Activity Statements.',
   thinkorswim: <>Export from Thinkorswim desktop: <em>Monitor → Account Statement → export icon → Export to File (CSV)</em>.</>,
   schwab_transactions: <>Schwab transaction-history CSV with Date, Type, Description, Ref Num, fees, Amount and Balance. These exports have minute-level timestamps.</>,
   ibkr: <>Export from IBKR Client Portal: <em>Performance &amp; Reports → Statements → Activity → pick the period → Download as CSV</em></>,
@@ -26,7 +26,7 @@ const BROKER_HELP = {
 };
 
 const BROKER_DROP_LABEL = {
-  auto: 'Drop your broker CSV (Thinkorswim or IBKR)',
+  auto: 'Drop your broker CSV (Thinkorswim, Schwab, or IBKR)',
   thinkorswim: 'Drop Thinkorswim account statement CSV',
   schwab_transactions: 'Drop Schwab transaction-history CSV',
   ibkr: 'Drop IBKR Activity Statement CSV',
@@ -37,7 +37,9 @@ const BROKER_DROP_LABEL = {
 function brokerFromAccount(account) {
   const b = (account?.broker || '').toLowerCase();
   if (/ibkr|interactive/.test(b)) return 'ibkr';
-  if (/thinkorswim|tos|schwab/.test(b)) return 'thinkorswim';
+  // Thinkorswim/Schwab accounts can export more than one CSV shape.
+  // Let the backend inspect each file rather than forcing the wrong parser.
+  if (/thinkorswim|tos|schwab/.test(b)) return 'auto';
   return 'auto';
 }
 
@@ -325,6 +327,17 @@ export default function Import({ accounts, accountId }) {
                 <CheckCircle size={16} /> Import Complete
               </div>
               <div style={{ fontSize: 14 }}>{csvResult.message}</div>
+              {csvResult.execution_integrity?.execution_count > 0 && (
+                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.5 }}>
+                  <strong style={{ color: 'var(--text-primary)' }}>Execution integrity:</strong>{' '}
+                  {csvResult.execution_integrity.canonical_timestamp_count}/{csvResult.execution_integrity.execution_count}
+                  {' '}fills stored with canonical timestamps
+                  {csvResult.execution_integrity.source_timezones?.length > 0
+                    ? ` · ${csvResult.execution_integrity.source_timezones.join(', ')}`
+                    : ''}
+                  {csvResult.broker_detected ? ` · ${csvResult.broker_detected}` : ''}
+                </div>
+              )}
               {csvResult.errors?.length > 0 && (
                 <div style={{ fontSize: 13, color: 'var(--result-neg)', marginTop: 4 }}>
                   {csvResult.errors.length} DB error(s)

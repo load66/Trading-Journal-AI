@@ -585,6 +585,39 @@ async def import_csv(
         content, broker, account_id, None if reconcile else conn
     )
 
+    detected_broker = detect_broker(content) if broker == "auto" else broker
+    parsed_execs = []
+    for trade in trades:
+        try:
+            parsed_execs.extend(json.loads(trade.get("executions") or "[]"))
+        except Exception:
+            continue
+
+    execution_count = len(parsed_execs)
+    canonical_count = sum(1 for e in parsed_execs if e.get("timestamp_utc"))
+    source_zones = sorted({str(e.get("source_timezone")) for e in parsed_execs if e.get("source_timezone")})
+    precisions = sorted({str(e.get("timestamp_precision")) for e in parsed_execs if e.get("timestamp_precision")})
+    broker_refs = sum(1 for e in parsed_execs if e.get("source_ref"))
+
+    if detected_broker in {"thinkorswim", "schwab_transactions"} and execution_count and canonical_count != execution_count:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Execution integrity check failed: not every Thinkorswim/Schwab fill "
+                "received a canonical timestamp. Nothing was imported."
+            ),
+        )
+
+    execution_integrity = {
+        "broker": detected_broker,
+        "execution_count": execution_count,
+        "canonical_timestamp_count": canonical_count,
+        "source_ref_count": broker_refs,
+        "source_timezones": source_zones,
+        "timestamp_precisions": precisions,
+        "verified": bool(execution_count) and canonical_count == execution_count,
+    }
+
     imported = 0
     errors = []
     reconcile_state = None
@@ -659,6 +692,8 @@ async def import_csv(
         "skipped": skipped,
         "reconciled": reconciled,
         "reconcile": reconcile,
+        "broker_detected": detected_broker,
+        "execution_integrity": execution_integrity,
         "errors": errors,
         "message": (
             f"Reconciled {reconciled} existing imported trade group(s) and rebuilt "

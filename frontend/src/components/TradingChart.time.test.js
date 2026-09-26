@@ -52,4 +52,36 @@ describe('TradingChart timezone integrity', () => {
     ]);
   });
 
+  test('canonical timestamp wins over legacy local clock fields', () => {
+    const fills = [{
+      date: '2026-09-25',
+      time: '08:00:00',
+      timestamp_utc: '2026-09-25T14:48:00Z',
+      source_timezone: 'America/Chicago',
+      timestamp_precision: 'minute',
+      action: 'SOLD',
+      qty: 2,
+      price: 0.85,
+    }];
+    const markers = buildExecutionMarkerGroups(fills, '2026-09-25', 1);
+    expect(markers).toHaveLength(1);
+    expect(markers[0].time).toBe(utcWallTs('2026-09-25', '10:48'));
+    expect(markers[0].text).toBe('10:48 ET · 2@0.85');
+  });
+
+  test('second-precision canonical fills keep seconds in the label', () => {
+    const fills = [{
+      date: '2026-09-25',
+      time: '10:11:22',
+      timestamp_utc: '2026-09-25T15:11:22Z',
+      source_timezone: 'America/Chicago',
+      timestamp_precision: 'second',
+      action: 'SOLD',
+      qty: 1,
+      price: 2.11,
+    }];
+    const markers = buildExecutionMarkerGroups(fills, '2026-09-25', 1);
+    expect(markers[0].text).toBe('11:11:22 ET · 1@2.11');
+  });
+
 });
