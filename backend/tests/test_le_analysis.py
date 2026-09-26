@@ -115,6 +115,8 @@ def review_context(trade, underlying, spy=None, qqq=None, feed="sip", calendar=N
         underlying if qqq is None else qqq,
         market_calendar=calendar or verified_calendar(),
         underlying_feed=feed,
+        spy_feed=feed,
+        qqq_feed=feed,
     )
 
 
