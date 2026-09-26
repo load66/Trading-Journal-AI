@@ -1186,3 +1186,134 @@ button.month-card:active { transform: translateY(1px); }
   color: #c7d2fe;
   background: rgba(99, 102, 241, .08);
 }
+
+
+/* ============================================================
+   Mobile trading calendar
+   Compact six-column composition inspired by the supplied mobile
+   reference: Mon-Fri plus Week fits the viewport without horizontal
+   scrolling. Desktop and dashboard-mini sizing remain unchanged.
+   ============================================================ */
+@media (max-width: 600px) {
+  .card:has(.cal-inner-full) {
+    padding: 10px 8px;
+    overflow: hidden;
+  }
+
+  .cal-scroll:has(.cal-inner-full) {
+    overflow-x: visible;
+    padding-bottom: 0;
+    background: none;
+  }
+
+  .cal-inner-full {
+    min-width: 0;
+    width: 100%;
+    gap: 4px !important;
+  }
+
+  .cal-inner-full > div:first-child {
+    flex: 5 1 0 !important;
+    min-width: 0;
+  }
+
+  .cal-inner-full > div:first-child > div:first-child,
+  .cal-inner-full > div:first-child > div:nth-child(2) > div {
+    gap: 3px !important;
+  }
+
+  .cal-inner-full > div:first-child > div:first-child > div,
+  .cal-inner-full .cal-week-head {
+    height: 28px !important;
+    padding-left: 2px !important;
+    font-size: clamp(9px, 2.65vw, 11px) !important;
+    justify-content: center;
+  }
+
+  .cal-inner-full .cal-day-full,
+  .cal-inner-full .cal-week-card {
+    height: 76px !important;
+    border-radius: 5px !important;
+  }
+
+  .cal-inner-full .cal-day-full {
+    padding: 6px 4px !important;
+    box-shadow: none !important;
+    border: 1px solid var(--divider-soft);
+  }
+
+  .cal-inner-full .cal-day-full.has-data {
+    border-color: color-mix(in srgb, currentColor 22%, var(--divider-soft));
+  }
+
+  .cal-inner-full .cal-day-full > div:first-child {
+    justify-content: center !important;
+  }
+
+  .cal-inner-full .cal-day-full > div:first-child .num {
+    font-size: 10px !important;
+  }
+
+  .cal-inner-full .cal-day-result {
+    text-align: center;
+  }
+
+  .cal-inner-full .cal-day-pnl {
+    font-size: clamp(12px, 3.25vw, 15px) !important;
+    line-height: 1.05 !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+
+  .cal-inner-full .cal-day-meta {
+    font-size: clamp(8px, 2.25vw, 10px) !important;
+    margin-top: 4px !important;
+    line-height: 1.1;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+
+  .cal-inner-full .cal-win-break,
+  .cal-inner-full .cal-win-rate {
+    display: none;
+  }
+
+  .cal-inner-full .cal-week-column {
+    flex: 1 1 0 !important;
+    gap: 3px !important;
+  }
+
+  .cal-inner-full .cal-week-card {
+    padding: 5px 3px !important;
+    gap: 2px !important;
+    text-align: center;
+    border: 1px solid var(--divider-soft);
+  }
+
+  .cal-inner-full .cal-week-label {
+    display: none;
+  }
+
+  .cal-inner-full .cal-week-pnl {
+    font-size: clamp(11px, 3vw, 14px) !important;
+    line-height: 1.05;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cal-inner-full .cal-week-meta {
+    font-size: clamp(8px, 2.15vw, 9.5px) !important;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 380px) {
+  .card:has(.cal-inner-full) { padding-left: 5px; padding-right: 5px; }
+  .cal-inner-full { gap: 2px !important; }
+  .cal-inner-full > div:first-child > div:first-child,
+  .cal-inner-full > div:first-child > div:nth-child(2) > div,
+  .cal-inner-full .cal-week-column { gap: 2px !important; }
+  .cal-inner-full .cal-day-full,
+  .cal-inner-full .cal-week-card { height: 72px !important; }
+  .cal-inner-full .cal-day-full { padding-left: 2px !important; padding-right: 2px !important; }
+}
