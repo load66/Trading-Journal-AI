@@ -9,13 +9,14 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v3_SIP_HISTORY"
+LE_RULESET_VERSION = "LE_2026_09_v4_INTEGRITY"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 ALPACA_FALLBACK_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
+ALPACA_TRADING_BASE_URL = os.getenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
 
 ALLOWED_STRATEGIES = (
     "LE L-Entry — Level Retest",
@@ -279,11 +280,81 @@ def _session_window(entry_dt: datetime) -> str:
     return "outside_primary_window"
 
 
+def _parse_hhmm(value: str | None, fallback: time) -> time:
+    if not value:
+        return fallback
+    raw = str(value).strip()
+    for fmt in ("%H:%M", "%H:%M:%S", "%H%M"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return fallback
+
+
+def _session_record(row: dict | None) -> dict | None:
+    if not row or not row.get("date"):
+        return None
+    try:
+        day = date.fromisoformat(str(row["date"])[:10])
+    except ValueError:
+        return None
+    open_t = _parse_hhmm(row.get("open"), time(9, 30))
+    close_t = _parse_hhmm(row.get("close"), time(16, 0))
+    return {
+        "date": day,
+        "open": datetime.combine(day, open_t, tzinfo=ET),
+        "close": datetime.combine(day, close_t, tzinfo=ET),
+    }
+
+
+def _calendar_context(rows: list[dict], trade_day: date) -> dict:
+    sessions = [s for s in (_session_record(row) for row in rows) if s]
+    sessions.sort(key=lambda s: s["date"])
+    current = next((s for s in sessions if s["date"] == trade_day), None)
+    previous_candidates = [s for s in sessions if s["date"] < trade_day]
+    previous = previous_candidates[-1] if previous_candidates else None
+    return {
+        "verified": current is not None and previous is not None,
+        "current": current,
+        "previous": previous,
+    }
+
+
+def _within(dt: datetime, start_dt: datetime, end_dt: datetime) -> bool:
+    return dt.date() == start_dt.date() and start_dt <= dt < end_dt
+
+
+def _level_status(
+    feed: str | None,
+    calendar_verified: bool,
+    required_window_end: datetime | None,
+) -> str:
+    if not calendar_verified or required_window_end is None:
+        return "PARTIAL"
+    feed = (feed or "").lower()
+    if feed == "sip":
+        return "VERIFIED"
+    if feed == "delayed_sip":
+        if required_window_end <= datetime.now(ET) - timedelta(minutes=15):
+            return "VERIFIED_HISTORICAL"
+        return "DELAYED"
+    if feed == "iex":
+        return "LIMITED"
+    return "PARTIAL"
+
+
+def _status_is_verified(status: str | None) -> bool:
+    return status in {"VERIFIED", "VERIFIED_HISTORICAL"}
+
+
 def analyze_context(
     trade: dict,
     underlying_bars: list[dict],
     spy_bars: list[dict],
     qqq_bars: list[dict],
+    market_calendar: dict | None = None,
+    underlying_feed: str | None = None,
 ) -> dict:
     entry_dt = entry_datetime(trade)
     if entry_dt is None:
@@ -299,28 +370,59 @@ def analyze_context(
     trade_day = entry_dt.date()
     direction = market_direction(trade)
     dated = [(b, _bar_dt(b)) for b in underlying_bars]
-    prior_rth_dates = sorted(
-        {
-            dt.date()
-            for _, dt in dated
-            if dt.date() < trade_day and _is_rth(dt)
-        }
+
+    calendar_verified = bool((market_calendar or {}).get("verified"))
+    current_session = (market_calendar or {}).get("current")
+    previous_session = (market_calendar or {}).get("previous")
+
+    if previous_session:
+        previous_day = previous_session["date"]
+        previous_open = previous_session["open"]
+        previous_close = previous_session["close"]
+    else:
+        prior_rth_dates = sorted(
+            {
+                dt.date()
+                for _, dt in dated
+                if dt.date() < trade_day and _is_rth(dt)
+            }
+        )
+        previous_day = prior_rth_dates[-1] if prior_rth_dates else None
+        previous_open = (
+            datetime.combine(previous_day, time(9, 30), tzinfo=ET)
+            if previous_day else None
+        )
+        previous_close = (
+            datetime.combine(previous_day, time(16, 0), tzinfo=ET)
+            if previous_day else None
+        )
+
+    current_open = (
+        current_session["open"]
+        if current_session
+        else datetime.combine(trade_day, time(9, 30), tzinfo=ET)
     )
-    previous_day = prior_rth_dates[-1] if prior_rth_dates else None
+    current_close = (
+        current_session["close"]
+        if current_session
+        else datetime.combine(trade_day, time(16, 0), tzinfo=ET)
+    )
 
     previous_rth = [
         b for b, dt in dated
-        if previous_day is not None and dt.date() == previous_day and _is_rth(dt)
+        if previous_open is not None and previous_close is not None
+        and _within(dt, previous_open, previous_close)
     ]
+    premarket_start = datetime.combine(trade_day, time(4, 0), tzinfo=ET)
+    premarket_end = datetime.combine(trade_day, time(9, 30), tzinfo=ET)
     premarket = [
         b for b, dt in dated
-        if dt.date() == trade_day and _is_premarket(dt)
+        if _within(dt, premarket_start, premarket_end)
     ]
     current_to_entry = [
         b for b, dt in dated
         if (
-            dt.date() == trade_day
-            and time(9, 30) <= dt.time() < time(16, 0)
+            current_open <= dt < min(current_close, entry_dt)
             and dt + timedelta(minutes=1) < entry_dt
         )
     ]
@@ -329,6 +431,40 @@ def analyze_context(
     pdl = min((float(b["l"]) for b in previous_rth), default=None)
     pmh = max((float(b["h"]) for b in premarket), default=None)
     pml = min((float(b["l"]) for b in premarket), default=None)
+
+    pd_status = _level_status(underlying_feed, calendar_verified, previous_close)
+    pm_status = _level_status(underlying_feed, calendar_verified, premarket_end)
+    level_meta = {
+        "PDH": {
+            "status": pd_status,
+            "feed": underlying_feed,
+            "session_date": previous_day.isoformat() if previous_day else None,
+            "session_start_et": previous_open.isoformat() if previous_open else None,
+            "session_end_et": previous_close.isoformat() if previous_close else None,
+        },
+        "PDL": {
+            "status": pd_status,
+            "feed": underlying_feed,
+            "session_date": previous_day.isoformat() if previous_day else None,
+            "session_start_et": previous_open.isoformat() if previous_open else None,
+            "session_end_et": previous_close.isoformat() if previous_close else None,
+        },
+        "PMH": {
+            "status": pm_status,
+            "feed": underlying_feed,
+            "session_date": trade_day.isoformat(),
+            "session_start_et": premarket_start.isoformat(),
+            "session_end_et": premarket_end.isoformat(),
+        },
+        "PML": {
+            "status": pm_status,
+            "feed": underlying_feed,
+            "session_date": trade_day.isoformat(),
+            "session_start_et": premarket_start.isoformat(),
+            "session_end_et": premarket_end.isoformat(),
+        },
+    }
+    verified_level = {name: _status_is_verified(meta["status"]) for name, meta in level_meta.items()}
 
     bars_10m = _aggregate_10m(underlying_bars)
     completed_before_entry = [b for b in bars_10m if b["end"] < entry_dt]
@@ -342,10 +478,10 @@ def analyze_context(
     )
 
     break_times = {
-        "PDH": _first_completed_break(bars_10m, trade_day, entry_dt, pdh, "up"),
-        "PDL": _first_completed_break(bars_10m, trade_day, entry_dt, pdl, "down"),
-        "PMH": _first_completed_break(bars_10m, trade_day, entry_dt, pmh, "up"),
-        "PML": _first_completed_break(bars_10m, trade_day, entry_dt, pml, "down"),
+        "PDH": _first_completed_break(bars_10m, trade_day, entry_dt, pdh, "up") if verified_level["PDH"] else None,
+        "PDL": _first_completed_break(bars_10m, trade_day, entry_dt, pdl, "down") if verified_level["PDL"] else None,
+        "PMH": _first_completed_break(bars_10m, trade_day, entry_dt, pmh, "up") if verified_level["PMH"] else None,
+        "PML": _first_completed_break(bars_10m, trade_day, entry_dt, pml, "down") if verified_level["PML"] else None,
     }
     breaks = {key: value is not None for key, value in break_times.items()}
 
@@ -360,6 +496,8 @@ def analyze_context(
 
     inside_premarket_range = (
         underlying_price is not None
+        and verified_level["PML"]
+        and verified_level["PMH"]
         and pml is not None
         and pmh is not None
         and pml <= underlying_price <= pmh
@@ -425,10 +563,12 @@ def analyze_context(
             f"Underlying was {ema_distance_pct:.2f}% from the last completed 10-minute 8 EMA at entry.",
         )
 
-    if not directional_breaks:
+    directional_level_names = ("PDH", "PMH") if direction == "bullish" else ("PDL", "PML")
+    can_evaluate_directional_levels = any(verified_level[name] for name in directional_level_names)
+    if can_evaluate_directional_levels and not directional_breaks:
         add_rule_tag(
             "mistake", "No Level Break",
-            "No directional PDH/PMH or PDL/PML completed 10-minute close was confirmed before entry.",
+            "No verified directional PDH/PMH or PDL/PML completed 10-minute close was confirmed before entry.",
         )
 
     if inside_premarket_range:
@@ -442,10 +582,22 @@ def analyze_context(
         add_rule_tag("outcome", "Break-Even", "Realized net P&L was approximately flat.")
 
     data_warnings = []
+    if not calendar_verified:
+        data_warnings.append(
+            "Official market-calendar verification was unavailable; level-dependent auto-tags are disabled unless provenance is verified."
+        )
     if previous_day is None or pdh is None or pdl is None:
         data_warnings.append("Previous regular-session high/low could not be established.")
+    elif not (verified_level["PDH"] and verified_level["PDL"]):
+        data_warnings.append(
+            f"PDH/PDL are {pd_status}; they are not eligible for automatic LE level classification."
+        )
     if pmh is None or pml is None:
         data_warnings.append("Premarket high/low could not be established.")
+    elif not (verified_level["PMH"] and verified_level["PML"]):
+        data_warnings.append(
+            f"PMH/PML are {pm_status}; they are not eligible for automatic LE level classification."
+        )
     if underlying_price is None:
         data_warnings.append("No underlying 1-minute bar was available at or before the entry time.")
     if ema8 is None:
@@ -471,6 +623,13 @@ def analyze_context(
         "session_window": _session_window(entry_dt),
         "previous_rth_date": previous_day.isoformat() if previous_day else None,
         "levels": {"PDH": pdh, "PDL": pdl, "PMH": pmh, "PML": pml},
+        "level_meta": level_meta,
+        "market_calendar_verified": calendar_verified,
+        "current_session": {
+            "date": current_session["date"].isoformat() if current_session else trade_day.isoformat(),
+            "open_et": current_open.isoformat(),
+            "close_et": current_close.isoformat(),
+        },
         "level_breaks_before_entry": breaks,
         "level_break_times_et": {
             key: value.isoformat() if value else None for key, value in break_times.items()
