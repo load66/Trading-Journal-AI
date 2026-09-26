@@ -262,14 +262,17 @@ def _ticker_ranking(trades):
     for ticker, rows in groups.items():
         s = _stats(rows)
         pnl = s["total_pnl"]
-        if pnl > 0 and s["win_rate"] >= 55:
+        if pnl > 0 and s["win_rate"] >= 55 and s["trade_count"] >= 5:
             label = "EDGE"
         elif pnl > 0:
             label = "MARGINAL"
         else:
             share = abs(pnl) / loss_total
             label = "HEMORRHAGE" if share >= .25 else "BLEEDING" if share >= .10 else "LEAK"
-        out.append({"ticker": ticker, **s, "dollars_per_trade": s["avg_pnl"], "label": label})
+        out.append({
+            "ticker": ticker, **s, "dollars_per_trade": s["avg_pnl"], "label": label,
+            "sample_quality": "established" if s["trade_count"] >= 5 else "thin",
+        })
     return sorted(out, key=lambda x: x["total_pnl"], reverse=True)
 
 
@@ -391,10 +394,19 @@ def _behavior_analysis(trades):
     avg_loss = abs(mean(loss_pnls)) if loss_pnls else 0
 
     flaws = []
+    actual_total = sum(t["pnl"] for t in trades)
     def add_flaw(name, rows, evidence=None):
         pnl = sum(r["pnl"] for r in rows)
         if rows and pnl < 0:
-            flaws.append({"name": name, "trade_count": len(rows), "pnl": round(pnl, 2), "dollar_impact": round(-pnl, 2), "evidence": evidence})
+            impact = -pnl
+            flaws.append({
+                "name": name,
+                "trade_count": len(rows),
+                "pnl": round(pnl, 2),
+                "dollar_impact": round(impact, 2),
+                "pnl_if_eliminated": round(actual_total + impact, 2),
+                "evidence": evidence,
+            })
 
     revenge_rows = []
     for key, rows in by_day_ticker_sorted(trades).items():
@@ -568,6 +580,8 @@ def build_performance_report(trades):
             "open_position_count": len(open_positions),
             "timestamp_coverage": round(sum(t.get("hold_sec") is not None for t in rows) / len(rows) * 100, 1) if rows else 0,
             "note": "All source metrics are deterministic from stored trades/executions. AI should interpret these values, not recalculate them.",
+            "ticker_edge_rule": "EDGE requires positive P&L, win rate >=55%, and at least 5 completed trades; positive thinner samples are MARGINAL.",
+            "behavior_counterfactual_note": "P&L-if-eliminated is an independent what-if for each negative cohort. Behavior cohorts can overlap, so impacts must not be summed.",
         },
         "matching": {
             "completed_trades": len(rows),
