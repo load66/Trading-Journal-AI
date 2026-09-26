@@ -80,7 +80,8 @@ app.add_middleware(
 async def authentication_middleware(request, call_next):
     path = request.url.path
     protected = path == "/api" or path.startswith("/api/") or path.startswith("/uploads/")
-    if protected and auth_required():
+    is_cors_preflight = request.method == "OPTIONS"
+    if protected and auth_required() and not is_cors_preflight:
         try:
             authorize_header(request.headers.get("Authorization"))
         except AuthError as exc:
