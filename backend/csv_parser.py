@@ -1026,17 +1026,16 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
 
     # DB-level dedup only — never dedupe within same file (Thinkorswim legitimately
     # emits identical time/price/qty fills for large split orders)
-    existing_fps = get_existing_fingerprints(conn, account_id) if conn else set()
+    existing_fps = get_existing_fingerprints(conn, account_id) if conn else Counter()
     skipped = 0
     unique_executions = []
     for exec_dict in all_executions:
         fp = execution_fingerprint(exec_dict)
-        if fp in existing_fps:
+        if existing_fps.get(fp, 0) > 0:
+            existing_fps[fp] -= 1
             skipped += 1
         else:
-            # Enrich with ticker/date for serialization
-            exec_copy = dict(exec_dict)
-            unique_executions.append(exec_copy)
+            unique_executions.append(dict(exec_dict))
 
     # Merge new fills into existing open OPTION positions from DB.
     # Options use a specific contract key (expiry/strike/type) so the match is unambiguous.
