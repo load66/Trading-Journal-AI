@@ -651,7 +651,7 @@ async def import_csv(
         else:
             _replace_regrouped_trades(conn, account_id, trades)
 
-        for trade in eligible_trades:
+        for trade in trades:
             try:
                 conn.execute("""
                     INSERT INTO trades
@@ -1493,7 +1493,7 @@ def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
         buckets: dict[str, list[dict]] = {}
         labeled_trade_count = 0
 
-        for trade in trades:
+        for trade in eligible_trades:
             group = str(trade.get("trade_group") or "")
             analysis = analysis_by_group.get(group, {})
             if dimension == "setup":
