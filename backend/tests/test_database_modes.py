@@ -8,6 +8,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
 import database  # noqa: E402
+import library as library_module  # noqa: E402
 from config import ConfigError, Settings  # noqa: E402
 
 
@@ -228,3 +229,69 @@ def test_postgres_insert_and_get_id_uses_returning_not_lastval():
         ('Primary',),
     )
     assert not any(sql == 'SELECT lastval()' for sql, _ in fake.calls)
+
+
+class _PostgresSchemaConnection:
+    dialect = 'postgres'
+
+    def __init__(self, schema_ready=True, library_ready=True):
+        self.schema_ready = schema_ready
+        self.library_ready = library_ready
+        self.calls = []
+        self.closed = False
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, params))
+        if 'schema_migrations' in sql:
+            rows = [(1,)] if self.schema_ready else []
+            return _FakeCursor(rows, [('present',)])
+        if 'information_schema.tables' in sql:
+            table = params[-1] if params else None
+            rows = [(1,)] if self.library_ready and table in {'library_items', 'library_aliases'} else []
+            return _FakeCursor(rows, [('present',)])
+        return _FakeCursor()
+
+    def close(self):
+        self.closed = True
+
+
+def test_postgres_schema_verification_rejects_missing_application_version():
+    conn = _PostgresSchemaConnection(schema_ready=False)
+
+    with pytest.raises(RuntimeError, match='Postgres schema is not initialized'):
+        database.verify_postgres_schema(conn)
+
+
+def test_postgres_init_only_verifies_schema_and_never_runs_sqlite_ddl(monkeypatch):
+    conn = _PostgresSchemaConnection(schema_ready=True)
+    monkeypatch.setattr(database, 'get_db', lambda _settings=None: conn)
+
+    database.init_db(settings(
+        DATABASE_MODE='postgres',
+        DATABASE_URL='postgresql://example/session-pooler',
+    ))
+
+    executed = '\n'.join(sql for sql, _ in conn.calls)
+    assert 'schema_migrations' in executed
+    assert 'CREATE TABLE' not in executed
+    assert 'AUTOINCREMENT' not in executed
+    assert 'PRAGMA' not in executed
+    assert "datetime('now')" not in executed
+    assert conn.closed is True
+
+
+def test_library_init_uses_migrated_tables_in_postgres_mode():
+    conn = _PostgresSchemaConnection(schema_ready=True, library_ready=True)
+
+    library_module.init_library_tables(conn)
+
+    checked_tables = [params[-1] for sql, params in conn.calls if 'information_schema.tables' in sql]
+    assert checked_tables == ['library_items', 'library_aliases']
+
+
+def test_runtime_request_sql_has_no_sqlite_only_constructs():
+    source = (BACKEND / 'main.py').read_text()
+
+    assert '.lastrowid' not in source
+    assert 'INSERT OR REPLACE' not in source
+    assert "datetime('now')" not in source
