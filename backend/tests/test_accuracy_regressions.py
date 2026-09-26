@@ -83,3 +83,33 @@ def test_primary_profit_factor_uses_net_pnl(monkeypatch, tmp_path):
 
     # Net PF = 150 / 75 = 2.00. Gross PF would be 170 / 60 = 2.83.
     assert main._net_profit_factor(trades) == 2.0
+
+
+def test_trade_pl_percent_option_uses_100x_multiplier(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    trade = {
+        "side": "LONG",
+        "instrument_type": "OPTION",
+        "net_pnl": 100.0,
+        "executions": [
+            {"action": "BOT", "qty": 2, "price": 2.50},
+            {"action": "SOLD", "qty": 2, "price": 3.00},
+        ],
+    }
+    # $500 entry premium (2 x $2.50 x 100); $100 net profit = 20%.
+    assert main._trade_pl_percent(trade) == 20.0
+
+
+def test_trade_pl_percent_stock_uses_entry_notional(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    trade = {
+        "side": "LONG",
+        "instrument_type": "STOCK",
+        "net_pnl": 50.0,
+        "executions": [
+            {"action": "BOT", "qty": 10, "price": 100.0},
+            {"action": "SOLD", "qty": 10, "price": 105.0},
+        ],
+    }
+    # $1,000 entry notional; $50 net profit = 5%.
+    assert main._trade_pl_percent(trade) == 5.0
