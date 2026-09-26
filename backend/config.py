@@ -37,7 +37,7 @@ class Settings:
     turso_auth_token: str = ''
     storage_mode: str = 'local'
     upload_dir: str = 'uploads'
-    supabase_service_role_key: str = ''
+    supabase_secret_key: str = ''
     supabase_storage_bucket: str = 'diary'
     max_diary_upload_bytes: int = 10 * 1024 * 1024
     max_csv_upload_bytes: int = 20 * 1024 * 1024
@@ -88,7 +88,7 @@ class Settings:
             turso_auth_token=turso_auth_token,
             storage_mode=storage_mode,
             upload_dir=env.get('UPLOAD_DIR', 'uploads').strip() or 'uploads',
-            supabase_service_role_key=env.get('SUPABASE_SERVICE_ROLE_KEY', '').strip(),
+            supabase_secret_key=(env.get('SUPABASE_SECRET_KEY', '') or env.get('SUPABASE_SERVICE_ROLE_KEY', '')).strip(),
             supabase_storage_bucket=env.get('SUPABASE_STORAGE_BUCKET', 'diary').strip() or 'diary',
             max_diary_upload_bytes=_positive_int(
                 env.get('MAX_DIARY_UPLOAD_BYTES', str(10 * 1024 * 1024)),
