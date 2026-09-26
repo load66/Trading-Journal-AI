@@ -1,10 +1,29 @@
-import axios from 'axios';
+import axios from 'axios';\nimport { AUTH_ENABLED, clearSession, getAccessToken } from './auth';
 
 // Defaults to the local backend. REACT_APP_API_URL can point the frontend at
 // another origin (a second instance, a container, a LAN machine).
 export const API_BASE = (process.env.REACT_APP_API_URL ?? 'http://localhost:8010').replace(/\/+$/, '');
 
 const api = axios.create({ baseURL: API_BASE });
+
+api.interceptors.request.use(async (config) => {
+  const token = await getAccessToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (AUTH_ENABLED && error?.response?.status === 401) {
+      clearSession();
+    }
+    return Promise.reject(error);
+  },
+);
 
 export const accountsApi = {
   list: () => api.get('/api/accounts'),
