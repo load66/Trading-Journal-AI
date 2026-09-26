@@ -13,6 +13,7 @@ from csv_parser import (
     execution_fingerprint,
     get_existing_fingerprints,
     parse_broker_csv,
+    parse_schwab_transactions_csv,
 )
 
 QCOM_CSV = """index,Date, Type, Description, Ref Num, Misc Fees, Commissions, Amount, Balance
@@ -59,6 +60,25 @@ def test_qcom_trim_sequence_and_runner_are_preserved():
     assert execs[-1]["price"] == 2.11
     assert execs[-1]["source_ref"] == "1008066079460"
     assert execs[-1]["timestamp_precision"] == "minute"
+    assert all(e["source_timezone"] == "America/Chicago" for e in execs)
+    assert all(e["source_broker"] == "schwab_transactions" for e in execs)
+    assert execs[0]["timestamp_utc"] == "2026-09-25T14:47:00Z"
+    assert execs[-1]["timestamp_utc"] == "2026-09-25T15:11:00Z"
+
+
+def test_schwab_second_precision_is_preserved_when_available():
+    content = QCOM_CSV.replace(
+        "9/25/26 10:11 AM,TRD,SOLD -1 QCOM",
+        "9/25/26 10:11:22 AM,TRD,SOLD -1 QCOM",
+        1,
+    )
+    trades, skipped = parse_schwab_transactions_csv(content, account_id=1, conn=None)
+    assert skipped == 0
+    execs = json.loads(trades[0]["executions"])
+    runner = execs[-1]
+    assert runner["time"] == "10:11:22"
+    assert runner["timestamp_precision"] == "second"
+    assert runner["timestamp_utc"] == "2026-09-25T15:11:22Z"
 
 
 def test_execution_identity_matches_minute_and_second_exports_for_same_contract():
@@ -171,6 +191,11 @@ def test_authoritative_reconcile_rebuilds_imported_trade_without_duplicates(monk
         payload = response.json()
         assert payload["reconcile"] is True
         assert payload["reconciled"] == 1
+        assert payload["broker_detected"] == "schwab_transactions"
+        assert payload["execution_integrity"]["verified"] is True
+        assert payload["execution_integrity"]["execution_count"] == 10
+        assert payload["execution_integrity"]["canonical_timestamp_count"] == 10
+        assert payload["execution_integrity"]["source_timezones"] == ["America/Chicago"]
 
         rows = conn.execute(
             "SELECT ticker, net_pnl, executions FROM trades WHERE account_id=1 AND ticker='QCOM'"
