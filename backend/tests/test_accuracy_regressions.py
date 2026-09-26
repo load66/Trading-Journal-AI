@@ -182,6 +182,76 @@ def test_kpis_strategy_breakdown_respects_date_range(monkeypatch, tmp_path):
         conn.close()
 
 
+def test_kpis_average_r_uses_recorded_r_and_respects_date_range(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("R Test", "day_trading", "schwab"),
+        )
+        trades = [
+            ("old-r", "2026-08-20", 25.0, -1.0),
+            ("new-r", "2026-09-20", 100.0, 0.75),
+            ("new-no-r", "2026-09-21", -20.0, None),
+        ]
+        for group, date, pnl, r_multiple in trades:
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, group, date, "SPY", "OPTION", "LONG",
+                    pnl, pnl, 0.0, "[]", "imported",
+                ),
+            )
+            if r_multiple is not None:
+                conn.execute(
+                    """INSERT INTO trade_analysis
+                       (trade_group, ticker, date, r_multiple)
+                       VALUES (?,?,?,?)""",
+                    (group, "SPY", date, r_multiple),
+                )
+        conn.commit()
+
+        result = main.get_kpis(
+            account_id=account_id,
+            date_from="2026-09-01",
+            date_to="2026-09-30",
+            conn=conn,
+        )
+
+        assert result["total_trades"] == 2
+        assert result["avg_r"] == 0.75
+        assert result["r_sample_count"] == 1
+    finally:
+        conn.close()
+
+
+def test_goals_merge_new_skill_baselines_into_older_saved_payload(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        conn.execute(
+            "INSERT INTO settings (account_id, key, value) VALUES (0, 'goals', ?)",
+            ('{"win_rate": 70.0, "profit_factor": 1.8}',),
+        )
+        conn.commit()
+
+        result = main.get_goals(account_id=None, conn=conn)
+
+        assert result["win_rate"] == 70.0
+        assert result["profit_factor"] == 1.8
+        assert result["avg_r"] == 0.5
+        assert result["loss_containment"] == 2.0
+    finally:
+        conn.close()
+
+
 def test_recent_closed_trades_sort_by_broker_exit_time(monkeypatch, tmp_path):
     main = fresh_main(monkeypatch, tmp_path)
     main.init_db()
