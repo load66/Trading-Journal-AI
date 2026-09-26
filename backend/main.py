@@ -804,6 +804,91 @@ def _avg_trade_pl_percent(trades: list[dict]) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
 
 
+def _trade_entry_minutes(trade: dict) -> int | None:
+    """Return broker-local entry clock time in minutes after midnight.
+
+    Schwab/TOS executions preserve the original broker-local time and are
+    canonicalized at import. For the dashboard's time-of-day edge we use that
+    broker-local clock directly so the result matches the trader's CT session
+    instead of server/import time.
+    """
+    raw = trade.get("executions") or []
+    if isinstance(raw, str):
+        try:
+            execs = json.loads(raw)
+        except Exception:
+            return None
+    else:
+        execs = raw if isinstance(raw, list) else []
+
+    side = str(trade.get("side") or "LONG").upper()
+    entry_action = "BOT" if side == "LONG" else "SOLD"
+    entries = [e for e in execs if str(e.get("action") or "").upper() == entry_action]
+    if not entries:
+        return None
+
+    def parse_minutes(value):
+        raw_time = str(value or "").strip()
+        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
+            try:
+                dt = datetime.strptime(raw_time, fmt)
+                return dt.hour * 60 + dt.minute
+            except ValueError:
+                continue
+        return None
+
+    values = [parse_minutes(e.get("time")) for e in entries]
+    values = [v for v in values if v is not None]
+    return min(values) if values else None
+
+
+def _format_half_hour_bucket(start_minute: int) -> str:
+    end_minute = start_minute + 30
+
+    def clock(total):
+        hour = (total // 60) % 24
+        minute = total % 60
+        suffix = "AM" if hour < 12 else "PM"
+        display_hour = hour % 12 or 12
+        return f"{display_hour}:{minute:02d} {suffix}"
+
+    return f"{clock(start_minute)}–{clock(end_minute)}"
+
+
+def _time_of_day_kpis(trades: list[dict]) -> list[dict]:
+    """Performance grouped by the trade's first entry execution, 30-min CT buckets."""
+    buckets: dict[int, list[dict]] = {}
+    for trade in trades:
+        if trade.get("net_pnl") is None:
+            continue
+        entry_minute = _trade_entry_minutes(trade)
+        if entry_minute is None:
+            continue
+        bucket = (entry_minute // 30) * 30
+        buckets.setdefault(bucket, []).append(trade)
+
+    result = []
+    for start in sorted(buckets):
+        rows = buckets[start]
+        pnls = [float(t.get("net_pnl") or 0) for t in rows]
+        wins = sum(1 for pnl in pnls if pnl > 0)
+        pl_values = [
+            value for value in (_trade_pl_percent(t) for t in rows)
+            if value is not None
+        ]
+        result.append({
+            "start_minute": start,
+            "label": _format_half_hour_bucket(start),
+            "count": len(rows),
+            "wins": wins,
+            "win_rate": round(wins / len(rows) * 100, 1) if rows else 0,
+            "net_pnl": round(sum(pnls), 2),
+            "expectancy": round(sum(pnls) / len(rows), 2) if rows else 0,
+            "avg_pl_pct": round(sum(pl_values) / len(pl_values), 2) if pl_values else None,
+        })
+    return result
+
+
 def _trade_closed_at_key(trade: dict) -> tuple[str, str, int]:
     """Deterministic broker-execution close key for recent-trade ordering.
 
@@ -1485,6 +1570,8 @@ def get_kpis(
         "expectancy": expectancy,
         "avg_pl_pct": avg_pl_pct,
         "max_drawdown": round(max_drawdown, 2),
+        "by_entry_time": _time_of_day_kpis(trades),
+        "entry_time_timezone": "CT",
         **_excursion_kpis(conn, account_id, date_from, date_to),
     }
 
