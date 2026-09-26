@@ -79,6 +79,7 @@ export function Grade({ grade, reason }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   if (!grade || grade === '-') return <span className="v3-flat">&mdash;</span>;
+  if (grade === 'N/A') return <span className="v3-flat" title={reason || 'Insufficient process evidence'}>N/A</span>;
   const cls = /^A/.test(grade) ? 'v3-g-a' : grade === 'F' ? 'v3-g-f' : 'v3-g-b';
   return (
     <span
