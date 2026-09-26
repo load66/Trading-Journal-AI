@@ -2,8 +2,10 @@ import re
 import json
 import csv
 import io
+import os
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 
 MONTH_MAP = {
@@ -17,6 +19,64 @@ FUTURES_MULTIPLIERS = {
     '/ES': 50, '/MES': 5, '/NQ': 20, '/MNQ': 2,
     '/YM': 5, '/MYM': 0.5, '/RTY': 50, '/M2K': 5,
 }
+
+
+DEFAULT_EXECUTION_TIMEZONE = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
+
+
+def _time_precision(value: str) -> str:
+    raw = str(value or "").strip().upper()
+    if re.search(r'\d{1,2}:\d{2}:\d{2}', raw):
+        return "second"
+    return "minute"
+
+
+def _parse_clock_time(value: str):
+    raw = str(value or "").strip()
+    for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def canonical_execution_timestamp(
+    iso_date: str,
+    time_value: str,
+    source_timezone: str = DEFAULT_EXECUTION_TIMEZONE,
+) -> str | None:
+    """Convert a broker-local execution clock time into an immutable UTC instant.
+
+    Thinkorswim/Schwab exports are interpreted using the configured IANA zone
+    (America/Chicago by default). The original date/time strings are preserved
+    separately; this value exists so downstream charts never have to guess.
+    """
+    try:
+        day = datetime.strptime(str(iso_date), "%Y-%m-%d").date()
+        clock = _parse_clock_time(time_value)
+        if clock is None:
+            return None
+        local_dt = datetime.combine(day, clock, tzinfo=ZoneInfo(source_timezone))
+        return local_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    except (ValueError, TypeError, ZoneInfo.KeyError):
+        return None
+
+
+def attach_execution_timestamp(
+    execution: dict,
+    source_broker: str,
+    source_timezone: str = DEFAULT_EXECUTION_TIMEZONE,
+) -> dict:
+    """Attach canonical timestamp + provenance without changing broker-local fields."""
+    item = dict(execution)
+    iso_date = item.get("iso_date") or normalize_date(str(item.get("date") or ""))
+    time_value = str(item.get("time") or "").strip()
+    item["source_broker"] = source_broker
+    item["source_timezone"] = source_timezone
+    item["timestamp_precision"] = item.get("timestamp_precision") or _time_precision(time_value)
+    item["timestamp_utc"] = canonical_execution_timestamp(iso_date, time_value, source_timezone)
+    return item
 
 
 def normalize_date(date_str: str) -> str:
@@ -373,7 +433,7 @@ def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
         if action == 'BOT':
             amount = -amount
 
-        executions.append({
+        executions.append(attach_execution_timestamp({
             'action': action,
             'qty': qty,
             'ticker': symbol,
@@ -387,7 +447,7 @@ def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
             'time': time_part,
             'amount': round(amount, 2),
             'commission': 0.0,
-        })
+        }, "thinkorswim"))
 
     return executions
 
@@ -442,6 +502,12 @@ def aggregate_executions(fills: list[dict]) -> dict:
             item['source_row'] = int(f.get('source_row'))
         if f.get('timestamp_precision'):
             item['timestamp_precision'] = f.get('timestamp_precision')
+        if f.get('timestamp_utc'):
+            item['timestamp_utc'] = f.get('timestamp_utc')
+        if f.get('source_timezone'):
+            item['source_timezone'] = f.get('source_timezone')
+        if f.get('source_broker'):
+            item['source_broker'] = f.get('source_broker')
         execs.append(item)
 
     return {
@@ -519,7 +585,7 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
             'commission': total_commission,
             'raw_description': desc,
         })
-        executions.append(parsed)
+        executions.append(attach_execution_timestamp(parsed, "thinkorswim"))
 
     return executions
 
@@ -570,9 +636,16 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
 
         dt_text = cell(row, 'DATE')
         parsed_dt = None
-        for fmt in ('%m/%d/%y %I:%M %p', '%m/%d/%Y %I:%M %p'):
+        timestamp_precision = "minute"
+        for fmt, precision in (
+            ('%m/%d/%y %I:%M:%S %p', 'second'),
+            ('%m/%d/%Y %I:%M:%S %p', 'second'),
+            ('%m/%d/%y %I:%M %p', 'minute'),
+            ('%m/%d/%Y %I:%M %p', 'minute'),
+        ):
             try:
                 parsed_dt = datetime.strptime(dt_text, fmt)
+                timestamp_precision = precision
                 break
             except ValueError:
                 pass
@@ -594,15 +667,15 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
         parsed.update({
             'date': f"{parsed_dt.month}/{parsed_dt.day}/{str(parsed_dt.year)[2:]}",
             'iso_date': parsed_dt.strftime('%Y-%m-%d'),
-            'time': parsed_dt.strftime('%H:%M:00'),
+            'time': parsed_dt.strftime('%H:%M:%S'),
             'amount': amount,
             'commission': abs(misc_fees) + abs(commissions),
             'raw_description': desc,
             'source_ref': source_ref,
             'source_row': line_no,
-            'timestamp_precision': 'minute',
+            'timestamp_precision': timestamp_precision,
         })
-        executions.append(parsed)
+        executions.append(attach_execution_timestamp(parsed, "schwab_transactions"))
 
     if problems:
         more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ''
@@ -612,6 +685,12 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
         )
     if not executions:
         raise ValueError("The Schwab transaction-history CSV contains no trade rows.")
+
+    missing_ts = [ex for ex in executions if not ex.get("timestamp_utc")]
+    if missing_ts:
+        raise ValueError(
+            "Schwab execution timestamp could not be normalized; nothing was imported."
+        )
 
     return build_trades_from_executions(executions, account_id, conn)
 
@@ -670,7 +749,7 @@ def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
             'commission': total_commission,
             'raw_description': desc,
         })
-        executions.append(parsed)
+        executions.append(attach_execution_timestamp(parsed, "thinkorswim"))
 
     return executions
 
@@ -918,6 +997,12 @@ def _rebuild_fill_from_db_exec(e: dict, trade_meta: dict) -> dict:
         'time': e.get('time', ''),
         'amount': round(amount, 2),
         'commission': e.get('commission', 0.0),
+        'source_ref': e.get('source_ref'),
+        'source_row': e.get('source_row'),
+        'timestamp_precision': e.get('timestamp_precision'),
+        'timestamp_utc': e.get('timestamp_utc'),
+        'source_timezone': e.get('source_timezone'),
+        'source_broker': e.get('source_broker'),
     }
 
 
@@ -1030,6 +1115,20 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
             if cb_qty_map.get(k, 0) >= ex.get('qty', 0):
                 continue  # CB partial fills already cover this aggregated TH fill
             all_executions.append(ex)
+
+    # Accuracy invariant: every Thinkorswim execution must have an immutable
+    # canonical timestamp before it can enter the journal. Never silently import
+    # a fill whose clock time could not be interpreted.
+    missing_ts = [
+        ex for ex in all_executions
+        if not ex.get("timestamp_utc")
+    ]
+    if missing_ts:
+        sample = missing_ts[0]
+        raise ValueError(
+            "Thinkorswim execution timestamp could not be normalized; nothing was imported. "
+            f"Example: {sample.get('iso_date') or sample.get('date')} {sample.get('time')}"
+        )
 
     return build_trades_from_executions(all_executions, account_id, conn)
 
