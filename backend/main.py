@@ -963,6 +963,18 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     }
 
 
+def _net_profit_factor(trades):
+    """Profit factor on realized after-commission P&L.
+
+    The journal's primary performance metrics are net metrics. Gross profit
+    factor may still be exposed separately, but must never be labeled simply
+    "Profit Factor" because that makes fees disappear from the risk picture.
+    """
+    win_pnl = sum((t.get("net_pnl") or 0) for t in trades if (t.get("net_pnl") or 0) > 0)
+    loss_pnl = abs(sum((t.get("net_pnl") or 0) for t in trades if (t.get("net_pnl") or 0) < 0))
+    return round(win_pnl / loss_pnl, 2) if loss_pnl else None
+
+
 @app.get("/api/kpis")
 def get_kpis(
     account_id: int | None = Query(None),
@@ -998,9 +1010,10 @@ def get_kpis(
     avg_win = round(sum(t['net_pnl'] for t in winners) / len(winners), 2) if winners else 0
     avg_loss = round(sum(t['net_pnl'] for t in losers) / len(losers), 2) if losers else 0
 
+    profit_factor = _net_profit_factor(trades)
     gross_wins = sum(t.get('gross_pnl') or 0 for t in winners)
     gross_losses = abs(sum(t.get('gross_pnl') or 0 for t in losers))
-    profit_factor = round(gross_wins / gross_losses, 2) if gross_losses else None
+    gross_profit_factor = round(gross_wins / gross_losses, 2) if gross_losses else None
 
     # Expectancy = win_rate * avg_win + loss_rate * avg_loss (avg_loss is negative)
     if total_trades > 0:
@@ -1103,6 +1116,7 @@ def get_kpis(
         "avg_win": avg_win,
         "avg_loss": avg_loss,
         "profit_factor": profit_factor,
+        "gross_profit_factor": gross_profit_factor,
         "trading_days": trading_days,
         "positive_days": positive_days,
         "day_win_rate": day_win_rate,
@@ -1328,8 +1342,11 @@ async def _fetch_alpaca_bars(client, url, base_params, headers, max_bars=5000):
             params["page_token"] = page_token
         resp = await client.get(url, params=params, headers=headers)
         resp.raise_for_status()
-        data = resp.json()
-        bars.extend(data.get("bars", []))
+        data = resp.json() or {}
+        page_bars = data.get("bars") or []
+        if not isinstance(page_bars, list):
+            raise ValueError("Alpaca returned an invalid bars payload.")
+        bars.extend(page_bars)
         page_token = data.get("next_page_token")
         if not page_token or len(bars) >= max_bars:
             break
@@ -1536,9 +1553,9 @@ def get_yearly_kpis(
         net_pnl       = sum(t["net_pnl"] for t in trades)
         avg_win        = sum(t["net_pnl"] for t in winners) / len(winners) if winners else 0
         avg_loss       = sum(t["net_pnl"] for t in losers)  / len(losers)  if losers  else 0
-        gross_wins     = sum(t["gross_pnl"] for t in winners)
-        gross_losses   = abs(sum(t["gross_pnl"] for t in losers))
-        profit_factor  = gross_wins / gross_losses if gross_losses else None
+        net_wins       = sum(t["net_pnl"] for t in winners)
+        net_losses      = abs(sum(t["net_pnl"] for t in losers))
+        profit_factor  = net_wins / net_losses if net_losses else None
         win_rate       = len(winners) / total * 100 if total else 0
         trading_days   = len(set(t["date"] for t in trades))
         positive_days  = len({t["date"] for t in trades if t["net_pnl"] > 0})
