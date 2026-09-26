@@ -1544,8 +1544,7 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   font-variant-numeric: tabular-nums;
 }
 .v3-capture-split {
-  display: grid;
-  grid-template-columns: var(--capture, 64%) 1fr;
+  display: flex;
   min-height: 34px;
   overflow: hidden;
   border: 1px solid var(--divider);
@@ -1562,6 +1561,8 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   white-space: nowrap;
 }
 .v3-capture-split .left {
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 8px 10px;
   color: var(--text-secondary);
   font-size: 9.5px;
