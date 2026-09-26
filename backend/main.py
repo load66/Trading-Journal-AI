@@ -16,8 +16,6 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from config import Settings
-from auth import install_auth_middleware
-
 import httpx
 
 from database import init_db, get_db, row_to_dict
