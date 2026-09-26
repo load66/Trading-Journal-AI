@@ -336,3 +336,130 @@ def test_current_fingerprint_respects_ticker_and_instrument_filters(tmp_path):
 
     assert actual == expected
     conn.close()
+
+
+def _fresh_main_for_api(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_MODE", "sqlite")
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "api-journal.db"))
+    monkeypatch.setenv("STORAGE_MODE", "local")
+    monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setenv("AUTH_REQUIRED", "false")
+    for name in (
+        "auth", "config", "database", "smoking_gun_library",
+        "smoking_gun_routes", "main",
+    ):
+        sys.modules.pop(name, None)
+    import main
+    return main
+
+
+def _seed_api_source(main):
+    import smoking_gun_library as library
+
+    conn = main.get_db()
+    conn.execute(
+        "INSERT INTO accounts (id, name, type) VALUES (?, ?, ?)",
+        (1, "Primary", "day_trading"),
+    )
+    source = _source_trade("a", 100)
+    _insert_source_trade(conn, source)
+    fingerprint = library.build_source_fingerprint(
+        [source], 1, "2026-09-01", "2026-09-30", {"tickers": ["SPY"]}
+    )
+    conn.close()
+    return source, fingerprint
+
+
+def _api_payload(fingerprint):
+    return {
+        "account_id": 1,
+        "title": "September Smoking Gun",
+        "date_from": "2026-09-01",
+        "date_to": "2026-09-30",
+        "report_version": "1",
+        "analytics_engine_version": "2026.09.26.1",
+        "behavior_version": "2026.09.26.1",
+        "analysis_provider": "openai",
+        "analysis_model": "gpt-test",
+        "data_fingerprint": fingerprint,
+        "filters": {"tickers": ["SPY"]},
+        "source_metrics": {
+            "meta": {"trade_count": 1},
+            "scoreboard": {"gross_pnl": 100.0, "net_pnl": 100.0},
+            "trade_ledger": [],
+        },
+        "diagnosis": {"headline": "Patience is the edge."},
+        "action_plan": [{"priority": 1, "rule": "No averaging down"}],
+        "primary_edge": "Patience",
+        "primary_leak": "Averaging down",
+    }
+
+
+def test_saved_report_api_create_list_detail_duplicate_and_delete(monkeypatch, tmp_path):
+    main = _fresh_main_for_api(monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+
+    with TestClient(main.app) as client:
+        _, fingerprint = _seed_api_source(main)
+        payload = _api_payload(fingerprint)
+
+        created = client.post("/api/smoking-gun-reports", json=payload)
+        assert created.status_code == 201
+        report_id = created.json()["id"]
+        assert created.json()["duplicate"] is False
+
+        duplicate = client.post("/api/smoking-gun-reports", json=payload)
+        assert duplicate.status_code == 200
+        assert duplicate.json()["id"] == report_id
+        assert duplicate.json()["duplicate"] is True
+
+        listing = client.get("/api/smoking-gun-reports", params={"account_id": 1})
+        assert listing.status_code == 200
+        assert len(listing.json()) == 1
+        assert "source_metrics" not in listing.json()[0]
+        assert listing.json()[0]["is_stale"] is False
+
+        detail = client.get(f"/api/smoking-gun-reports/{report_id}")
+        assert detail.status_code == 200
+        assert detail.json()["source_metrics"]["scoreboard"]["net_pnl"] == 100.0
+        assert detail.json()["diagnosis"]["headline"] == "Patience is the edge."
+
+        deleted = client.delete(f"/api/smoking-gun-reports/{report_id}")
+        assert deleted.status_code == 204
+        assert client.get(f"/api/smoking-gun-reports/{report_id}").status_code == 404
+
+
+def test_saved_report_api_rejects_stale_fingerprint(monkeypatch, tmp_path):
+    main = _fresh_main_for_api(monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+
+    with TestClient(main.app) as client:
+        _seed_api_source(main)
+        payload = _api_payload("0" * 64)
+        response = client.post("/api/smoking-gun-reports", json=payload)
+
+    assert response.status_code == 409
+    assert "fingerprint" in response.json()["detail"].lower()
+
+
+def test_saved_report_api_rejects_empty_source_population(monkeypatch, tmp_path):
+    main = _fresh_main_for_api(monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+    import smoking_gun_library as library
+
+    with TestClient(main.app) as client:
+        conn = main.get_db()
+        conn.execute(
+            "INSERT INTO accounts (id, name, type) VALUES (?, ?, ?)",
+            (1, "Primary", "day_trading"),
+        )
+        conn.commit()
+        conn.close()
+        empty_fp = library.build_source_fingerprint(
+            [], 1, "2026-09-01", "2026-09-30", {}
+        )
+        payload = _api_payload(empty_fp)
+        payload["filters"] = {}
+        response = client.post("/api/smoking-gun-reports", json=payload)
+
+    assert response.status_code == 400
