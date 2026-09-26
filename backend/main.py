@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 import httpx
 
-from database import init_db, get_db, row_to_dict\nfrom runtime_config import load_runtime_config
+from database import init_db, get_db, row_to_dict\nfrom runtime_config import load_runtime_config\nfrom auth import SingleUserAuthMiddleware
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
@@ -96,9 +96,16 @@ async def not_found_handler(request, exc):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
+    config = load_runtime_config()
+    if config.is_production:
+        logger.exception("Unhandled API error", exc_info=exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error"},
+        )
     return JSONResponse(
         status_code=500,
-        content={"error": str(exc), "type": type(exc).__name__}
+        content={"error": str(exc), "type": type(exc).__name__},
     )
 
 
