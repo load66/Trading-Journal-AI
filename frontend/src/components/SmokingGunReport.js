@@ -37,10 +37,10 @@ function StatsRow({ data }) {
         ['Timestamp coverage', `${data?.meta?.timestamp_coverage ?? 0}%`, ''],
         ['Net P&L', signed$(total), tone(total)],
         ['Open positions', data?.meta?.open_position_count ?? 0, ''],
-        ['Disciplined cohort', signed$(d?.total_pnl), tone(d?.total_pnl)],
-        ['Destructive cohort', signed$(x?.total_pnl), tone(x?.total_pnl)],
-        ['Disciplined trades', d?.trade_count ?? 0, ''],
-        ['Destructive trades', x?.trade_count ?? 0, ''],
+        ['Rule-aligned cohort', signed$(d?.total_pnl), tone(d?.total_pnl)],
+        ['Comparison cohort', signed$(x?.total_pnl), tone(x?.total_pnl)],
+        ['Rule-aligned trades', d?.trade_count ?? 0, ''],
+        ['Comparison trades', x?.trade_count ?? 0, ''],
       ].map(([label, value, cls]) => (
         <div key={label} className="card" style={{ padding: 14, minHeight: 86 }}>
           <div className="text-muted" style={{ fontSize: 11.5 }}>{label}</div>
@@ -271,7 +271,7 @@ function BehaviorEvidence({ behavior, time }) {
           ['First-3 avg size', tilt.first3_avg_size == null ? 'Insufficient evidence' : `${tilt.first3_avg_size}× typical`],
           ['Post-loss avg size', tilt.post_threshold_avg_size == null ? 'Insufficient evidence' : `${tilt.post_threshold_avg_size}× typical`],
           ['Post-loss-threshold P&L', signed$(tilt.post_threshold_pnl)],
-          ['Averaging-down P&L', signed$(avgd.averaged_down?.total_pnl)],
+          ['Averaging-down cohort P&L', signed$(avgd.averaged_down?.total_pnl)],
           ['Clean-entry P&L', signed$(avgd.clean_entries?.total_pnl)],
           ['Average winner', signed$(asym.avg_win)],
           ['Average loser', fmt$(-Math.abs(asym.avg_loss || 0))],
@@ -325,13 +325,13 @@ function Diagnosis({ diagnosis }) {
       </div>
       <div className="grid-2">
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontWeight: 650, marginBottom: 8 }}>Where the edge lives</div>
+          <div style={{ fontWeight: 650, marginBottom: 8 }}>Positive observed cohorts</div>
           <ul className="v3-list">
             {(diagnosis.edge?.where_it_lives || []).map((x, i) => <li key={i} className="good">{x}</li>)}
           </ul>
         </div>
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontWeight: 650, marginBottom: 8 }}>Where it dies</div>
+          <div style={{ fontWeight: 650, marginBottom: 8 }}>Negative observed cohorts / risks</div>
           <ul className="v3-list">
             {(diagnosis.edge?.where_it_dies || []).map((x, i) => <li key={i} className="bad">{x}</li>)}
           </ul>
@@ -438,11 +438,11 @@ function LiveSmokingGunReport({ accountId, dateFrom, dateTo }) {
           <StopTable model={data.daily_stop_model} />
           <div style={{ marginTop: 16 }}><StopBreaches model={data.daily_stop_model} /></div>
         </Card>
-        <Card title="4. Two traders" sub="5+ minute normal-size cohort versus everything outside that discipline definition.">
+        <Card title="4. Behavioral cohort split" sub="Mechanical trade cohorts only; these labels do not describe trader character or prove causation.">
           <div style={{ display: 'grid', gap: 12 }}>
             {[
-              ['Disciplined', data.two_traders?.disciplined],
-              ['Destructive', data.two_traders?.destructive],
+              ['Rule-aligned cohort', data.two_traders?.disciplined],
+              ['Comparison cohort', data.two_traders?.destructive],
             ].map(([label, r]) => (
               <div key={label} style={{ padding: 14, background: 'var(--surface-inset)', borderRadius: 6 }}>
                 <div className="text-muted" style={{ fontSize: 11.5 }}>{label}</div>
