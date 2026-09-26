@@ -39,7 +39,7 @@ from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
 from excursion_analysis import calculate_trade_excursion
 from library import router as library_router, init_library_tables, apply_aliases, library_names
-from le_analysis import build_le_review
+from le_analysis import build_le_levels, build_le_review
 
 load_dotenv()
 
@@ -899,6 +899,28 @@ async def get_trade_le_review(
         trade["executions"] = []
 
     return await build_le_review(trade)
+
+
+@app.get("/api/trades/{trade_group:path}/le-levels")
+async def get_trade_le_levels(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Deterministic LE reference levels for chart overlays; never invokes Groq."""
+    row = conn.execute(
+        "SELECT * FROM trades WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    trade = row_to_dict(row)
+    try:
+        trade["executions"] = json.loads(trade.get("executions") or "[]")
+    except Exception:
+        trade["executions"] = []
+
+    return await build_le_levels(trade)
 
 
 class AnalysisUpdate(BaseModel):

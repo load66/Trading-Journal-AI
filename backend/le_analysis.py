@@ -766,6 +766,67 @@ async def _groq_classify(context: dict) -> dict:
     }
 
 
+async def build_le_levels(trade: dict) -> dict:
+    """Return deterministic PDH/PDL/PMH/PML for chart overlays without invoking Groq."""
+    when = entry_datetime(trade)
+    if when is None:
+        return {
+            "ruleset_version": LE_RULESET_VERSION,
+            "available": False,
+            "reason": "Exact entry timestamp is missing.",
+            "levels": {},
+            "feed": None,
+            "warnings": ["Entry timestamp unavailable; LE levels cannot be established."],
+        }
+
+    ticker = str(trade.get("ticker") or "").upper().strip()
+    if not ticker:
+        return {
+            "ruleset_version": LE_RULESET_VERSION,
+            "available": False,
+            "reason": "Ticker is missing.",
+            "levels": {},
+            "feed": None,
+            "warnings": ["Ticker unavailable."],
+        }
+
+    try:
+        underlying_bars, feed = await _fetch_alpaca_1m(ticker, when)
+    except Exception as exc:
+        return {
+            "ruleset_version": LE_RULESET_VERSION,
+            "available": False,
+            "reason": "Market data could not be loaded.",
+            "levels": {},
+            "feed": None,
+            "warnings": [str(exc)],
+        }
+
+    context = analyze_context(trade, underlying_bars, [], [])
+    levels = (context.get("evidence") or {}).get("levels") or {}
+    warnings: list[str] = []
+    if levels.get("PDH") is None or levels.get("PDL") is None:
+        warnings.append("Previous-day high/low could not be established.")
+    if levels.get("PMH") is None or levels.get("PML") is None:
+        warnings.append("Premarket high/low could not be established.")
+    if feed == "iex":
+        warnings.append(
+            "Historical SIP was unavailable, so chart levels use IEX fallback and may differ from Schwab or TradingView."
+        )
+    elif feed == "delayed_sip":
+        warnings.append(
+            "Chart levels use delayed SIP; consolidated historical levels are valid, while newest bars may lag."
+        )
+
+    return {
+        "ruleset_version": LE_RULESET_VERSION,
+        "available": any(levels.get(name) is not None for name in ("PDH", "PDL", "PMH", "PML")),
+        "levels": levels,
+        "feed": feed,
+        "warnings": warnings,
+    }
+
+
 async def build_le_review(trade: dict) -> dict:
     """Build a read-only LE review. No strategy or tags are persisted automatically."""
     when = entry_datetime(trade)
