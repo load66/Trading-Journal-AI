@@ -41,3 +41,39 @@ def test_object_names_cannot_escape_storage_root(tmp_path):
     store = DiaryStorage(cfg(tmp_path))
     with pytest.raises(ValueError):
         store.save("../secret", b"x", "application/octet-stream")
+
+
+def test_supabase_private_read_uses_authenticated_endpoint(tmp_path, monkeypatch):
+    settings = cfg(
+        tmp_path,
+        STORAGE_MODE="supabase",
+        SUPABASE_URL="https://p.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY="service-role-secret",
+        SUPABASE_STORAGE_BUCKET="diary",
+    )
+    seen = {}
+
+    class FakeResponse:
+        content = b"private-bytes"
+        headers = {"content-type": "image/jpeg"}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, headers=None, timeout=None):
+        seen["url"] = url
+        seen["headers"] = headers
+        return FakeResponse()
+
+    monkeypatch.setattr("storage.httpx.get", fake_get)
+
+    store = DiaryStorage(settings)
+    data, content_type = store.read("2026/entry.jpg")
+
+    assert data == b"private-bytes"
+    assert content_type == "image/jpeg"
+    assert seen["url"] == (
+        "https://p.supabase.co/storage/v1/object/authenticated/"
+        "diary/2026/entry.jpg"
+    )
+    assert seen["headers"]["Authorization"] == "Bearer service-role-secret"
