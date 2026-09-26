@@ -48,6 +48,8 @@
   - Saved-report repository/service functions.
   - JSON encode/decode compatibility between SQLite TEXT and Postgres JSONB.
   - Duplicate and stale detection.
+- Create: `backend/smoking_gun_routes.py`
+  - Focused FastAPI router for saved-report CRUD and export endpoints.
 - Create: `backend/smoking_gun_exports.py`
   - Standalone HTML renderer from a saved structured report.
   - Trade-ledger CSV renderer from the saved compact ledger.
@@ -113,7 +115,7 @@ expected = {
     "id", "account_id", "title", "date_from", "date_to", "generated_at",
     "report_version", "analytics_engine_version", "behavior_version",
     "analysis_provider", "analysis_model", "trade_count", "gross_pnl",
-    "net_pnl", "primary_edge", "primary_leak", "data_fingerprint",
+    "net_pnl", "primary_edge", "primary_leak", "data_fingerprint", "filters_json",
     "source_metrics_json", "diagnosis_json", "action_plan_json",
     "export_manifest_json", "status",
 }
@@ -156,6 +158,7 @@ In `backend/database.py`, add a `CREATE TABLE IF NOT EXISTS smoking_gun_reports`
 - `primary_edge TEXT`
 - `primary_leak TEXT`
 - `data_fingerprint TEXT NOT NULL`
+- `filters_json TEXT NOT NULL DEFAULT '{}'`
 - `source_metrics_json TEXT NOT NULL`
 - `diagnosis_json TEXT`
 - `action_plan_json TEXT`
@@ -226,9 +229,10 @@ git commit -m "feat: add Smoking Gun report persistence"
   - `ANALYTICS_ENGINE_VERSION: str`
   - `BEHAVIOR_VERSION: str`
   - `REPORT_SCHEMA_VERSION: str`
-  - `build_source_fingerprint(trades: list[dict], account_id: int | None, date_from: str | None, date_to: str | None) -> str`
+  - `build_source_fingerprint(trades: list[dict], account_id: int | None, date_from: str | None, date_to: str | None, filters: dict | None = None) -> str`
   - `build_compact_trade_ledger(enriched_trades: list[dict]) -> list[dict]`
   - new `meta.analytics_engine_version`, `meta.behavior_version`, `meta.report_schema_version`
+  - new top-level `scoreboard`
   - new top-level `trade_ledger`
 
 - [ ] **Step 1: Write failing fingerprint tests**
@@ -239,13 +243,13 @@ Add:
 def test_source_fingerprint_is_order_independent_and_content_sensitive():
     a = [trade("a", ...), trade("b", ...)]
     b = list(reversed(a))
-    assert build_source_fingerprint(a, 1, "2026-09-01", "2026-09-30") == \
-           build_source_fingerprint(b, 1, "2026-09-01", "2026-09-30")
+    assert build_source_fingerprint(a, 1, "2026-09-01", "2026-09-30", {}) == \
+           build_source_fingerprint(b, 1, "2026-09-01", "2026-09-30", {})
 
     changed = [dict(a[0]), dict(a[1])]
     changed[0]["net_pnl"] += 1
-    assert build_source_fingerprint(changed, 1, "2026-09-01", "2026-09-30") != \
-           build_source_fingerprint(a, 1, "2026-09-01", "2026-09-30")
+    assert build_source_fingerprint(changed, 1, "2026-09-01", "2026-09-30", {}) != \
+           build_source_fingerprint(a, 1, "2026-09-01", "2026-09-30", {})
 ```
 
 Also add `test_source_fingerprint_canonicalizes_execution_json_key_order()` so semantically identical execution objects with different JSON key ordering hash identically.
@@ -275,6 +279,7 @@ def build_source_fingerprint(
     account_id: int | None,
     date_from: str | None,
     date_to: str | None,
+    filters: dict | None = None,
 ) -> str:
     ...
 ```
@@ -297,9 +302,35 @@ Canonical fields per trade, in stable order:
 - `option_type`
 - `source`
 
-Sort canonical trades by `(account_id, date, trade_group, id)`, serialize with sorted JSON keys and compact separators, include the filter tuple, then return lowercase SHA-256 hex.
+Sort canonical trades by `(account_id, date, trade_group, id)`, serialize with sorted JSON keys and compact separators, include `account_id`, date bounds, and a canonicalized `filters` object (including ticker/instrument filters when present), then return lowercase SHA-256 hex.
 
-- [ ] **Step 4: Write failing compact-ledger reconciliation test**
+- [ ] **Step 4: Write failing executive-scoreboard test**
+
+Add `test_scoreboard_reconciles_to_daily_and_trade_metrics()` and assert `report["scoreboard"]` contains:
+
+- `net_pnl`
+- `gross_pnl`
+- `fees`
+- `win_rate`
+- `profit_factor`
+- `avg_winner`
+- `avg_loser`
+- `reward_risk`
+- `max_drawdown`
+- `active_days`
+- `best_day`
+- `worst_day`
+
+Pin reconciliation assertions:
+
+```python
+assert report["scoreboard"]["net_pnl"] == round(sum(t["net_pnl"] for t in rows), 2)
+assert report["scoreboard"]["active_days"] == len(report["daily_pnl"])
+assert report["scoreboard"]["best_day"]["pnl"] == max(d["total_pnl"] for d in report["daily_pnl"])
+assert report["scoreboard"]["worst_day"]["pnl"] == min(d["total_pnl"] for d in report["daily_pnl"])
+```
+
+- [ ] **Step 5: Write failing compact-ledger reconciliation test**
 
 Add to `backend/tests/test_performance_report.py`:
 
@@ -316,9 +347,9 @@ def test_trade_ledger_reconciles_to_report_meta_and_pnl():
             "gross_pnl", "commissions", "net_pnl"} <= set(ledger[0])
 ```
 
-- [ ] **Step 5: Add the compact ledger and version metadata**
+- [ ] **Step 6: Add the scoreboard, compact ledger, and version metadata**
 
-In `backend/performance_report.py`, emit one compact row per completed trade. Do not copy raw execution JSON into `trade_ledger`.
+In `backend/performance_report.py`, calculate the scoreboard once from the same completed-trade/daily data used by the report, then emit one compact row per completed trade. Do not copy raw execution JSON into `trade_ledger`.
 
 Use:
 
@@ -332,7 +363,7 @@ Use:
 
 Add version strings to `meta`.
 
-- [ ] **Step 6: Run deterministic analytics tests**
+- [ ] **Step 7: Run deterministic analytics tests**
 
 Run:
 
@@ -343,7 +374,7 @@ pytest tests/test_performance_report.py tests/test_smoking_gun_library.py -v
 
 Expected: PASS with all existing hold/size/behavior tests unchanged.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add backend/performance_report.py backend/smoking_gun_library.py backend/tests/test_performance_report.py backend/tests/test_smoking_gun_library.py
@@ -368,7 +399,7 @@ git commit -m "feat: version and fingerprint Smoking Gun analytics"
   - `list_saved_reports(conn, account_id: int | None = None) -> list[dict]`
   - `get_saved_report(conn, report_id: int) -> dict | None`
   - `delete_saved_report(conn, report_id: int) -> bool`
-  - `current_fingerprint_for_range(conn, account_id: int, date_from: str, date_to: str) -> str`
+  - `current_fingerprint_for_range(conn, account_id: int, date_from: str, date_to: str, filters: dict | None = None) -> str`
   - `decorate_stale_status(conn, reports: list[dict]) -> list[dict]`
 
 - [ ] **Step 1: Write the failing round-trip persistence test**
@@ -415,7 +446,7 @@ Rules:
 - list output sorts newest first
 - duplicate insert returns the existing row with `duplicate=True`
 - detail output returns `duplicate=False`
-- stale detection compares stored fingerprint with current canonical fingerprint for the exact account/date range
+- stale detection compares stored fingerprint with current canonical fingerprint for the exact account/date range and stored `filters_json`
 - if the underlying range no longer exists, `is_stale=True` and `stale_reason="source-data-missing"`
 
 - [ ] **Step 5: Run repository tests**
@@ -441,6 +472,7 @@ git commit -m "feat: add Smoking Gun report repository"
 ### Task 4: Add Focused Report-Library API and On-Demand Exports
 
 **Files:**
+- Create: `backend/smoking_gun_routes.py`
 - Create: `backend/smoking_gun_exports.py`
 - Create: `backend/tests/test_smoking_gun_exports.py`
 - Modify: `backend/smoking_gun_library.py`
@@ -481,7 +513,7 @@ Expected: FAIL because routes are absent.
 
 - [ ] **Step 3: Add request validation and routes**
 
-Keep route code thin. Define a Pydantic request model with required:
+Keep route code in `backend/smoking_gun_routes.py` and include its router from `backend/main.py`. Define a Pydantic request model with required:
 
 - `account_id: int`
 - `title: str`
@@ -493,13 +525,14 @@ Keep route code thin. Define a Pydantic request model with required:
 - `analysis_provider: str | None`
 - `analysis_model: str | None`
 - `data_fingerprint: str`
+- `filters: dict = {}`
 - `source_metrics: dict`
 - `diagnosis: dict | None`
 - `action_plan: list | dict | None`
 - `primary_edge: str | None`
 - `primary_leak: str | None`
 
-Before insert, recompute the current fingerprint from journal trades and reject with HTTP 409 if it does not equal the supplied fingerprint. This prevents a stale ChatGPT payload from being saved as current through the app API.
+Before insert, query the exact account/date/filter population, recompute the current fingerprint from those journal trades, and reject with HTTP 409 if it does not equal the supplied fingerprint. This prevents a stale ChatGPT payload from being saved as current through the app API.
 
 Existing `GET /api/smoking-gun-report` and `GET /api/smoking-gun-diagnosis` remain unchanged.
 
@@ -556,7 +589,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add backend/main.py backend/smoking_gun_library.py backend/smoking_gun_exports.py backend/tests/test_smoking_gun_library.py backend/tests/test_smoking_gun_exports.py
+git add backend/main.py backend/smoking_gun_routes.py backend/smoking_gun_library.py backend/smoking_gun_exports.py backend/tests/test_smoking_gun_library.py backend/tests/test_smoking_gun_exports.py
 git commit -m "feat: add Smoking Gun report library API"
 ```
 
@@ -639,6 +672,7 @@ Rules:
 - primary edge
 - primary leak
 - report version
+- population/filter label when `filters_json` is non-empty
 - status chip: `CURRENT` or `SOURCE CHANGED`
 
 Primary actions:
@@ -823,6 +857,7 @@ Specify that connected analysis reads from `journal.trades` and must filter by:
 - `account_id`
 - inclusive `date_from`
 - inclusive `date_to`
+- optional canonical `filters_json`, initially supporting `tickers` and `instrument_types`
 
 Document the exact canonical fields used by `build_source_fingerprint`.
 
@@ -830,6 +865,7 @@ Document the exact canonical fields used by `build_source_fingerprint`.
 
 Document every `journal.smoking_gun_reports` column and the JSON shapes expected for:
 
+- `filters_json`
 - `source_metrics_json`
 - `diagnosis_json`
 - `action_plan_json`
@@ -879,7 +915,7 @@ Per the Supabase skill, fetch the current changelog and relevant migration/RLS d
 
 - [ ] **Step 2: Apply the migration to the connected Supabase project**
 
-Apply the exact reviewed migration to project `ppsljqaaanpkksxbpalk`.
+Apply the exact reviewed migration to the connected Supabase project named `trading-journal-ai`, resolving its current project ref at execution time rather than committing the ref to the public repository.
 
 Do not expose `journal` to the Data API and do not grant `anon`/`authenticated` direct table access.
 
