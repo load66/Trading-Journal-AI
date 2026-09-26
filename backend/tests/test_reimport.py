@@ -114,3 +114,67 @@ def test_generic_template_reimport_keeps_iso_named_trades(client):
     trades = stored(client)
     assert set(trades) == {"2026-09-15_TSLA_STOCK_1", "2026-09-15_TSLA_STOCK_2"}
     assert trades["2026-09-15_TSLA_STOCK_1"] == (-403.0, 2)
+
+
+SCHWAB_HEAD = "Date,Type,Description,Ref Num,Misc Fees,Commissions,Amount,Balance\n"
+SCHWAB_PARTIAL = [
+    "9/25/26 10:00 AM,TRD,SOLD -1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @1.50 CBOE,1002,-0.01,-0.50,$150.00,$900.00",
+    "9/25/26 10:00 AM,TRD,BOT +1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @1.00 CBOE,1001,-0.01,-0.50,($100.00),$750.00",
+]
+SCHWAB_FULL = [
+    "9/25/26 10:01 AM,TRD,SOLD -1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @2.00 CBOE,1003,-0.01,-0.50,$200.00,$1100.00",
+    "9/25/26 10:00 AM,TRD,SOLD -1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @1.50 CBOE,1002,-0.01,-0.50,$150.00,$900.00",
+    "9/25/26 10:00 AM,TRD,BOT +1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @1.00 CBOE,1001,-0.01,-0.50,($100.00),$750.00",
+    "9/25/26 10:00 AM,TRD,BOT +1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @1.00 CBOE,1001,-0.01,-0.50,($100.00),$850.00",
+]
+
+
+def post_schwab(client, rows):
+    payload = SCHWAB_HEAD + "\n".join(rows) + "\n"
+    r = client.post(
+        "/api/import-csv",
+        data={"account_id": "1", "broker": "schwab"},
+        files={"file": ("schwab.csv", payload.encode(), "text/csv")},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_schwab_reimport_uses_execution_counts_and_rebuilds_closed_option_cycle(client):
+    conn = sqlite3.connect(client.db)
+    if not conn.execute("SELECT 1 FROM accounts WHERE id=1").fetchone():
+        conn.execute("INSERT INTO accounts (id, name, type) VALUES (1, 'Day', 'day_trading')")
+        conn.commit()
+
+    first = post_schwab(client, SCHWAB_PARTIAL)
+    assert first["imported"] == 1
+
+    full = post_schwab(client, SCHWAB_FULL)
+    assert full["skipped"] == 2  # exactly the one old BOT and one old SOLD
+    assert full["imported"] == 1
+
+    rows = conn.execute(
+        "SELECT trade_group, side, gross_pnl, net_pnl, commissions, executions "
+        "FROM trades WHERE ticker='QCOM'"
+    ).fetchall()
+    assert len(rows) == 1
+    trade_group, side, gross, net, fees, executions = rows[0]
+    fills = json.loads(executions)
+    assert trade_group == "9/25/26_QCOM_OPTION_2026-09-25_170_CALL_1"
+    assert side == "LONG"
+    assert len(fills) == 4
+    assert [(e["action"], e["qty"], e["price"]) for e in fills] == [
+        ("BOT", 1, 1.0),
+        ("BOT", 1, 1.0),
+        ("SOLD", 1, 1.5),
+        ("SOLD", 1, 2.0),
+    ]
+    assert (gross, fees, net) == (150.0, 2.04, 147.96)
+
+    # A third upload of the exact full export is idempotent.
+    again = post_schwab(client, SCHWAB_FULL)
+    assert again["imported"] == 0
+    assert again["skipped"] == 4
+    assert len(json.loads(conn.execute(
+        "SELECT executions FROM trades WHERE ticker='QCOM'"
+    ).fetchone()[0])) == 4

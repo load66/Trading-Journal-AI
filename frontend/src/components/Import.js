@@ -7,7 +7,8 @@ import { PageHeader } from './ui';
 // 'auto' lets the server sniff the format from the file's first lines.
 const BROKERS = [
   { value: 'auto', label: 'Auto-detect' },
-  { value: 'thinkorswim', label: 'Thinkorswim (Schwab)' },
+  { value: 'schwab', label: 'Schwab transaction history' },
+  { value: 'thinkorswim', label: 'Thinkorswim account statement' },
   { value: 'ibkr', label: 'Interactive Brokers (IBKR)' },
   { value: 'generic', label: 'Other broker (generic template)' },
 ];
@@ -17,14 +18,16 @@ const TEMPLATE_URL = '/templates/generic_trades_template.csv';
 const EXAMPLE_URL = '/templates/generic_trades_example.csv';
 
 const BROKER_HELP = {
-  auto: 'Pick a broker above, or leave Auto-detect and the importer will recognise a Thinkorswim account statement or an IBKR Activity Statement.',
+  auto: 'Pick a broker above, or leave Auto-detect. The importer recognises Schwab transaction history, Thinkorswim account statements, and IBKR Activity Statements.',
+  schwab: <>Export from Schwab transaction history as CSV. The importer preserves the displayed Central-time clock value exactly and keeps legitimate split fills.</>,
   thinkorswim: <>Export from Thinkorswim desktop: <em>Monitor → Account Statement → export icon → Export to File (CSV)</em></>,
   ibkr: <>Export from IBKR Client Portal: <em>Performance &amp; Reports → Statements → Activity → pick the period → Download as CSV</em></>,
   generic: <>Copy your fills into the template, one row per execution. Buys and sells of the same symbol are grouped into round-trip trades automatically, the same way as a broker import.</>,
 };
 
 const BROKER_DROP_LABEL = {
-  auto: 'Drop your broker CSV (Thinkorswim or IBKR)',
+  auto: 'Drop your broker CSV',
+  schwab: 'Drop Schwab transaction-history CSV',
   thinkorswim: 'Drop Thinkorswim account statement CSV',
   ibkr: 'Drop IBKR Activity Statement CSV',
   generic: 'Drop your filled-in generic template CSV',
@@ -34,7 +37,8 @@ const BROKER_DROP_LABEL = {
 function brokerFromAccount(account) {
   const b = (account?.broker || '').toLowerCase();
   if (/ibkr|interactive/.test(b)) return 'ibkr';
-  if (/thinkorswim|tos|schwab/.test(b)) return 'thinkorswim';
+  if (/schwab/.test(b)) return 'schwab';
+  if (/thinkorswim|tos/.test(b)) return 'thinkorswim';
   return 'auto';
 }
 
