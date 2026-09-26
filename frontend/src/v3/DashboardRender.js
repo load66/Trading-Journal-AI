@@ -355,6 +355,7 @@ export default function DashboardRender(p) {
     : (edgeReport?.r_multiple_dist || []).reduce((s, r) => s + Number(r.count || 0), 0);
   const rCoverage = k.total_trades ? rSamples / k.total_trades : 0;
   const processReady = k.total_trades >= 10 && strategyCoverage >= 0.6 && rCoverage >= 0.6;
+  const lossContainGoal = goals?.loss_containment ?? 2.0;
 
   const trainingFocus = [];
   if (rCoverage < 0.6) {
@@ -371,7 +372,7 @@ export default function DashboardRender(p) {
       evidence: 'RECORDED',
     });
   }
-  if (lossOutlierRatio != null && lossOutlierRatio >= 2) {
+  if (lossOutlierRatio != null && lossOutlierRatio > lossContainGoal) {
     trainingFocus.push({
       title: 'Reduce outlier losing days',
       body: `Your worst session was ${lossOutlierRatio.toFixed(1)}× the average red day. Consistency improves fastest by containing the tail loss.`,
@@ -402,7 +403,7 @@ export default function DashboardRender(p) {
   const gRatio = g.avg_win_loss_ratio ?? 1.5;
   const gExp = g.expectancy ?? 50;
   const gAvgR = g.avg_r ?? 0.5;
-  const gLossContain = g.loss_containment ?? 2.0;
+  const gLossContain = g.loss_containment ?? lossContainGoal;
   const cap = (x) => Math.max(0, Math.min(1, x));
   // Keep the goal marker inside a readable scale instead of pinning every
   // baseline to the far edge. Avg R is higher-is-better; loss containment is
