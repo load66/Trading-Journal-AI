@@ -2259,13 +2259,18 @@ def get_daily_summary(
             return {"date": date, "cached": False, "no_trades": True, "narrative": "No trades recorded for this date."}
         summary = generate_daily_summary(context)
     except Exception as e:
-        # Without an API key this is the expected path, not a server fault.
-        if not os.getenv("ANTHROPIC_API_KEY"):
+        # Missing AI configuration is a normal unavailable state. If a provider
+        # is configured but the request fails, surface the real server error
+        # instead of incorrectly asking for an Anthropic key.
+        if not performance_ai_is_configured():
             return {
                 "date": date,
                 "cached": False,
                 "unavailable": True,
-                "narrative": "Add ANTHROPIC_API_KEY to backend/.env to generate a review for this day.",
+                "narrative": (
+                    "AI coaching is not configured. Add GROQ_API_KEY to the server "
+                    "environment, or ANTHROPIC_API_KEY as an optional fallback."
+                ),
             }
         raise HTTPException(status_code=500, detail=str(e))
 

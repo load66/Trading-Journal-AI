@@ -277,7 +277,10 @@ export function Coaching({ summary, loading, onRegenerate }) {
       <div className="v3-sec-head">
         <div>
           <h2 className="v3-h">Coaching</h2>
-          <p className="v3-h-sub">Written against your trades and your diary together, and graded on process</p>
+          <p className="v3-h-sub">
+            Written against your trades and your diary together, and graded on process
+            {summary.ai_provider ? ` · ${summary.ai_provider === 'groq' ? 'Groq' : 'Anthropic'} · ${summary.ai_model || ''}` : ''}
+          </p>
         </div>
         <div className="v3-acts">
           {onRegenerate && (
