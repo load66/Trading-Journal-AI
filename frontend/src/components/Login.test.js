@@ -36,5 +36,5 @@ test('sends a password recovery email from the login screen', async () => {
   fireEvent.click(screen.getByRole('button', { name: /send reset link/i }));
 
   await waitFor(() => expect(onResetPassword).toHaveBeenCalledWith('owner@example.com'));
-  expect(screen.getByRole('status')).toHaveTextContent(/password reset email sent/i);
+  expect(await screen.findByRole('status')).toHaveTextContent(/password reset email sent/i);
 });
