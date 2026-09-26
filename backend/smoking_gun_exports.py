@@ -29,6 +29,18 @@ def _pct(value: Any) -> str:
     return f"{float(value):.1f}%"
 
 
+def _evidence_label(trade_count: Any) -> str:
+    try:
+        n = int(trade_count or 0)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if n < 10:
+        return "Thin sample"
+    if n < 30:
+        return "Developing sample"
+    return "Established sample"
+
+
 def _safe_csv_cell(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -60,12 +72,13 @@ def _stats_table(rows: list[dict], first_label: str = "Bucket") -> str:
             f"<td>{_money(row.get('total_pnl'))}</td>"
             f"<td>{_pct(row.get('win_rate'))}</td>"
             f"<td>{_money(row.get('avg_pnl'))}</td>"
+            f"<td>{_esc(_evidence_label(row.get('trade_count')))}</td>"
             "</tr>"
         )
     return (
         "<table><thead><tr>"
         f"<th>{_esc(first_label)}</th><th>Trades</th><th>Total P&amp;L</th>"
-        "<th>Win rate</th><th>Avg P&amp;L</th></tr></thead><tbody>"
+        "<th>Win rate</th><th>Avg P&amp;L</th><th>Evidence</th></tr></thead><tbody>"
         + "".join(body) + "</tbody></table>"
     )
 
@@ -128,21 +141,27 @@ table{{width:100%;border-collapse:collapse;background:var(--panel);border:1px so
 <div class="card kpi">Max drawdown<b>{_money(board.get("max_drawdown"))}</b></div>
 </div>
 
-<h2>Two Traders</h2>
+<h2>Behavioral Cohort Split</h2>
+<p class="muted">Mechanical cohorts, not personality labels. The split describes observed trade characteristics only.</p>
 <div class="split">
-<div class="card good"><h3>Disciplined cohort</h3><b>{_money(disciplined.get("total_pnl"))}</b><p>{_esc(disciplined.get("trade_count",0))} trades · {_pct(disciplined.get("win_rate"))}</p></div>
-<div class="card bad"><h3>Destructive cohort</h3><b>{_money(destructive.get("total_pnl"))}</b><p>{_esc(destructive.get("trade_count",0))} trades · {_pct(destructive.get("win_rate"))}</p></div>
+<div class="card good"><h3>Rule-aligned cohort</h3><b>{_money(disciplined.get("total_pnl"))}</b><p>{_esc(disciplined.get("trade_count",0))} trades · {_pct(disciplined.get("win_rate"))} · {_esc(_evidence_label(disciplined.get("trade_count")))}</p></div>
+<div class="card bad"><h3>Comparison cohort</h3><b>{_money(destructive.get("total_pnl"))}</b><p>{_esc(destructive.get("trade_count",0))} trades · {_pct(destructive.get("win_rate"))} · {_esc(_evidence_label(destructive.get("trade_count")))}</p></div>
 </div>
 
 <h2>Hold-Time Edge</h2>
+<p class="muted">Association, not causation: these are outcomes observed in each hold-time cohort. Longer holding is not automatically better when a setup is invalidated.</p>
 {_stats_table(metrics.get("hold_time") or [])}
+
+<h2>Evidence Standards</h2>
+<div class="note"><strong>Verified arithmetic</strong> = exact calculations from stored executions. <strong>Established sample</strong> = 30+ trades. <strong>Developing sample</strong> = 10–29 trades. <strong>Thin sample</strong> = fewer than 10 trades. Cohort P&amp;L shows association; it does not prove the behavior caused the full dollar result.</div>
 
 <h2>DIAGNOSIS</h2>
 <div class="note"><strong>{_esc(diagnosis.get("headline") or "No AI diagnosis saved.")}</strong></div>
-<h3>Where the edge lives</h3>{_bullets(edge.get("where_it_lives") or [])}
-<h3>Where it dies</h3>{_bullets(edge.get("where_it_dies") or [])}
+<h3>Positive observed cohorts</h3>{_bullets(edge.get("where_it_lives") or [])}
+<h3>Negative observed cohorts / risks</h3>{_bullets(edge.get("where_it_dies") or [])}
 
 <h2>FIX · Mechanical Action Plan</h2>
+<p class="muted">Rules are prospective tests or controls unless independently validated out of sample. Negative cohort P&amp;L is not treated as proof of causation.</p>
 <table><thead><tr><th>Priority</th><th>Rule</th><th>Why</th></tr></thead><tbody>{plan_html}</tbody></table>
 
 <h2>Audit Metadata</h2>

@@ -361,12 +361,13 @@ test('Smoking Gun saved report renders professional evidence hierarchy and acces
   expect(sections).toEqual([
     'Command Header',
     'Executive Scoreboard',
-    'Two Traders',
+    'Behavioral Cohort Split',
     'Edge Map / Hold Time',
     'Position Size',
     'Daily P&L',
     'Daily Stop Lab',
     'Ticker Ranking',
+    'Evidence Standards',
     'Behavioral Forensics',
     'Time Analysis',
     'Scenario Model',
@@ -377,6 +378,10 @@ test('Smoking Gun saved report renders professional evidence hierarchy and acces
   expect(within(terminal).getByText('SOURCE CHANGED')).toBeVisible();
   expect(within(terminal).getByText('Not supported as a leak')).toBeVisible();
   expect(within(terminal).getByText('thin')).toBeVisible();
+  expect(within(terminal).getByText('Rule-aligned cohort')).toBeVisible();
+  expect(within(terminal).getByText('Comparison cohort')).toBeVisible();
+  expect(within(terminal).getByText(/Association, not causation/i)).toBeVisible();
+  expect(within(terminal).getAllByText(/Thin sample/i).length).toBeGreaterThan(0);
   expect(within(terminal).getByRole('button', { name: 'Back to Report Library' })).toBeVisible();
   expect(within(terminal).getByRole('button', { name: 'Download HTML' })).toBeVisible();
   expect(within(terminal).getByRole('button', { name: 'Download Trade Ledger' })).toBeVisible();

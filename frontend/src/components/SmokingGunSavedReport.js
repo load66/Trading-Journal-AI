@@ -19,6 +19,13 @@ const plain = (value, suffix = '') => (
 
 const tone = (value) => Number(value) > 0 ? 'sg-positive' : Number(value) < 0 ? 'sg-negative' : '';
 
+const evidenceLabel = (count) => {
+  const n = Number(count || 0);
+  if (n < 10) return 'Thin sample';
+  if (n < 30) return 'Developing sample';
+  return 'Established sample';
+};
+
 function Missing({ children = '—' }) {
   return <span className="sg-missing" title="Not available in this saved deterministic payload.">{children}</span>;
 }
@@ -51,7 +58,7 @@ function StatsTable({ rows, label = 'Bucket' }) {
     <div className="sg-table-wrap">
       <table className="sg-table">
         <thead>
-          <tr><th>{label}</th><th>Trades</th><th>P&amp;L</th><th>Win rate</th><th>$/trade</th></tr>
+          <tr><th>{label}</th><th>Trades</th><th>P&amp;L</th><th>Win rate</th><th>$/trade</th><th>Evidence</th></tr>
         </thead>
         <tbody>
           {rows.map((row, index) => (
@@ -61,6 +68,7 @@ function StatsTable({ rows, label = 'Bucket' }) {
               <td className={tone(row.total_pnl)}>{money(row.total_pnl)}</td>
               <td>{percent(row.win_rate ?? row.green_day_rate)}</td>
               <td className={tone(row.avg_pnl)}>{money(row.avg_pnl)}</td>
+              <td><span className={Number(row.trade_count ?? row.days) < 10 ? 'sg-chip sg-chip-warning' : 'sg-chip sg-chip-muted'}>{evidenceLabel(row.trade_count ?? row.days)}</span></td>
             </tr>
           ))}
         </tbody>
@@ -215,11 +223,11 @@ export default function SmokingGunSavedReport({
         </div>
       </Section>
 
-      <Section title="Two Traders" subtitle="The saved deterministic split between disciplined and destructive operating modes.">
+      <Section title="Behavioral Cohort Split" subtitle="Mechanical cohorts based on observed trade characteristics; these are not personality labels.">
         <div className="sg-trader-grid">
           {[
-            ['Disciplined Trader', two.disciplined, 'sg-trader-positive'],
-            ['Destructive Trader', two.destructive, 'sg-trader-negative'],
+            ['Rule-aligned cohort', two.disciplined, 'sg-trader-positive'],
+            ['Comparison cohort', two.destructive, 'sg-trader-negative'],
           ].map(([label, row, cls]) => (
             <article className={`sg-trader-card ${cls}`} key={label}>
               <span>{label}</span>
@@ -227,12 +235,16 @@ export default function SmokingGunSavedReport({
               <div><b>{plain(row?.trade_count)}</b> trades</div>
               <div><b>{percent(row?.win_rate)}</b> win rate</div>
               <div><b>{money(row?.avg_pnl)}</b> / trade</div>
+              <div><span className="sg-chip sg-chip-muted">{evidenceLabel(row?.trade_count)}</span></div>
             </article>
           ))}
         </div>
       </Section>
 
       <Section title="Edge Map / Hold Time" subtitle="Exact entry-to-final-exit buckets. Longer or shorter is descriptive evidence, not a command to hold invalid trades.">
+        <div className="sg-callout sg-callout-neutral" style={{ marginBottom: 12 }}>
+          <b>Association, not causation.</b> These are outcomes observed in each hold-time cohort. A longer hold did not necessarily cause the better result, and a broken setup should still be exited.
+        </div>
         <StatsTable rows={metrics.hold_time} label="Hold time" />
       </Section>
 
@@ -299,6 +311,12 @@ export default function SmokingGunSavedReport({
         </div>
       </Section>
 
+      <Section title="Evidence Standards" subtitle="How to read confidence in this audit.">
+        <div className="sg-callout sg-callout-neutral">
+          <b>Verified arithmetic</b> is calculated directly from stored executions. <b>Established sample</b> means 30+ trades, <b>Developing sample</b> means 10–29, and <b>Thin sample</b> means fewer than 10. Cohort P&amp;L shows association, not proof that the behavior caused the entire result.
+        </div>
+      </Section>
+
       <Section title="Behavioral Forensics" subtitle="Only measured cohorts belong here; positive or unsupported behavior is not mislabeled as a leak.">
         <BehaviorEvidence behavior={metrics.behavior} />
       </Section>
@@ -332,18 +350,18 @@ export default function SmokingGunSavedReport({
         </div>
       </Section>
 
-      <Section title="Diagnosis" subtitle="AI interpretation of the locked source metrics.">
+      <Section title="Diagnosis" subtitle="AI interpretation of locked source metrics; causal claims require evidence beyond cohort P&L.">
         <div className="sg-diagnosis">
           <div className="sg-diagnosis-headline">{diagnosis.headline || <Missing>Diagnosis not saved.</Missing>}</div>
           <div className="sg-two-column">
-            <div><h3>Where the edge lives</h3><ul>{(diagnosis.edge?.where_it_lives || []).map((item, i) => <li key={i}>{item}</li>)}</ul></div>
-            <div><h3>Where it dies</h3><ul>{(diagnosis.edge?.where_it_dies || []).map((item, i) => <li key={i}>{item}</li>)}</ul></div>
+            <div><h3>Positive observed cohorts</h3><ul>{(diagnosis.edge?.where_it_lives || []).map((item, i) => <li key={i}>{item}</li>)}</ul></div>
+            <div><h3>Negative observed cohorts / risks</h3><ul>{(diagnosis.edge?.where_it_dies || []).map((item, i) => <li key={i}>{item}</li>)}</ul></div>
           </div>
           {!!diagnosis.limitations?.length && <div><h3>Limitations</h3><ul>{diagnosis.limitations.map((item, i) => <li key={i}>{item}</li>)}</ul></div>}
         </div>
       </Section>
 
-      <Section title="Mechanical Action Plan" subtitle="Ranked rules saved with the audit; source metrics remain the authority.">
+      <Section title="Mechanical Action Plan" subtitle="Ranked prospective controls. Source metrics remain authoritative; negative cohort P&L does not prove causation.">
         {Array.isArray(actionPlan) && actionPlan.length ? (
           <div className="sg-action-list">
             {actionPlan.map((item, index) => (
