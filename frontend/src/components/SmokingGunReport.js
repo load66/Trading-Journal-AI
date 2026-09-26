@@ -235,8 +235,28 @@ function BehaviorEvidence({ behavior, time }) {
   const chase = behavior?.chasing_fomo || {};
   const asym = behavior?.winner_loser_asymmetry || {};
   const avgd = behavior?.averaging_down || {};
+  const verifiedFlags = behavior?.verified_rule_flags || [];
   return (
     <div style={{ display: 'grid', gap: 16 }}>
+      {verifiedFlags.length > 0 && (
+        <div>
+          <b>Verified execution flags</b>
+          <div className="scroll-x" style={{ marginTop: 8 }}>
+            <table style={{ minWidth: 720 }}>
+              <thead><tr><th>Evidence</th><th>Date</th><th>Rule</th><th>Ticker</th><th className="num">Observed P&L</th></tr></thead>
+              <tbody>{verifiedFlags.map((f, i) => (
+                <tr key={`${f.date}-${f.code}-${f.trade_group || i}`}>
+                  <td><span className="v3-evidence verified">VERIFIED</span></td>
+                  <td>{f.date}</td>
+                  <td><b>{f.title}</b><div className="text-muted" style={{ fontSize: 11.5 }}>{f.detail}</div></td>
+                  <td>{f.ticker || '—'}</td>
+                  <td className={`num ${tone(f.observed_pnl)}`}>{f.observed_pnl == null ? '—' : signed$(f.observed_pnl)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
       <div className="grid-2">
         <div><b>Re-entry depth after a same-ticker loss</b><GenericStatsTable rows={behavior?.revenge_trading} first="Depth" /></div>
         <div><b>Overtrading by daily trade count</b>
@@ -470,7 +490,7 @@ export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
         </Card>
       </div>
 
-      <Card title="11. Behavioral evidence" sub="Revenge depth, overtrading, tilt sizing, FOMO re-entry, averaging down, asymmetry, and session timing.">
+      <Card title="11. Behavioral evidence" sub="Verified execution patterns first; broader cohort statistics below. Motive is never inferred from P&L alone.">
         <BehaviorEvidence behavior={data.behavior} time={data.time_analysis} />
         <div className="grid-2" style={{ marginTop: 18 }}>
           <div><b>Day of week</b><GenericStatsTable rows={data.time_analysis?.day_of_week} first="Day" /></div>
