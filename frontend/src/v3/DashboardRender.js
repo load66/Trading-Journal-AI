@@ -124,51 +124,41 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const mae = data.avg_mae == null ? null : Number(data.avg_mae);
   const excursionN = Number(data.excursion_n || 0);
 
-  const bottom = [];
-  if (capture != null) {
-    bottom.push(
-      capture >= captureGoal
-        ? 'You captured ' + capture.toFixed(0) + '% of the available favorable move on winning trades with excursion data, above your ' + captureGoal.toFixed(0) + '% goal.'
-        : 'You captured ' + capture.toFixed(0) + '% of the available favorable move on winning trades with excursion data, below your ' + captureGoal.toFixed(0) + '% goal by ' + (captureGoal - capture).toFixed(0) + ' points.'
-    );
-  }
-  if (holdRatio != null) {
-    if (holdRatio > 1.05) {
-      bottom.push(
-        'Losing trades averaged ' + loserHold.toFixed(1) + ' minutes versus ' + winnerHold.toFixed(1) +
-        ' minutes for winners — about ' + Math.round((holdRatio - 1) * 100) +
-        '% longer. The clearest management leak in this sample is time spent in losing trades.'
-      );
-    } else if (holdRatio < 0.95) {
-      bottom.push(
-        'Losers averaged ' + loserHold.toFixed(1) + ' minutes versus ' + winnerHold.toFixed(1) +
-        ' minutes for winners. You are cutting losing trades faster than winning trades in this sample.'
-      );
-    } else {
-      bottom.push(
-        'Winner and loser hold times are similar (' + winnerHold.toFixed(1) + ' vs ' +
-        loserHold.toFixed(1) + ' minutes), so duration is not a strong differentiator in this sample.'
-      );
+  const primaryInsight = (() => {
+    if (holdRatio != null && holdRatio > 1.05) {
+      return {
+        tone: 'bad',
+        title: 'Cut losing trades faster',
+        copy: 'The clearest management leak is excess time spent in losing trades. Treat invalidation as a decision point, not a negotiation.',
+      };
     }
-  }
-  if (mfe != null && mae != null) {
-    bottom.push(
-      'Across ' + excursionN + ' trades with market-path data, average favorable excursion was +' +
-      mfe.toFixed(2) + '% and average adverse excursion was -' + mae.toFixed(2) + '% before exit.'
-    );
-  }
-  if (!bottom.length) {
-    bottom.push(
-      'Trade-management evidence is incomplete for this window. Review trades with timestamps and excursion data before drawing a management conclusion.'
-    );
-  }
+    if (capture != null && capture < captureGoal) {
+      return {
+        tone: 'caution',
+        title: 'Improve winner monetization',
+        copy: 'Your next management priority is preserving more of the favorable move without trying to capture the exact high.',
+      };
+    }
+    if (mfe != null && mae != null && mae > mfe) {
+      return {
+        tone: 'bad',
+        title: 'Reduce adverse excursion',
+        copy: 'Trades are moving farther against you than for you on average. Tighten invalidation and position-risk discipline.',
+      };
+    }
+    return {
+      tone: 'good',
+      title: 'Protect the process',
+      copy: 'No single management leak dominates this window. Keep the same exit discipline and focus on repeatability.',
+    };
+  })();
 
   return (
     <>
-      <div className="v3-sec-head">
+      <div className="v3-sec-head v3-management-head">
         <div>
           <h2 className="v3-h v3-icon-title"><Target size={18} /> Trade management</h2>
-          <p className="v3-h-sub">How well do you manage trades after you enter?</p>
+          <p className="v3-h-sub">Three non-overlapping views of what happens after entry.</p>
         </div>
         <div className="v3-management-range" role="group" aria-label="Trade management range">
           {['7D', '30D', '90D', 'ALL'].map((option) => (
@@ -185,28 +175,46 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
         </div>
       </div>
 
-      <div className="v3-management-grid">
-        <article className="v3-management-card">
+      <div className="v3-management-grid v3-management-grid-clean">
+        <article className="v3-management-card v3-management-card-feature">
           <div className="v3-management-label"><Trophy size={17} /><span>Profit capture</span></div>
-          <p>How much of the available move you actually keep on winning trades.</p>
-          <div className="v3-management-value v3-pos">{capture == null ? 'N/A' : capture.toFixed(0) + '%'}</div>
-          <div className="v3-management-progress"><i style={{ '--w': captureBar + '%' }} /></div>
+          <p>How much of the favorable move you retained on winning trades.</p>
+
+          <div className="v3-capture-hero">
+            <div>
+              <span className="v3-lab">Captured</span>
+              <strong className="v3-management-value v3-pos">{capture == null ? 'N/A' : capture.toFixed(0) + '%'}</strong>
+            </div>
+            <div className="v3-capture-left">
+              <span className="v3-lab">Left on table</span>
+              <strong>{leftOnTable == null ? '—' : leftOnTable.toFixed(0) + '%'}</strong>
+            </div>
+          </div>
+
+          <div className="v3-capture-split v3-capture-split-clean" aria-label="Captured versus left on table">
+            <div className="captured" style={{ '--w': captureBar + '%' }}>
+              {capture == null ? 'No data' : captureBar.toFixed(0) + '%'}
+            </div>
+            <div className="left">{leftOnTable == null ? '' : leftOnTable.toFixed(0) + '%'}</div>
+          </div>
+
           <div className="v3-management-meta">
             <span>Goal ≥ {captureGoal.toFixed(0)}%</span>
             <span>{excursionN ? excursionN + ' measured trades' : 'No excursion sample'}</span>
           </div>
+
           <div className={'v3-management-callout ' + (capture != null && capture >= captureGoal ? 'good' : 'caution')}>
             {capture == null
               ? 'Excursion data is required to score profit capture.'
               : capture >= captureGoal
-                ? 'You are retaining a solid share of winning-trade opportunity.'
-                : 'There is room to improve winner monetization without assuming every peak was executable.'}
+                ? 'Winner monetization is above your current target.'
+                : 'Focus on exit structure rather than trying to sell the exact intraday high.'}
           </div>
         </article>
 
         <article className="v3-management-card">
           <div className="v3-management-label"><Clock3 size={17} /><span>Holding behavior</span></div>
-          <p>How long you hold winners versus losers.</p>
+          <p>Whether time in the trade is helping winners or extending losers.</p>
           <div className="v3-hold-pair">
             <div><span>Winners</span><strong className="v3-pos">{winnerHold == null ? 'N/A' : winnerHold.toFixed(1) + ' min'}</strong></div>
             <div><span>Losers</span><strong className="v3-neg">{loserHold == null ? 'N/A' : loserHold.toFixed(1) + ' min'}</strong></div>
@@ -215,55 +223,36 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             {holdRatio == null
               ? 'Need closed trades with usable entry and exit timestamps.'
               : holdRatio > 1.05
-                ? 'Losers stay open about ' + Math.round((holdRatio - 1) * 100) + '% longer than winners.'
+                ? 'Time is working against you on losing trades. Prioritize faster invalidation.'
                 : 'Losers are not being held materially longer than winners.'}
           </div>
         </article>
 
         <article className="v3-management-card">
-          <div className="v3-management-label"><Target size={17} /><span>Profit vs. left on table</span></div>
-          <p>On winning trades, how much favorable movement you captured versus what remained.</p>
-          <div className="v3-capture-split" aria-label="Captured versus left on table">
-            <div className="captured" style={{ '--w': captureBar + '%' }}>
-              {capture == null ? 'No data' : captureBar.toFixed(0) + '% Captured'}
-            </div>
-            <div className="left">{leftOnTable == null ? '' : leftOnTable.toFixed(0) + '% Left'}</div>
-          </div>
-          <div className="v3-capture-numbers">
-            <div><span>Captured</span><strong className="v3-pos">{capture == null ? '—' : capture.toFixed(0) + '%'}</strong></div>
-            <div><span>Left on table</span><strong>{leftOnTable == null ? '—' : leftOnTable.toFixed(0) + '%'}</strong></div>
-          </div>
-          <div className="v3-management-callout good">
-            {capture == null
-              ? 'This becomes available after excursion metrics are calculated.'
-              : 'Use this as a coaching metric, not a demand to sell at the exact intraday high.'}
-          </div>
-        </article>
-
-        <article className="v3-management-card">
           <div className="v3-management-label"><ShieldAlert size={17} /><span>Risk during trade</span></div>
-          <p>How much the market moved for and against you while the trade was open.</p>
+          <p>How far trades move in your favor and against you before exit.</p>
           <div className="v3-risk-pair">
-            <div><span>Avg favorable move (MFE)</span><strong className="v3-pos">{mfe == null ? 'N/A' : '+' + mfe.toFixed(2) + '%'}</strong></div>
-            <div><span>Avg adverse move (MAE)</span><strong className="v3-neg">{mae == null ? 'N/A' : '-' + mae.toFixed(2) + '%'}</strong></div>
+            <div><span>Avg favorable move</span><strong className="v3-pos">{mfe == null ? 'N/A' : '+' + mfe.toFixed(2) + '%'}</strong><small>MFE</small></div>
+            <div><span>Avg adverse move</span><strong className="v3-neg">{mae == null ? 'N/A' : '-' + mae.toFixed(2) + '%'}</strong><small>MAE</small></div>
           </div>
           <div className="v3-management-callout caution">
             {excursionN
-              ? 'Based on ' + excursionN + ' measured trades.' + (data.excursion_option_n ? ' Options use the underlying directional path.' : '')
+              ? 'Path analysis is based on ' + excursionN + ' measured trades.' + (data.excursion_option_n ? ' Options use the underlying directional path.' : '')
               : 'No measured excursion sample in this window.'}
           </div>
         </article>
       </div>
 
-      <div className="v3-bottom-line">
+      <div className={'v3-bottom-line v3-bottom-line-clean ' + primaryInsight.tone}>
         <div className="v3-bottom-line-head">
           <Lightbulb size={20} />
-          <div><strong>Bottom line</strong><span>Rule-based analysis from the selected management window</span></div>
+          <div><strong>Bottom line</strong><span>One priority from the selected management window</span></div>
         </div>
         <div className="v3-bottom-line-copy">
-          {bottom.map((line, index) => (
-            <p key={index}><CheckCircle2 size={15} /><span>{line}</span></p>
-          ))}
+          <p>
+            <CheckCircle2 size={15} />
+            <span><b>{primaryInsight.title}.</b> {primaryInsight.copy}</span>
+          </p>
         </div>
       </div>
     </>
@@ -277,7 +266,7 @@ function LatestSmokingGunSummary({ report, onOpen }) {
         <div className="v3-sec-head">
           <div>
             <h2 className="v3-h v3-icon-title"><FileText size={18} /> Latest Smoking Gun report summary</h2>
-            <p className="v3-h-sub">Key takeaways from your most recent saved audit.</p>
+            <p className="v3-h-sub">Diagnosis and mechanical actions only — dashboard statistics stay above.</p>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onOpen}>Open reports</button>
         </div>
@@ -286,38 +275,73 @@ function LatestSmokingGunSummary({ report, onOpen }) {
     );
   }
 
-  const metrics = report.source_metrics || {};
-  const board = metrics.scoreboard || {};
   const diagnosis = report.diagnosis || {};
   const actionPlan = Array.isArray(report.action_plan)
     ? report.action_plan
     : Array.isArray(diagnosis.action_plan) ? diagnosis.action_plan : [];
 
-  const unique = (items) => [...new Set(items.filter(Boolean).map((x) => String(x).trim()).filter(Boolean))];
-  const strengths = unique([...(diagnosis.edge?.where_it_lives || []), report.primary_edge]).slice(0, 3);
-  const opportunities = unique([
-    ...(diagnosis.edge?.where_it_dies || []),
-    report.primary_leak,
-    ...actionPlan.map((x) => x?.rule || x?.mechanical_rule),
-  ]).slice(0, 3);
+  const firstText = (...values) => values
+    .flat()
+    .filter(Boolean)
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .find(Boolean);
 
-  const metricRows = [
-    ['Net P&L', money2(board.net_pnl ?? report.net_pnl), tone(board.net_pnl ?? report.net_pnl)],
-    ['Win rate', board.win_rate == null ? '—' : Number(board.win_rate).toFixed(1) + '%', ''],
-    ['Profit factor', board.profit_factor == null ? '—' : Number(board.profit_factor).toFixed(2), ''],
-    ['Trades', report.trade_count ?? '—', ''],
-    ['Avg winner', board.avg_winner == null ? '—' : absMoney(board.avg_winner), 'v3-pos'],
-    ['Max drawdown', board.max_drawdown == null ? '—' : money2(board.max_drawdown), 'v3-neg'],
+  const diagnosisRows = [
+    {
+      label: 'Main leak',
+      tone: 'bad',
+      value: firstText(
+        report.primary_leak,
+        diagnosis.primary_leak,
+        diagnosis.main_leak,
+        diagnosis.edge?.where_it_dies
+      ) || 'No primary leak was saved with this report.',
+    },
+    {
+      label: 'Key behavioral issue',
+      tone: 'caution',
+      value: firstText(
+        diagnosis.key_behavioral_issue,
+        diagnosis.behavioral_issue,
+        diagnosis.behavioral_pattern,
+        diagnosis.behavior?.issue
+      ) || 'No behavioral issue was saved with this report.',
+    },
+    {
+      label: 'Edge to protect',
+      tone: 'good',
+      value: firstText(
+        report.primary_edge,
+        diagnosis.primary_edge,
+        diagnosis.edge?.where_it_lives
+      ) || 'No protected edge was saved with this report.',
+    },
   ];
+
+  const planRows = actionPlan
+    .map((item, index) => {
+      if (typeof item === 'string') return { title: item, detail: '' };
+      return {
+        title: firstText(item?.mechanical_rule, item?.rule, item?.action, item?.title, item?.what) || 'Action ' + (index + 1),
+        detail: firstText(item?.trigger, item?.implementation, item?.how, item?.rationale, item?.why) || '',
+      };
+    })
+    .filter((item) => item.title)
+    .slice(0, 5);
 
   return (
     <>
-      <div className="v3-sec-head">
+      <div className="v3-sec-head v3-smoking-summary-head">
         <div>
           <h2 className="v3-h v3-icon-title"><FileText size={18} /> Latest Smoking Gun report summary</h2>
-          <p className="v3-h-sub">Key takeaways from your most recent saved detailed analysis.</p>
+          <p className="v3-h-sub">Diagnosis and mechanical action plan from your latest saved audit.</p>
         </div>
         <div className="v3-smoking-head-actions">
+          <div className="v3-smoking-period">
+            <span>Report period</span>
+            <b>{report.date_from || '—'} → {report.date_to || '—'}</b>
+            {report.generated_at && <small>Generated {compactDateTime(report.generated_at)}</small>}
+          </div>
           <span className={'v3-evidence ' + (report.is_stale ? 'insufficient' : 'verified')}>
             {report.is_stale ? 'SOURCE CHANGED' : 'CURRENT'}
           </span>
@@ -325,42 +349,51 @@ function LatestSmokingGunSummary({ report, onOpen }) {
         </div>
       </div>
 
-      <div className="v3-smoking-meta">
-        <div className="v3-smoking-cover">
-          <span className="v3-kicker">TRADING SMOKING GUN REPORT</span>
-          <strong>{report.title || 'Latest report'}</strong>
-          <small>{report.date_from} → {report.date_to}</small>
-          <small>Generated {compactDateTime(report.generated_at)}</small>
-          {(report.analysis_provider || report.analysis_model) && (
-            <small>Analysis: {[report.analysis_provider, report.analysis_model].filter(Boolean).join(' · ')}</small>
-          )}
-        </div>
+      <div className="v3-smoking-clean">
+        <article className="v3-smoking-diagnosis">
+          <div className="v3-smoking-panel-title">
+            <AlertTriangle size={17} />
+            <div>
+              <span className="v3-lab">Diagnosis</span>
+              <strong>What is actually costing or protecting performance</strong>
+            </div>
+          </div>
 
-        <div className="v3-smoking-scoreboard">
-          <span className="v3-lab">Overall performance</span>
-          <div>
-            {metricRows.map(([label, value, cls]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong className={cls}>{value}</strong>
+          <div className="v3-diagnosis-rows">
+            {diagnosisRows.map((row) => (
+              <div className={'v3-diagnosis-row ' + row.tone} key={row.label}>
+                <span>{row.label}</span>
+                <p>{row.value}</p>
               </div>
             ))}
           </div>
-        </div>
+        </article>
 
-        <div className="v3-smoking-list strengths">
-          <div className="v3-smoking-list-title"><Trophy size={15} /> Top strengths</div>
-          {strengths.length ? (
-            <ol>{strengths.map((item, i) => <li key={i}><b>{i + 1}</b><span>{item}</span></li>)}</ol>
-          ) : <p>No AI strength summary was saved with this report.</p>}
-        </div>
+        <article className="v3-smoking-action-plan">
+          <div className="v3-smoking-panel-title">
+            <Target size={17} />
+            <div>
+              <span className="v3-lab">Mechanical action plan</span>
+              <strong>Rules to execute on the next trading session</strong>
+            </div>
+          </div>
 
-        <div className="v3-smoking-list opportunities">
-          <div className="v3-smoking-list-title"><AlertTriangle size={15} /> Biggest opportunities</div>
-          {opportunities.length ? (
-            <ol>{opportunities.map((item, i) => <li key={i}><b>{i + 1}</b><span>{item}</span></li>)}</ol>
-          ) : <p>No AI opportunity summary was saved with this report.</p>}
-        </div>
+          {planRows.length ? (
+            <ol className="v3-action-plan-list">
+              {planRows.map((item, index) => (
+                <li key={index}>
+                  <b>{index + 1}</b>
+                  <div>
+                    <strong>{item.title}</strong>
+                    {item.detail && <p>{item.detail}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="v3-smoking-empty-copy">No mechanical action plan was saved with this report.</p>
+          )}
+        </article>
       </div>
     </>
   );
@@ -606,8 +639,9 @@ export default function DashboardRender(p) {
             <p className="v3-acct">{accountLabel}{span ? ' · ' + span : ''}</p>
             <h1 className={'v3-money ' + tone(net)}>{money2(net)}</h1>
             <p className="v3-money-sub">
-              Avg win <b className="v3-pos">{absMoney(k.avg_win)}</b> / Avg loss <b className="v3-neg">{absMoney(k.avg_loss)}</b>
-              {' '}· {(k.total_trades || 0).toLocaleString()} completed trades
+              {(k.total_trades || 0).toLocaleString()} completed trades
+              {' '}· {(k.trading_days || 0).toLocaleString()} sessions
+              {' '}· {k.trading_days ? money2(net / k.trading_days) + ' avg/day' : 'avg/day unavailable'}
             </p>
           </div>
           <div className="v3-heroside">
