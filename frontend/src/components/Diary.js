@@ -67,6 +67,7 @@ function DiaryCard({ entry, onDeleted }) {
   const [expanded, setExpanded] = useState(false);
   // A .txt or .csv upload also stores a path, but only a picture can be shown as one.
   const hasImage = !!entry.image_path && /\.(png|jpe?g|webp|gif|heic|heif)$/i.test(entry.image_path);
+  const imageSrc = entry.image_url || (entry.image_path ? `${BACKEND}/uploads/${entry.image_path}` : null);
   const analysis = entry.ai_analysis;
   const panelId = `diary-entry-${entry.id}`;
 
