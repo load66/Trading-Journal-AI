@@ -152,8 +152,29 @@ def _size_bucket(t):
     return _bucket_label(t.get("entry_notional"), SHARE_NOTIONAL_BUCKETS)
 
 
+def _size_family(t):
+    return "OPTION" if t.get("instrument_type") == "OPTION" else "NOTIONAL"
+
+
 def _position_size_value(t):
-    return t.get("entry_qty") if t.get("instrument_type") == "OPTION" else t.get("entry_notional")
+    return t.get("entry_qty") if _size_family(t) == "OPTION" else t.get("entry_notional")
+
+
+def _instrument_size_medians(trades):
+    grouped = defaultdict(list)
+    for t in trades:
+        value = _position_size_value(t)
+        if value is not None and value > 0:
+            grouped[_size_family(t)].append(value)
+    return {family: median(values) for family, values in grouped.items() if values}
+
+
+def _size_multiple(t, medians):
+    value = _position_size_value(t)
+    med = medians.get(_size_family(t))
+    if value is None or not med:
+        return None
+    return value / med
 
 
 def _daily_rows(trades):
@@ -222,7 +243,14 @@ def _stop_model(trades):
             "actual_pnl": round(actual_total, 2), "saved": round(adjusted_total - actual_total, 2),
             "breach_count": len(breaches), "breaches": sorted(breaches, key=lambda x: x["date"]),
         })
-    return {"avg_loss": round(avg_loss, 2), "levels": levels}
+    option_sizes = [t["entry_qty"] for t in trades if t.get("instrument_type") == "OPTION" and t.get("entry_qty")]
+    share_sizes = [t["entry_notional"] for t in trades if t.get("instrument_type") == "STOCK" and t.get("entry_notional")]
+    return {
+        "avg_loss": round(avg_loss, 2),
+        "typical_option_contracts": round(median(option_sizes), 2) if option_sizes else None,
+        "typical_share_notional": round(median(share_sizes), 2) if share_sizes else None,
+        "levels": levels,
+    }
 
 
 def _ticker_ranking(trades):
@@ -276,17 +304,30 @@ def _revenge_and_chase(trades):
 
 
 def _averaging_down(t):
+    """True only when an add is executed worse than the running average entry.
+
+    This is stronger evidence than comparing every add with the first fill and
+    avoids flagging harmless scaling around the same average price.
+    """
     entries = t.get("entries") or []
     if len(entries) < 2:
         return False
-    first = float(entries[0].get("price") or 0)
     side = str(t.get("side")).upper()
+    qty = float(entries[0].get("qty") or 0)
+    cost = qty * float(entries[0].get("price") or 0)
+    if qty <= 0:
+        return False
     for e in entries[1:]:
         p = float(e.get("price") or 0)
-        if side == "LONG" and p < first:
+        running_avg = cost / qty
+        if side == "LONG" and p < running_avg:
             return True
-        if side == "SHORT" and p > first:
+        if side == "SHORT" and p > running_avg:
             return True
+        add_qty = float(e.get("qty") or 0)
+        if add_qty > 0:
+            cost += add_qty * p
+            qty += add_qty
     return False
 
 
@@ -330,17 +371,18 @@ def _behavior_analysis(trades):
 
     losses = [abs(t["pnl"]) for t in trades if t["pnl"] < 0]
     threshold = mean(losses) if losses else 0
+    size_medians = _instrument_size_medians(trades)
     first_sizes, after_loss_sizes, after_loss_rows = [], [], []
     for rows in by_day.values():
         rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
-        first_sizes += [v for v in (_position_size_value(r) for r in rows[:3]) if v]
+        first_sizes += [v for v in (_size_multiple(r, size_medians) for r in rows[:3]) if v is not None]
         cum = 0.0
         for r in rows:
             cum += r["pnl"]
             if threshold and cum <= -threshold:
                 after = [x for x in rows if (x.get("entry_dt") or datetime.max) > (r.get("entry_dt") or datetime.max)]
                 after_loss_rows += after
-                after_loss_sizes += [v for v in (_position_size_value(x) for x in after) if v]
+                after_loss_sizes += [v for v in (_size_multiple(x, size_medians) for x in after) if v is not None]
                 break
 
     wins = [t["pnl"] for t in trades if t["pnl"] > 0]
@@ -394,6 +436,7 @@ def _behavior_analysis(trades):
         "overtrading": overtrade_rows,
         "tilt_escalation": {
             "loss_threshold": round(threshold, 2),
+            "size_unit": "multiple of typical size within instrument family",
             "first3_avg_size": round(mean(first_sizes), 2) if first_sizes else None,
             "post_threshold_avg_size": round(mean(after_loss_sizes), 2) if after_loss_sizes else None,
             "post_threshold_trade_count": len(after_loss_rows),
@@ -403,6 +446,7 @@ def _behavior_analysis(trades):
         "premature_exits": {
             "under_2m_winner_count": len(short_winners),
             "under_2m_winner_pnl": round(sum(r["pnl"] for r in short_winners), 2),
+            "under_2m_winner_avg_pnl": round(mean([r["pnl"] for r in short_winners]), 2) if short_winners else None,
             "avg_winner_hold_sec": round(avg_winner_hold, 1) if avg_winner_hold is not None else None,
             "left_on_table": None,
             "note": "Post-exit market data is required to quantify money left on the table.",
@@ -439,15 +483,17 @@ def build_performance_report(trades):
     option_sizes = _group_stats(options, _size_bucket, option_order)
     share_sizes = _group_stats(shares, _size_bucket, share_order)
 
-    size_vals = sorted(v for v in (_position_size_value(t) for t in rows) if v is not None)
-    typical = median(size_vals) if size_vals else None
-    small = [t for t in rows if typical is not None and (_position_size_value(t) or 0) <= typical]
-    big = [t for t in rows if typical is not None and (_position_size_value(t) or 0) > typical]
+    size_medians = _instrument_size_medians(rows)
+    for t in rows:
+        t["size_multiple"] = _size_multiple(t, size_medians)
+    small = [t for t in rows if t.get("size_multiple") is not None and t["size_multiple"] <= 1.0]
+    big = [t for t in rows if t.get("size_multiple") is not None and t["size_multiple"] > 1.0]
     cross = {
         "small_size_long_hold": _stats([t for t in small if (t.get("hold_sec") or 0) >= 300]),
         "big_size_short_hold": _stats([t for t in big if t.get("hold_sec") is not None and t["hold_sec"] < 300]),
-        "typical_size_median": round(typical, 2) if typical is not None else None,
-        "size_unit": "contracts for options; entry notional dollars for shares/futures",
+        "typical_option_contracts": round(size_medians.get("OPTION"), 2) if size_medians.get("OPTION") is not None else None,
+        "typical_share_notional": round(size_medians.get("NOTIONAL"), 2) if size_medians.get("NOTIONAL") is not None else None,
+        "size_unit": "small/big is relative to the median within its instrument family",
     }
 
     daily = _daily_rows(rows)
@@ -460,14 +506,16 @@ def build_performance_report(trades):
     last30 = _stats([t for t in rows if t.get("entry_dt") and 930 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 960])
     middle = _stats([t for t in rows if t.get("entry_dt") and 600 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 930])
 
-    normal_sizes = size_vals
-    lo = normal_sizes[max(0, int(len(normal_sizes) * .10) - 1)] if normal_sizes else None
-    hi = normal_sizes[min(len(normal_sizes) - 1, int(len(normal_sizes) * .90))] if normal_sizes else None
+    size_multiples = sorted(t["size_multiple"] for t in rows if t.get("size_multiple") is not None)
+    lo = size_multiples[max(0, int(len(size_multiples) * .10) - 1)] if size_multiples else None
+    hi = size_multiples[min(len(size_multiples) - 1, int(len(size_multiples) * .90))] if size_multiples else None
     disciplined = [
         t for t in rows
-        if (t.get("hold_sec") or 0) >= 300
-        and (lo is None or (_position_size_value(t) or 0) >= lo)
-        and (hi is None or (_position_size_value(t) or 0) <= hi)
+        if t.get("hold_sec") is not None
+        and t["hold_sec"] >= 300
+        and t.get("size_multiple") is not None
+        and (lo is None or t["size_multiple"] >= lo)
+        and (hi is None or t["size_multiple"] <= hi)
     ]
     destructive = [t for t in rows if t not in disciplined]
 
