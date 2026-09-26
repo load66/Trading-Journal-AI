@@ -217,15 +217,12 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
   const avgDay = a && a.trading_days ? Number(a.total_net_pnl || 0) / a.trading_days : null;
   const pf = k.profit_factor == null ? null : Number(k.profit_factor);
   const noLosers = pf == null && wins > 0;
-  const eff = k.exit_efficiency == null ? null : Number(k.exit_efficiency);
-  const allEff = a && a.exit_efficiency != null ? Number(a.exit_efficiency) : null;
-  const optionExcursions = Number(k.excursion_option_n || 0);
-  const stockExcursions = Number(k.excursion_stock_n || 0);
-  const effLabel = optionExcursions > 0 && stockExcursions === 0
-    ? 'Underlying exit efficiency'
-    : optionExcursions > 0
-      ? 'Directional exit efficiency'
-      : 'Exit efficiency';
+  const avgWin = Math.abs(Number(k.avg_win || 0));
+  const avgLoss = Math.abs(Number(k.avg_loss || 0));
+  const payoff = avgLoss > 0 ? avgWin / avgLoss : null;
+  const allAvgWin = a ? Math.abs(Number(a.avg_win || 0)) : 0;
+  const allAvgLoss = a ? Math.abs(Number(a.avg_loss || 0)) : 0;
+  const allPayoff = allAvgLoss > 0 ? allAvgWin / allAvgLoss : null;
   const perTrade = n ? net / n : null;
   const allExp = a && a.expectancy != null ? Number(a.expectancy) : null;
 
@@ -282,16 +279,16 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
           </>,
         },
         {
-          label: effLabel,
-          value: eff == null ? '—' : `${eff.toFixed(0)}%`,
-          amber: eff != null && allEff != null && eff < allEff,
-          read: eff == null
-            ? 'Insufficient 1-minute market data for these trades'
+          label: 'Payoff ratio',
+          value: payoff == null ? '—' : `${payoff.toFixed(2)}x`,
+          met: payoff != null && payoff >= 1,
+          tone: payoff != null && payoff < 1 ? 'neg' : undefined,
+          read: payoff == null
+            ? 'Needs at least one winning and one losing trade'
             : <>
-              Directional move captured while the trade was open.{' '}
-              {optionExcursions > 0 ? 'Options use the underlying ticker. ' : ''}
-              {allEff != null ? <>All-time {allEff.toFixed(0)}%</> : null}
-              {allEff != null ? <Delta day={eff} all={allEff} digits={0} unit="pp" /> : null}
+              Avg win {money(avgWin)} / avg loss {money(avgLoss)}
+              {allPayoff != null ? <> · All-time {allPayoff.toFixed(2)}x</> : null}
+              {allPayoff != null ? <Delta day={payoff} all={allPayoff} digits={2} unit="x" /> : null}
             </>,
         },
         {
