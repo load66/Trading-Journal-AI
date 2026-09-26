@@ -50,6 +50,23 @@ export const tradesApi = {
   deleteExecution: (id, idx) => api.delete(`/api/trades/${id}/executions/${idx}`),
 };
 
+export const riskPlanApi = {
+  get: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/risk-plan`),
+  extract: (group, formData) => api.post(
+    `/api/trades/${encodeURIComponent(group)}/risk-plan/extract`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  ),
+  apply: (group, data) => api.post(
+    `/api/trades/${encodeURIComponent(group)}/risk-plan/apply`,
+    data,
+  ),
+  getImage: (name) => api.get(
+    `/api/risk-plan-files/${encodeURIComponent(name)}`,
+    { responseType: 'blob' },
+  ),
+};
+
 export const importApi = {
   importCsv: (formData) => api.post('/api/import-csv', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
