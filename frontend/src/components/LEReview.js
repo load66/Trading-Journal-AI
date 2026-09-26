@@ -19,6 +19,13 @@ const feedLabel = (feed) => {
   return feed ? String(feed).toUpperCase() : 'Unknown';
 };
 
+const levelStatusLabel = (meta) => {
+  if (!meta) return 'UNVERIFIED';
+  const status = String(meta.status || 'UNVERIFIED').replaceAll('_', ' ');
+  const feed = feedLabel(meta.feed);
+  return `${status} · ${feed}`;
+};
+
 function EvidenceRow({ label, value, tone }) {
   if (value == null || value === '') return null;
   return (
@@ -193,6 +200,7 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
 
   const ev = review.evidence || {};
   const levels = ev.levels || {};
+  const levelMeta = ev.level_meta || {};
   const breaks = ev.level_breaks_before_entry || {};
   const proven = review.auto_tags || [];
   const ai = review.ai;
@@ -250,15 +258,24 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
         <EvidenceRow label="Entry time" value={ev.entry_time_et ? new Date(ev.entry_time_et).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' }) + ' ET' : '—'} />
         <EvidenceRow label="Broker time zone" value={ev.execution_time_zone} />
         <EvidenceRow label="Session" value={(ev.session_window || '').replaceAll('_', ' ')} />
-        <EvidenceRow label="PDH / PDL" value={`${money(levels.PDH)} / ${money(levels.PDL)}`} />
-        <EvidenceRow label="PMH / PML" value={`${money(levels.PMH)} / ${money(levels.PML)}`} />
+        <EvidenceRow label="PDH" value={`${money(levels.PDH)} · ${levelStatusLabel(levelMeta.PDH)}`} />
+        <EvidenceRow label="PDL" value={`${money(levels.PDL)} · ${levelStatusLabel(levelMeta.PDL)}`} />
+        <EvidenceRow label="PMH" value={`${money(levels.PMH)} · ${levelStatusLabel(levelMeta.PMH)}`} />
+        <EvidenceRow label="PML" value={`${money(levels.PML)} · ${levelStatusLabel(levelMeta.PML)}`} />
+        <EvidenceRow label="Official market calendar" value={ev.market_calendar_verified ? 'VERIFIED' : 'UNVERIFIED'} />
         <EvidenceRow label="Level breaks before entry" value={breakSummary} />
         <EvidenceRow label="Last completed 1m close" value={money(ev.underlying_price_last_completed_1m)} />
-        <EvidenceRow label="Last completed 10m 8 EMA" value={money(ev.ema8_10m_last_completed)} />
+        <EvidenceRow label="Last completed 10m 8 EMA" value={`${money(ev.ema8_10m_last_completed)} · ${String(ev.ema_integrity_status || 'UNVERIFIED').replaceAll('_', ' ')}`} />
         <EvidenceRow label="Distance from 8 EMA" value={pct(ev.ema_distance_pct)} tone={ev.ema_distance_pct > 1 ? 'var(--result-neg)' : undefined} />
         <EvidenceRow label="SPY vs VWAP" value={benchmark(ev.spy)} />
         <EvidenceRow label="QQQ vs VWAP" value={benchmark(ev.qqq)} />
-        <EvidenceRow label="Market Sign" value={marketSignLabel} tone={marketSignTone} />
+        <EvidenceRow
+          label="Market Sign"
+          value={ev.market_sign?.integrity_status === 'VERIFIED'
+            ? marketSignLabel
+            : `UNVERIFIED · observed ${String(ev.market_sign?.observed_status || 'unknown').toUpperCase()}`}
+          tone={ev.market_sign?.integrity_status === 'VERIFIED' ? marketSignTone : undefined}
+        />
         <EvidenceRow label="Market data feed" value={feedLabel(ev.market_data_feed?.underlying)} />
         <EvidenceRow
           label="Evidence quality"
