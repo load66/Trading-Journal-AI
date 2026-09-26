@@ -99,6 +99,11 @@ export const reportsApi = {
   get: (params) => api.get('/api/reports', { params }),
 };
 
+export const smokingGunApi = {
+  get: (params) => api.get('/api/smoking-gun-report', { params }),
+  diagnose: (params) => api.get('/api/smoking-gun-diagnosis', { params }),
+};
+
 // Settings > Library: strategy names, sources and tags. `item` is
 // { kind: 'strategy' | 'source' | 'tag', tag_type?, name, ... }.
 export const libraryApi = {

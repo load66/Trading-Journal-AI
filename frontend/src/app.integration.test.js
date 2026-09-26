@@ -168,7 +168,7 @@ test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key naviga
   fireEvent.click(within(nav()).getByRole('button', { name: 'Reports' }));
   const tablist = await screen.findByRole('tablist');
   const names = within(tablist).getAllByRole('tab').map(t => t.textContent.trim());
-  expect(names).toEqual(['Overview', 'Setups & Strategy', 'Sources & Tags', 'Timing', 'Execution', 'Symbols', 'Psychology']);
+  expect(names).toEqual(['Smoking Gun', 'Overview', 'Setups & Strategy', 'Sources & Tags', 'Timing', 'Execution', 'Symbols', 'Psychology']);
   const overview = within(tablist).getByRole('tab', { name: 'Overview' });
   expect(overview).toHaveAttribute('aria-selected', 'true');
   fireEvent.keyDown(overview, { key: 'ArrowRight' });

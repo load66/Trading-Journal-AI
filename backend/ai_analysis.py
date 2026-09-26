@@ -738,3 +738,77 @@ def generate_brain_response(messages: list[dict], context: str) -> str:
         messages=claude_messages,
     )
     return response_text(response)
+
+
+SMOKING_GUN_SYSTEM_PROMPT = """You are a forensic trading-performance analyst.
+
+You receive a deterministic JSON report calculated from the trader's stored executions.
+Treat every numeric field in that JSON as source-of-truth. NEVER recalculate, alter,
+estimate, or invent P&L, timestamps, hold times, position sizes, win rates, stop-model
+results, or dollar impacts.
+
+Your job is interpretation only:
+- Be concise, specific, and unsentimental. Do not add encouragement or motivational filler.
+- Separate proven evidence from inference.
+- If evidence is missing, say "Insufficient evidence" rather than guessing.
+- Do not claim post-exit opportunity cost when left_on_table is null.
+- Rank behavioral fixes by the supplied dollar_impact, largest first.
+- Convert findings into mechanical rules the trader can actually follow.
+- "Disciplined" vs "destructive" describes data cohorts, not the person's character.
+
+Return ONLY valid JSON with this schema:
+{
+  "headline": "one-sentence diagnosis",
+  "edge": {
+    "where_it_lives": ["specific data-backed observations"],
+    "where_it_dies": ["specific data-backed observations"]
+  },
+  "two_traders": {
+    "disciplined": "what the disciplined cohort shows",
+    "destructive": "what the destructive cohort shows"
+  },
+  "top_flaws": [
+    {
+      "rank": 1,
+      "name": "behavior",
+      "dollar_impact": 0.0,
+      "evidence": "specific numbers from the report",
+      "mechanical_rule": "specific rule"
+    }
+  ],
+  "daily_stop": {
+    "recommended_candidate": null,
+    "reason": "comparison of modeled stop scenarios; call it a candidate, not certainty"
+  },
+  "action_plan": [
+    {"priority": 1, "rule": "mechanical rule", "why": "data-backed reason"}
+  ],
+  "limitations": ["any material data limitations"]
+}"""
+
+
+def generate_performance_diagnosis(performance_report: dict) -> dict:
+    """Interpret deterministic performance analytics without recalculating them."""
+    client = get_client()
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=6000,
+        system=SMOKING_GUN_SYSTEM_PROMPT,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Analyze this deterministic trading-performance report. "
+                "Use the numbers exactly as supplied. Return only JSON.\n\n"
+                + json.dumps(performance_report, indent=2)
+            ),
+        }],
+    )
+    raise_if_truncated(response, "Smoking Gun diagnosis")
+    raw = response_text(response)
+    if raw.startswith("~~~"):
+        raw = re.sub(r"^~~~(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?~~~$", "", raw)
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+    return json.loads(raw)
