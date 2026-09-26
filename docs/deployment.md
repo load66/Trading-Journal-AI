@@ -22,10 +22,10 @@ Create a Supabase project.
 4. Create a private Storage bucket named `diary`.
 5. Record:
    - project URL -> `SUPABASE_URL`
-   - browser publishable/anon key -> GitHub variable `REACT_APP_SUPABASE_PUBLISHABLE_KEY`
-   - service-role key -> Render secret `SUPABASE_SERVICE_ROLE_KEY`
+   - browser publishable key -> GitHub variable `REACT_APP_SUPABASE_PUBLISHABLE_KEY`
+   - secret key -> Render secret `SUPABASE_SECRET_KEY`
 
-The service-role key is a server secret. Never place it in GitHub Pages variables or any `REACT_APP_*` value.
+The secret key is a server secret. Never place it in GitHub Pages variables or any `REACT_APP_*` value.
 
 ## 2. Turso
 
@@ -46,7 +46,7 @@ Set the secret values requested by the Blueprint:
 - `AUTHORIZED_USER_ID`
 - `TURSO_DATABASE_URL`
 - `TURSO_AUTH_TOKEN`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SECRET_KEY`
 - `ANTHROPIC_API_KEY` if Brain/AI features are wanted
 - `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` if market charts are wanted
 
@@ -62,7 +62,7 @@ In repository Actions variables, set these public build-time values:
 - `REACT_APP_SUPABASE_URL` = Supabase project URL
 - `REACT_APP_SUPABASE_PUBLISHABLE_KEY` = Supabase browser publishable/anon key
 
-These three values are intentionally browser-visible. Never use service-role, Turso, Anthropic, Alpaca-secret, or password values here.
+These three values are intentionally browser-visible. Never use secret, Turso, Anthropic, Alpaca-secret, or password values here.
 
 ## 5. GitHub Pages
 
