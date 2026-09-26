@@ -517,6 +517,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         idea_source: statsForm.idea_source || null,
         stop_loss: toNum(statsForm.stop_loss),
         target_price: toNum(statsForm.target_price),
+        risk_per_trade: toNum(statsForm.risk_per_trade),
+        risk_reward: toNum(statsForm.risk_reward),
         emotional_state: statsForm.emotional_state || null,
       });
       setAnalysis(res.data);
@@ -680,10 +682,14 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
   const pnl = trade.net_pnl ?? 0;
 
-  const riskPerShare = analysis?.stop_loss && stats.avgEntry
+  const canDeriveStopRisk = !trade.instrument_type || trade.instrument_type === 'STOCK';
+  const riskPerShare = canDeriveStopRisk && analysis?.stop_loss && stats.avgEntry
     ? Math.abs(stats.avgEntry - analysis.stop_loss) : null;
-  const tradeRisk = riskPerShare && stats.totalQty
-    ? -(riskPerShare * stats.totalQty) : analysis?.risk_per_trade ? -Math.abs(analysis.risk_per_trade) : null;
+  const tradeRisk = analysis?.risk_per_trade
+    ? -Math.abs(analysis.risk_per_trade)
+    : riskPerShare && stats.totalQty
+      ? -(riskPerShare * stats.totalQty)
+      : null;
   const plannedR  = analysis?.risk_reward ? `${Number(analysis.risk_reward).toFixed(2)}R` : null;
   const realizedR = analysis?.r_multiple != null ? `${Number(analysis.r_multiple).toFixed(2)}R` : null;
 
@@ -834,6 +840,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                           idea_source: analysis?.idea_source || 'Watchlist',
                           stop_loss: analysis?.stop_loss ?? '',
                           target_price: analysis?.target_price ?? '',
+                          risk_per_trade: analysis?.risk_per_trade ?? '',
+                          risk_reward: analysis?.risk_reward ?? '',
                           emotional_state: analysis?.emotional_state || '',
                         });
                         setEditingStats(true);
@@ -887,6 +895,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     </div>
                     <EditField label="Stop Loss ($)" type="number" value={String(statsForm.stop_loss)} onChange={v => setStatsForm(f => ({ ...f, stop_loss: v }))} />
                     <EditField label="Profit Target ($)" type="number" value={String(statsForm.target_price)} onChange={v => setStatsForm(f => ({ ...f, target_price: v }))} />
+                    <EditField label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
+                    <EditField label="Planned R:R" type="number" value={String(statsForm.risk_reward)} onChange={v => setStatsForm(f => ({ ...f, risk_reward: v }))} />
                     <EditField label="Emotional State" value={statsForm.emotional_state} onChange={v => setStatsForm(f => ({ ...f, emotional_state: v }))} options={EMOTIONAL_STATES} />
                   </div>
                 ) : analysis && (
