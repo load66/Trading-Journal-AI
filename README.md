@@ -286,3 +286,11 @@ use, ever.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Private web deployment
+
+This fork includes an optional free-first hosted architecture: GitHub Pages for the React frontend, a stateless Render FastAPI service, Turso for persistent trading data, and Supabase for owner authentication/private diary files.
+
+The default remains the original local-first workflow. Hosted production is fail-closed and requires explicit cloud configuration; it will not silently fall back to an unprotected local database or local file storage.
+
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for provisioning, security, migration, verification, and rollback instructions.
