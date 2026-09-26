@@ -7,7 +7,8 @@ import { PageHeader } from './ui';
 // 'auto' lets the server sniff the format from the file's first lines.
 const BROKERS = [
   { value: 'auto', label: 'Auto-detect' },
-  { value: 'thinkorswim', label: 'Thinkorswim (Schwab)' },
+  { value: 'thinkorswim', label: 'Thinkorswim Account Statement' },
+  { value: 'schwab_transactions', label: 'Schwab Transaction History' },
   { value: 'ibkr', label: 'Interactive Brokers (IBKR)' },
   { value: 'generic', label: 'Other broker (generic template)' },
 ];
@@ -18,7 +19,8 @@ const EXAMPLE_URL = '/templates/generic_trades_example.csv';
 
 const BROKER_HELP = {
   auto: 'Pick a broker above, or leave Auto-detect and the importer will recognise a Thinkorswim account statement or an IBKR Activity Statement.',
-  thinkorswim: <>Export from Thinkorswim desktop: <em>Monitor → Account Statement → export icon → Export to File (CSV)</em></>,
+  thinkorswim: <>Export from Thinkorswim desktop: <em>Monitor → Account Statement → export icon → Export to File (CSV)</em>.</>,
+  schwab_transactions: <>Schwab transaction-history CSV with Date, Type, Description, Ref Num, fees, Amount and Balance. These exports have minute-level timestamps.</>,
   ibkr: <>Export from IBKR Client Portal: <em>Performance &amp; Reports → Statements → Activity → pick the period → Download as CSV</em></>,
   generic: <>Copy your fills into the template, one row per execution. Buys and sells of the same symbol are grouped into round-trip trades automatically, the same way as a broker import.</>,
 };
@@ -26,6 +28,7 @@ const BROKER_HELP = {
 const BROKER_DROP_LABEL = {
   auto: 'Drop your broker CSV (Thinkorswim or IBKR)',
   thinkorswim: 'Drop Thinkorswim account statement CSV',
+  schwab_transactions: 'Drop Schwab transaction-history CSV',
   ibkr: 'Drop IBKR Activity Statement CSV',
   generic: 'Drop your filled-in generic template CSV',
 };
@@ -165,6 +168,7 @@ export default function Import({ accounts, accountId }) {
   const [importing, setImporting] = useState(false);
   const [csvResult, setCsvResult] = useState(null);
   const [csvError, setCsvError] = useState(null);
+  const [reconcileCsv, setReconcileCsv] = useState(false);
 
   // Diary upload state
   const [diaryFile, setDiaryFile] = useState(null);
@@ -186,6 +190,7 @@ export default function Import({ accounts, accountId }) {
     fd.append('file', csvFile);
     fd.append('account_id', csvAccountId);
     fd.append('broker', csvBroker);
+    fd.append('reconcile', reconcileCsv ? 'true' : 'false');
     try {
       const res = await importApi.importCsv(fd);
       setCsvResult(res.data);
@@ -287,6 +292,32 @@ export default function Import({ accounts, accountId }) {
           >
             {importing ? <><span className="spinner" style={{ width: 16, height: 16 }} /> Importing...</> : <><Upload size={16} /> Import Trades</>}
           </button>
+
+          <label
+            style={{
+              marginTop: 12,
+              display: 'flex',
+              gap: 9,
+              alignItems: 'flex-start',
+              fontSize: 13,
+              color: 'var(--text-secondary)',
+              lineHeight: 1.45,
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={reconcileCsv}
+              onChange={e => setReconcileCsv(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              <strong style={{ color: 'var(--text-primary)' }}>Authoritative reconcile</strong>
+              {' '}— for a complete broker re-export. Replace imported trades covered by this
+              file and rebuild them from the broker executions. Manual/edited trades are protected,
+              and the import stops instead of guessing if journal annotations would become detached.
+            </span>
+          </label>
 
           {csvResult && (
             <div className="notice pos" role="status" style={{ marginTop: 12 }}>

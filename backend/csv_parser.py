@@ -2,6 +2,7 @@ import re
 import json
 import csv
 import io
+from collections import Counter
 from datetime import datetime
 
 
@@ -423,17 +424,23 @@ def aggregate_executions(fills: list[dict]) -> dict:
         gross_pnl = sum(f.get('amount', 0.0) for f in fills)
         net_pnl = gross_pnl - commissions
 
-    # Serialize executions (drop 'amount' internal field, keep display fields)
+    # Serialize executions. Preserve broker identity/provenance when available
+    # so later re-imports can match the same fill even if timestamp precision differs.
     execs = []
     for f in fills:
-        execs.append({
+        item = {
             'date': f.get('iso_date', f.get('date', '')),
             'time': f.get('time', ''),
             'action': f.get('action', ''),
             'qty': f.get('qty', 0),
             'price': f.get('price', 0.0),
             'commission': f.get('commission', 0.0),
-        })
+        }
+        if f.get('source_ref'):
+            item['source_ref'] = str(f.get('source_ref'))
+        if f.get('timestamp_precision'):
+            item['timestamp_precision'] = f.get('timestamp_precision')
+        execs.append(item)
 
     return {
         'side': side,
@@ -515,6 +522,96 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
     return executions
 
 
+
+def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """Parse Schwab transaction-history CSV exports.
+
+    Format:
+      index,Date,Type,Description,Ref Num,Misc Fees,Commissions,Amount,Balance
+
+    The Date column carries only minute precision (for example
+    "9/25/26 10:11 AM"). The importer stores ":00" seconds and explicitly marks
+    timestamp_precision="minute"; it never invents sub-minute timing.
+    """
+    rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
+    header_idx = None
+    col = {}
+
+    def norm_header(value: str) -> str:
+        return re.sub(r'[^A-Z0-9]+', ' ', value.strip().upper()).strip()
+
+    for i, row in enumerate(rows[:20]):
+        normalized = [norm_header(x) for x in row]
+        if 'DATE' in normalized and 'DESCRIPTION' in normalized and 'AMOUNT' in normalized:
+            header_idx = i
+            col = {name: j for j, name in enumerate(normalized)}
+            break
+
+    if header_idx is None:
+        raise ValueError("Schwab transaction-history header was not found.")
+
+    def cell(row, *names):
+        for name in names:
+            idx = col.get(name)
+            if idx is not None and idx < len(row):
+                return row[idx].strip()
+        return ''
+
+    executions = []
+    problems = []
+
+    for line_no, row in enumerate(rows[header_idx + 1:], start=header_idx + 2):
+        if not any(x.strip() for x in row):
+            continue
+        if cell(row, 'TYPE').upper() != 'TRD':
+            continue
+
+        dt_text = cell(row, 'DATE')
+        parsed_dt = None
+        for fmt in ('%m/%d/%y %I:%M %p', '%m/%d/%Y %I:%M %p'):
+            try:
+                parsed_dt = datetime.strptime(dt_text, fmt)
+                break
+            except ValueError:
+                pass
+        if parsed_dt is None:
+            problems.append(f"line {line_no}: unsupported Schwab timestamp '{dt_text}'")
+            continue
+
+        desc = cell(row, 'DESCRIPTION').strip('"')
+        parsed = parse_cash_description(desc)
+        if not parsed:
+            problems.append(f"line {line_no}: trade description could not be parsed: {desc}")
+            continue
+
+        misc_fees = clean_amount(cell(row, 'MISC FEES'))
+        commissions = clean_amount(cell(row, 'COMMISSIONS', 'COMMISSIONS FEES'))
+        amount = clean_amount(cell(row, 'AMOUNT'))
+        source_ref = cell(row, 'REF NUM', 'REF')
+
+        parsed.update({
+            'date': f"{parsed_dt.month}/{parsed_dt.day}/{str(parsed_dt.year)[2:]}",
+            'iso_date': parsed_dt.strftime('%Y-%m-%d'),
+            'time': parsed_dt.strftime('%H:%M:00'),
+            'amount': amount,
+            'commission': abs(misc_fees) + abs(commissions),
+            'raw_description': desc,
+            'source_ref': source_ref,
+            'timestamp_precision': 'minute',
+        })
+        executions.append(parsed)
+
+    if problems:
+        more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ''
+        raise ValueError(
+            f"{len(problems)} Schwab trade row(s) could not be read, so nothing was imported{more}. "
+            + " | ".join(problems[:8])
+        )
+    if not executions:
+        raise ValueError("The Schwab transaction-history CSV contains no trade rows.")
+
+    return build_trades_from_executions(executions, account_id, conn)
+
 def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
     """
     Parse rows from the Futures Statements section.
@@ -575,31 +672,76 @@ def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
     return executions
 
 
+def _identity_num(value) -> str:
+    try:
+        return f"{float(value):.8f}".rstrip('0').rstrip('.')
+    except (TypeError, ValueError):
+        return str(value or '')
+
+
+def _minute_time(value) -> str:
+    """Normalize HH:MM:SS and HH:MM to the broker-guaranteed minute."""
+    raw = str(value or '').strip()
+    match = re.search(r'(\d{1,2}):(\d{2})', raw)
+    if not match:
+        return raw
+    return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+
 def execution_fingerprint(exec_dict: dict) -> str:
-    """Create a unique key for duplicate detection. Uses iso_date so it matches stored executions."""
+    """Contract-aware fill identity for idempotent re-imports.
+
+    We deliberately normalize time to the minute because Schwab transaction
+    history guarantees only minute precision. Multiplicity is preserved by a
+    Counter, so two legitimate identical split fills in the same minute remain
+    two fills rather than collapsing into one.
+    """
     date = exec_dict.get('iso_date') or exec_dict.get('date', '')
-    return f"{date}|{exec_dict.get('time','')}|{exec_dict.get('ticker','')}|{exec_dict.get('action','')}|{exec_dict.get('qty','')}|{exec_dict.get('price','')}"
+    return '|'.join([
+        str(date),
+        _minute_time(exec_dict.get('time', '')),
+        str(exec_dict.get('ticker', '')).upper(),
+        str(exec_dict.get('instrument_type', 'STOCK')).upper(),
+        str(exec_dict.get('option_expiry') or ''),
+        _identity_num(exec_dict.get('option_strike')),
+        str(exec_dict.get('option_type') or '').upper(),
+        str(exec_dict.get('action') or '').upper(),
+        _identity_num(exec_dict.get('qty')),
+        _identity_num(exec_dict.get('price')),
+    ])
 
 
-def get_existing_fingerprints(conn, account_id: int) -> set[str]:
-    """Load all existing execution fingerprints for an account.
-    Reads ticker from the trade row (not stored in executions JSON) to match execution_fingerprint format.
+def get_existing_fingerprints(conn, account_id: int) -> Counter:
+    """Load stored execution identities as a multiset.
+
+    Contract metadata lives on the trade row, while the serialized execution
+    supplies date/time/action/qty/price. Using a Counter preserves legitimate
+    repeated fills and makes a second import exactly idempotent.
     """
     cursor = conn.execute(
-        "SELECT ticker, executions FROM trades WHERE account_id = ?", (account_id,)
+        """SELECT ticker, instrument_type, option_expiry, option_strike,
+                  option_type, executions
+           FROM trades WHERE account_id = ?""",
+        (account_id,),
     )
-    fingerprints = set()
+    fingerprints = Counter()
     for row in cursor:
-        ticker = row[0] or ''
         try:
-            execs = json.loads(row[1] or '[]')
-            for e in execs:
-                fp = f"{e.get('date','')}|{e.get('time','')}|{ticker}|{e.get('action','')}|{e.get('qty','')}|{e.get('price','')}"
-                fingerprints.add(fp)
+            ticker, instrument, expiry, strike, option_type, raw_execs = row
+            for execution in json.loads(raw_execs or '[]'):
+                payload = {
+                    **execution,
+                    'ticker': ticker or '',
+                    'instrument_type': instrument or 'STOCK',
+                    'option_expiry': expiry,
+                    'option_strike': strike,
+                    'option_type': option_type,
+                    'iso_date': execution.get('date', ''),
+                }
+                fingerprints[execution_fingerprint(payload)] += 1
         except Exception:
-            pass
+            continue
     return fingerprints
-
 
 def _make_group_meta(date_str: str, ticker: str, instr: str, fills: list[dict]) -> dict:
     return {
@@ -613,6 +755,14 @@ def _make_group_meta(date_str: str, ticker: str, instr: str, fills: list[dict]) 
     }
 
 
+def _source_sequence(ex: dict):
+    """Broker sequence used only to order fills that share the same minute."""
+    raw = str(ex.get('source_ref') or '').strip()
+    if raw.isdigit():
+        return (0, int(raw))
+    return (1, raw)
+
+
 def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
     """
     Group executions into trades based on position open/close cycles.
@@ -624,7 +774,11 @@ def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
     # Sort all fills chronologically so multi-day positions process in order
     executions_sorted = sorted(
         executions,
-        key=lambda ex: (ex.get('iso_date', ex['date']), ex.get('time', ''))
+        key=lambda ex: (
+            ex.get('iso_date', ex['date']),
+            _minute_time(ex.get('time', '')),
+            _source_sequence(ex),
+        ),
     )
 
     # Key by (ticker, instrument_type) — no date — so multi-day trades stay together.
@@ -884,17 +1038,16 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
 
     # DB-level dedup only — never dedupe within same file (Thinkorswim legitimately
     # emits identical time/price/qty fills for large split orders)
-    existing_fps = get_existing_fingerprints(conn, account_id) if conn else set()
+    existing_fps = get_existing_fingerprints(conn, account_id) if conn else Counter()
     skipped = 0
     unique_executions = []
     for exec_dict in all_executions:
         fp = execution_fingerprint(exec_dict)
-        if fp in existing_fps:
+        if existing_fps.get(fp, 0) > 0:
+            existing_fps[fp] -= 1
             skipped += 1
         else:
-            # Enrich with ticker/date for serialization
-            exec_copy = dict(exec_dict)
-            unique_executions.append(exec_copy)
+            unique_executions.append(dict(exec_dict))
 
     # Merge new fills into existing open OPTION positions from DB.
     # Options use a specific contract key (expiry/strike/type) so the match is unambiguous.
@@ -1469,12 +1622,14 @@ def parse_generic_csv(content, account_id, conn=None):
 
 BROKER_PARSERS = {
     'thinkorswim': parse_thinkorswim_csv,
+    'schwab_transactions': parse_schwab_transactions_csv,
     'ibkr': parse_ibkr_csv,
     'generic': parse_generic_csv,
 }
 
 BROKER_LABELS = {
-    'thinkorswim': 'Thinkorswim',
+    'thinkorswim': 'Thinkorswim account statement',
+    'schwab_transactions': 'Schwab transaction history',
     'ibkr': 'Interactive Brokers',
     'generic': 'the generic template',
 }
@@ -1490,6 +1645,18 @@ def detect_broker(content: str) -> str | None:
     if 'DataDiscriminator' in content and re.search(r'^[\w /&-]+,(Header|Data),', head, re.MULTILINE):
         return 'ibkr'
     upper = head.upper()
+    first_csv = next(
+        (row for row in csv.reader(io.StringIO(head)) if any(x.strip() for x in row)),
+        [],
+    )
+    normalized_header = {
+        re.sub(r'[^A-Z0-9]+', ' ', x.strip().upper()).strip()
+        for x in first_csv
+    }
+    if {'DATE', 'DESCRIPTION', 'AMOUNT'}.issubset(normalized_header) and (
+        'REF NUM' in normalized_header or 'REF' in normalized_header
+    ):
+        return 'schwab_transactions'
     if ('CASH BALANCE' in upper or 'ACCOUNT STATEMENT' in upper
             or 'ACCOUNT TRADE HISTORY' in upper or 'FUTURES STATEMENTS' in upper):
         return 'thinkorswim'
@@ -1514,8 +1681,8 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> t
         if not detected:
             raise ValueError(
                 "Could not recognise this CSV. Pick the broker from the dropdown, "
-                "export an account statement from Thinkorswim or an Activity "
-                "Statement from Interactive Brokers, or copy your fills into the "
+                "export a Thinkorswim account statement, Schwab transaction-history CSV, "
+                "or IBKR Activity Statement, or copy your fills into the "
                 "generic template (Import page, 'Broker not listed?')."
             )
         key = detected
