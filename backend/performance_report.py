@@ -249,17 +249,20 @@ def _revenge_and_chase(trades):
     chase = []
     for _, rows in by_day_ticker.items():
         rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
-        loss_seen = 0
+        has_loss = False
+        reentry_depth = 0
         prev = None
         for r in rows:
-            if prev and prev["pnl"] < 0:
-                loss_seen += 1
-                depth = "1st re-entry" if loss_seen == 1 else "2nd re-entry" if loss_seen == 2 else "3rd+ re-entry"
+            if has_loss:
+                reentry_depth += 1
+                depth = "1st re-entry" if reentry_depth == 1 else "2nd re-entry" if reentry_depth == 2 else "3rd+ re-entry"
                 revenge[depth].append(r)
             if prev and prev.get("exit_dt") and r.get("entry_dt"):
                 gap = (r["entry_dt"] - prev["exit_dt"]).total_seconds()
                 if 0 <= gap <= 30:
                     chase.append(r)
+            if r["pnl"] < 0:
+                has_loss = True
             prev = r
     return (
         [{"depth": k, **_stats(v)} for k, v in revenge.items()],
