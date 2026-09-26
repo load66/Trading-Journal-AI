@@ -53,6 +53,88 @@ jest.mock('./api', () => {
       filters: {}, is_stale: false, stale_reason: null, status: 'complete',
     },
   ];
+  const SMOKING_GUN_DETAIL = {
+    ...SMOKING_GUN_REPORTS[0],
+    analytics_engine_version: '2026.09.26.1',
+    behavior_version: '2026.09.26.1',
+    data_fingerprint: 'a'.repeat(64),
+    source_metrics: {
+      meta: { timestamp_coverage: 100, behavior_counterfactual_note: 'Impacts overlap.' },
+      scoreboard: {
+        net_pnl: 4340.34, gross_pnl: 5485, fees: 1144.66, win_rate: 52.9,
+        profit_factor: 1.36, avg_winner: 160.78, avg_loser: 132.21,
+        reward_risk: 1.22, max_drawdown: -1626.32, active_days: 28,
+        best_day: { date: '2026-09-03', pnl: 746.06 },
+        worst_day: { date: '2026-09-09', pnl: -1626.32 },
+      },
+      two_traders: {
+        disciplined: { trade_count: 136, total_pnl: 5108.85, win_rate: 56.6, avg_pnl: 37.57 },
+        destructive: { trade_count: 55, total_pnl: -768.51, win_rate: 43.6, avg_pnl: -13.97 },
+      },
+      hold_time: [
+        { bucket: 'Under 30 sec', trade_count: 1, total_pnl: -10.03, win_rate: 0, avg_pnl: -10.03 },
+        { bucket: '20-30min', trade_count: 15, total_pnl: 1136.68, win_rate: 73.3, avg_pnl: 75.78 },
+      ],
+      position_size: {
+        options: [
+          { bucket: '1-3', trade_count: 89, total_pnl: 1516.50, win_rate: 48.3, avg_pnl: 17.04 },
+          { bucket: '11-15', trade_count: 4, total_pnl: -25.41, win_rate: 50, avg_pnl: -6.35 },
+        ],
+        shares_by_notional: [],
+        cross_reference: {
+          small_size_long_hold: { trade_count: 29, total_pnl: 2179.93, win_rate: 65.5, avg_pnl: 75.17 },
+          big_size_short_hold: { trade_count: 1, total_pnl: -203.61, win_rate: 0, avg_pnl: -203.61 },
+        },
+      },
+      daily_pnl: [
+        { date: '2026-09-09', options_pnl: -1626.32, shares_pnl: 0, futures_pnl: 0, total_pnl: -1626.32, running_total: 2847.13, trade_count: 7, blow_up: true },
+      ],
+      daily_stop_model: {
+        avg_loss: 132.21,
+        levels: [{ stop: 500, adjusted_pnl: 5241.40, actual_pnl: 4340.34, saved: 901.06, breach_count: 3, breaches: [] }],
+      },
+      ticker_ranking: [
+        { ticker: 'META', trade_count: 14, total_pnl: 1774.61, win_rate: 71.4, dollars_per_trade: 126.76, label: 'EDGE', sample_quality: 'established' },
+        { ticker: 'GLD', trade_count: 4, total_pnl: 588.37, win_rate: 100, dollars_per_trade: 147.09, label: 'MARGINAL', sample_quality: 'thin' },
+      ],
+      behavior: {
+        ranked_flaws: [
+          { name: 'Averaging down / adding to losers', trade_count: 12, pnl: -1335.79, dollar_impact: 1335.79, pnl_if_eliminated: 5676.13, evidence: 'Confirmed leak' },
+        ],
+        evidence: [
+          { name: 'Revenge re-entry', trade_count: 23, pnl: 546.27, evidence_status: 'Not supported as a leak' },
+        ],
+        averaging_down: {
+          averaged_down: { trade_count: 12, total_pnl: -1335.79, win_rate: 33.3, avg_pnl: -111.32 },
+          clean_entries: { trade_count: 124, total_pnl: 2926.90, win_rate: 52.4, avg_pnl: 23.60 },
+        },
+      },
+      time_analysis: {
+        first_10_minutes: { trade_count: 7, total_pnl: -480.28, win_rate: 28.6, avg_pnl: -68.61 },
+        rest_of_day: { trade_count: 184, total_pnl: 4820.62, win_rate: 53.8, avg_pnl: 26.20 },
+        half_hour_blocks: [{ bucket: '08:30', trade_count: 28, total_pnl: 623.49, win_rate: 46.4, avg_pnl: 22.27 }],
+        day_of_week: [{ bucket: 'Thu', trade_count: 47, total_pnl: 2118, win_rate: 60, avg_pnl: 45.06 }],
+      },
+      projections: {
+        proven_daily_edge: 182.46,
+        rates: [{ rate: 1, daily_edge: 182.46, remaining_weekdays: 67, gross_earnings: 12224.75, current_drawdown: -133.11, net_after_current_drawdown: 12091.64, months_to_recover: 0.04 }],
+      },
+      trade_ledger: [],
+    },
+    diagnosis: {
+      headline: 'Patience is the edge; averaging down is the clearest leak.',
+      edge: {
+        where_it_lives: ['20+ minute holds with controlled size.'],
+        where_it_dies: ['Averaging down and micro-scalping.'],
+      },
+      limitations: ['Post-exit opportunity cost is not available without market data.'],
+    },
+    action_plan: [
+      { priority: 1, rule: 'No averaging down on long options.', why: 'Observed cohort lost $1,335.79.' },
+      { priority: 2, rule: 'Test a $500 daily stop prospectively.', why: 'Best in-sample modeled candidate.' },
+    ],
+  };
+
   const LIBRARY = {
     strategies: [
       { name: 'VWAP Cross', description: 'Reclaim of VWAP', trades: 10, aliases: [], },
@@ -102,7 +184,7 @@ jest.mock('./api', () => {
     smokingGunApi: withDefault({ get: fn(() => ok({ has_data: false })), diagnose: fn(() => ok({ diagnosis: null })) }),
     smokingGunLibraryApi: withDefault({
       list: fn(() => ok(SMOKING_GUN_REPORTS)),
-      get: fn(() => ok({})),
+      get: fn(() => ok(SMOKING_GUN_DETAIL)),
       remove: fn(() => ok({})),
       downloadHtml: fn(() => ok(new Blob(['html'], { type: 'text/html' }))),
       downloadLedger: fn(() => ok(new Blob(['csv'], { type: 'text/csv' }))),
@@ -258,6 +340,59 @@ test('Smoking Gun library requires explicit delete confirmation', async () => {
   expect(within(card).getByText(/Delete this saved snapshot/i)).toBeInTheDocument();
   expect(within(card).getByRole('button', { name: 'Confirm delete' })).toBeInTheDocument();
   expect(smokingGunLibraryApi.remove).not.toHaveBeenCalled();
+});
+
+
+test('Smoking Gun saved report renders professional evidence hierarchy and accessibility', async () => {
+  await renderApp();
+  const subnav = await openSmokingGun();
+  fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
+  const card = await screen.findByRole('article', { name: 'Smoking Gun report: September Smoking Gun' });
+  fireEvent.click(within(card).getByRole('button', { name: 'Open Report' }));
+
+  const terminal = await screen.findByRole('region', { name: 'Saved Smoking Gun report' });
+  const topHeadings = within(terminal).getAllByRole('heading', { level: 1 });
+  expect(topHeadings).toHaveLength(1);
+  expect(topHeadings[0]).toHaveTextContent('September Smoking Gun');
+
+  const sections = within(terminal).getAllByRole('heading', { level: 2 }).map((h) => h.textContent.trim());
+  expect(sections).toEqual([
+    'Command Header',
+    'Executive Scoreboard',
+    'Two Traders',
+    'Edge Map / Hold Time',
+    'Position Size',
+    'Daily P&L',
+    'Daily Stop Lab',
+    'Ticker Ranking',
+    'Behavioral Forensics',
+    'Time Analysis',
+    'Scenario Model',
+    'Diagnosis',
+    'Mechanical Action Plan',
+  ]);
+
+  expect(within(terminal).getByText('SOURCE CHANGED')).toBeVisible();
+  expect(within(terminal).getByText('Not supported as a leak')).toBeVisible();
+  expect(within(terminal).getByText('thin')).toBeVisible();
+  expect(within(terminal).getByRole('button', { name: 'Back to Report Library' })).toBeVisible();
+  expect(within(terminal).getByRole('button', { name: 'Download HTML' })).toBeVisible();
+  expect(within(terminal).getByRole('button', { name: 'Download Trade Ledger' })).toBeVisible();
+});
+
+test('Smoking Gun saved report back navigation preserves the loaded library state', async () => {
+  await renderApp();
+  const subnav = await openSmokingGun();
+  fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
+  const card = await screen.findByRole('article', { name: 'Smoking Gun report: September Smoking Gun' });
+  expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(1);
+  fireEvent.click(within(card).getByRole('button', { name: 'Open Report' }));
+  const terminal = await screen.findByRole('region', { name: 'Saved Smoking Gun report' });
+  fireEvent.click(within(terminal).getByRole('button', { name: 'Back to Report Library' }));
+
+  expect(await screen.findByRole('article', { name: 'Smoking Gun report: September Smoking Gun' })).toBeVisible();
+  expect(screen.getByRole('article', { name: 'Smoking Gun report: August Smoking Gun' })).toBeVisible();
+  expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(1);
 });
 
 test('Trade View opens Trade Details with all five tabs, back and previous/next', async () => {
