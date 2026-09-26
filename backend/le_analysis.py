@@ -11,6 +11,8 @@ import httpx
 
 LE_RULESET_VERSION = "LE_2026_09_v1"
 ET = ZoneInfo("America/New_York")
+EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
+EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
@@ -91,7 +93,8 @@ def entry_datetime(trade: dict) -> datetime | None:
         if not day or not clock:
             continue
         try:
-            candidates.append(datetime.fromisoformat(f"{day}T{clock}").replace(tzinfo=ET))
+            source_dt = datetime.fromisoformat(f"{day}T{clock}").replace(tzinfo=EXECUTION_TZ)
+            candidates.append(source_dt.astimezone(ET))
         except ValueError:
             continue
     return min(candidates) if candidates else None
@@ -156,8 +159,12 @@ def _ema(values: list[float], period: int = 8) -> float | None:
     return result
 
 
-def _last_bar_at_or_before(bars: list[dict], when: datetime) -> dict | None:
-    eligible = [b for b in bars if _bar_dt(b) <= when]
+def _last_completed_1m_bar(bars: list[dict], when: datetime) -> dict | None:
+    """Return only a fully closed one-minute bar to avoid intraminute lookahead."""
+    eligible = [
+        b for b in bars
+        if _bar_dt(b) + timedelta(minutes=1) <= when
+    ]
     return max(eligible, key=_bar_dt) if eligible else None
 
 
@@ -200,7 +207,7 @@ def _benchmark_snapshot(bars: list[dict], entry_dt: datetime) -> dict:
     bars_10m = _aggregate_10m(bars)
     completed = [b for b in bars_10m if b["end"] <= entry_dt]
     ema8 = _ema([b["c"] for b in completed])
-    last_bar = _last_bar_at_or_before(bars, entry_dt)
+    last_bar = _last_completed_1m_bar(bars, entry_dt)
     price = float(last_bar["c"]) if last_bar else None
     return {
         "price": price,
@@ -260,7 +267,7 @@ def analyze_context(
     bars_10m = _aggregate_10m(underlying_bars)
     completed_before_entry = [b for b in bars_10m if b["end"] <= entry_dt]
     ema8 = _ema([b["c"] for b in completed_before_entry])
-    entry_bar = _last_bar_at_or_before(current_to_entry, entry_dt)
+    entry_bar = _last_completed_1m_bar(current_to_entry, entry_dt)
     underlying_price = float(entry_bar["c"]) if entry_bar else None
     ema_distance_pct = (
         abs(underlying_price - ema8) / ema8 * 100
@@ -387,6 +394,7 @@ def analyze_context(
         "underlying": trade.get("ticker"),
         "direction": direction,
         "entry_time_et": entry_dt.isoformat(),
+        "execution_time_zone": EXECUTION_TIMEZONE_NAME,
         "session_window": _session_window(entry_dt),
         "previous_rth_date": previous_day.isoformat() if previous_day else None,
         "levels": {"PDH": pdh, "PDL": pdl, "PMH": pmh, "PML": pml},
@@ -397,7 +405,7 @@ def analyze_context(
         "outside_day": outside_day,
         "inside_day": inside_day,
         "inside_premarket_range_at_entry": inside_premarket_range,
-        "underlying_price_at_entry": underlying_price,
+        "underlying_price_last_completed_1m": underlying_price,
         "ema8_10m_last_completed": ema8,
         "ema_distance_pct": ema_distance_pct,
         "nearest_broken_level": nearest_broken_level,
