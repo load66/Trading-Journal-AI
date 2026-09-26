@@ -16,22 +16,22 @@ describe('web authentication client', () => {
 
   test('is disabled for local development without Supabase build variables', () => {
     delete process.env.REACT_APP_SUPABASE_URL;
-    delete process.env.REACT_APP_SUPABASE_ANON_KEY;
+    delete process.env.REACT_APP_SUPABASE_PUBLISHABLE_KEY;
     expect(authConfigured()).toBe(false);
   });
 
   test('requires both public Supabase build variables', () => {
     process.env.REACT_APP_SUPABASE_URL = 'https://project.supabase.co';
-    delete process.env.REACT_APP_SUPABASE_ANON_KEY;
+    delete process.env.REACT_APP_SUPABASE_PUBLISHABLE_KEY;
     expect(authConfigured()).toBe(false);
 
-    process.env.REACT_APP_SUPABASE_ANON_KEY = 'public-anon-key';
+    process.env.REACT_APP_SUPABASE_PUBLISHABLE_KEY = 'public-anon-key';
     expect(authConfigured()).toBe(true);
   });
 
   test('sign in persists the returned session and exposes its access token', async () => {
     process.env.REACT_APP_SUPABASE_URL = 'https://project.supabase.co';
-    process.env.REACT_APP_SUPABASE_ANON_KEY = 'public-anon-key';
+    process.env.REACT_APP_SUPABASE_PUBLISHABLE_KEY = 'public-anon-key';
     fetch.mockResolvedValue({
       ok: true,
       json: async () => ({
