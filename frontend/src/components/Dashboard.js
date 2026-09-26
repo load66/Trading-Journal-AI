@@ -20,6 +20,8 @@ const GOAL_FIELDS = [
   { key: 'day_win_rate',     label: 'Day Win %',       suffix: '%',  step: 1,   min: 0, max: 100 },
   { key: 'expectancy',       label: 'Expectancy ($)',  prefix: '$',  suffix: '', step: 5, min: 0 },
   { key: 'avg_win_loss_ratio', label: 'Payoff Ratio', suffix: '',  step: 0.1, min: 0 },
+  { key: 'avg_r', label: 'Avg R / Trade', suffix: 'R', step: 0.05, min: 0 },
+  { key: 'loss_containment', label: 'Loss Containment (max)', suffix: '×', step: 0.1, min: 0.1 },
 ];
 
 function GoalsPanel({ draft, onChange, onSave, onCancel, accountLabel, saving, error }) {
