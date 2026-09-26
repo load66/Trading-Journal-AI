@@ -37,6 +37,7 @@ export const tradesApi = {
   delete: (id) => api.delete(`/api/trades/${id}`),
   getAnalysis: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/analysis`),
   getLeReview: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/le-review`),
+  getLeLevels: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/le-levels`),
   getAnalysisOptions: () => api.get('/api/analysis-options'),
   updateAnalysis: (group, data) => api.patch(`/api/trades/${encodeURIComponent(group)}/analysis`, data),
   addTag: (group, data) => api.post(`/api/trades/${encodeURIComponent(group)}/tags`, data),
