@@ -36,8 +36,8 @@ def test_sqlite_mode_keeps_named_rows(tmp_path):
 
 
 def test_postgres_mode_requires_database_url():
-    with pytest.raises(ConfigError, match='SUPABASE_DB_URL'):
-        settings(DATABASE_MODE='postgres', SUPABASE_DB_URL='')
+    with pytest.raises(ConfigError, match='DATABASE_URL'):
+        settings(DATABASE_MODE='postgres', DATABASE_URL='')
 
 
 def test_turso_mode_is_no_longer_supported():
@@ -140,8 +140,8 @@ class _FakePostgresConnection:
 
     def execute(self, sql, params=()):
         self.calls.append((sql, params))
-        if sql == 'SELECT lastval()':
-            return _FakeCursor([(42,)], [('lastval',)])
+        if 'RETURNING id' in sql:
+            return _FakeCursor([(42,)], [('id',)])
         if sql.startswith('SELECT'):
             return _FakeCursor([(7, 'QQQ')], [('id',), ('name',)])
         return _FakeCursor()
@@ -180,7 +180,7 @@ def test_postgres_mode_uses_psycopg_and_private_schema(monkeypatch):
     monkeypatch.setitem(sys.modules, 'psycopg', FakePsycopg)
     conn = database.get_db(settings(
         DATABASE_MODE='postgres',
-        SUPABASE_DB_URL='postgresql://example/session-pooler',
+        DATABASE_URL='postgresql://example/session-pooler',
     ))
 
     assert seen['dsn'] == 'postgresql://example/session-pooler'
@@ -205,11 +205,26 @@ def test_postgres_adapter_translates_qmark_parameters_and_wraps_rows():
     assert dict(row) == {'id': 7, 'name': 'QQQ'}
 
 
-def test_postgres_insert_cursor_exposes_sequence_lastrowid():
+def test_qmark_translation_preserves_question_marks_inside_quoted_literals():
+    sql = "SELECT '?' AS marker, \"still ?\" AS quoted_identifier, id FROM trades WHERE id=?"
+    assert database.translate_qmark_sql(sql) == (
+        "SELECT '?' AS marker, \"still ?\" AS quoted_identifier, id FROM trades WHERE id=%s"
+    )
+
+
+def test_postgres_insert_and_get_id_uses_returning_not_lastval():
     fake = _FakePostgresConnection()
     conn = database.PostgresConnectionAdapter(fake)
 
-    cursor = conn.execute('INSERT INTO accounts (name) VALUES (?)', ('Primary',))
+    inserted_id = database.insert_and_get_id(
+        conn,
+        'INSERT INTO accounts (name) VALUES (?)',
+        ('Primary',),
+    )
 
-    assert cursor.lastrowid == 42
-    assert ('SELECT lastval()', ()) in fake.calls
+    assert inserted_id == 42
+    assert fake.calls[-1] == (
+        'INSERT INTO accounts (name) VALUES (%s) RETURNING id',
+        ('Primary',),
+    )
+    assert not any(sql == 'SELECT lastval()' for sql, _ in fake.calls)
