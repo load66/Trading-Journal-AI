@@ -139,3 +139,44 @@ def test_avg_trade_pl_percent_reuses_canonical_trade_percent(monkeypatch, tmp_pa
     ]
     # Option = +20%; stock = -5%; average = +7.5%.
     assert main._avg_trade_pl_percent(trades) == 7.5
+
+
+def test_kpis_strategy_breakdown_respects_date_range(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Test", "day_trading", "schwab"),
+        )
+        rows = [
+            ("old", "2026-08-20", "OLD_SETUP", 50.0),
+            ("new", "2026-09-20", "BREAKOUT", 100.0),
+        ]
+        for group, date, setup, pnl in rows:
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source, setup)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, group, date, "SPY", "OPTION", "LONG",
+                    pnl, pnl, 0.0, "[]", "imported", setup,
+                ),
+            )
+        conn.commit()
+
+        result = main.get_kpis(
+            account_id=account_id,
+            date_from="2026-09-01",
+            date_to="2026-09-30",
+            conn=conn,
+        )
+
+        assert result["total_trades"] == 1
+        assert [row["strategy"] for row in result["by_strategy"]] == ["BREAKOUT"]
+        assert result["by_strategy"][0]["count"] == 1
+    finally:
+        conn.close()
