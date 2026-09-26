@@ -33,6 +33,7 @@ from ai_analysis import (
     generate_brain_response,
     generate_weekly_summary,
     generate_performance_diagnosis,
+    performance_ai_is_configured,
 )
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
@@ -1693,16 +1694,19 @@ def get_smoking_gun_diagnosis(
     )
     if not source.get("has_data"):
         return {"has_data": False, "diagnosis": None}
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not performance_ai_is_configured():
         return {
             "has_data": True,
             "unavailable": True,
             "diagnosis": None,
-            "message": "AI diagnosis is not configured for this deployment.",
+            "message": (
+                "AI diagnosis is not configured. Add GROQ_API_KEY to the server "
+                "environment, or ANTHROPIC_API_KEY as an optional fallback."
+            ),
         }
     try:
-        diagnosis = generate_performance_diagnosis(source)
-        return {"has_data": True, "diagnosis": diagnosis}
+        result = generate_performance_diagnosis(source)
+        return {"has_data": True, **result}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
