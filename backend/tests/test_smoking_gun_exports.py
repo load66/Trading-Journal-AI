@@ -102,7 +102,12 @@ def test_html_export_is_standalone_escaped_and_data_first():
     assert "DATA" in html
     assert "DIAGNOSIS" in html
     assert "FIX" in html
-    assert "Two Traders" in html
+    assert "Behavioral Cohort Split" in html
+    assert "Rule-aligned cohort" in html
+    assert "Comparison cohort" in html
+    assert "Evidence Standards" in html
+    assert "Association, not causation" in html
+    assert "Thin sample" in html
     assert "plotly" not in html.lower()
     assert "https://" not in html.lower()
     assert html.index("Executive Scoreboard") < html.index("DIAGNOSIS")
