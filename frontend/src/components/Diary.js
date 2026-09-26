@@ -123,8 +123,8 @@ function DiaryCard({ entry, onDeleted }) {
 
           {hasImage && (
             <div style={{ marginBottom: 16, textAlign: 'center' }}>
-              <img
-                src={`${BACKEND}/uploads/${entry.image_path}`}
+              <AuthImage
+                name={entry.image_path}
                 alt={`Diary entry ${entry.id}`}
                 style={{ maxWidth: '100%', borderRadius: 'var(--radius-md)', border: '1px solid var(--divider)' }}
               />
