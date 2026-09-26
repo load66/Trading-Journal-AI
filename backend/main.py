@@ -154,6 +154,11 @@ GOAL_DEFAULTS = {
     "expectancy": 50.0,
     "avg_win_loss_ratio": 1.5,
     "exit_efficiency": 50.0,
+    # Skill-development baselines used by the dashboard. Avg R is
+    # higher-is-better; loss containment is the maximum acceptable ratio
+    # between the worst red day and the average red day.
+    "avg_r": 0.5,
+    "loss_containment": 2.0,
 }
 
 
@@ -165,6 +170,8 @@ class GoalsBody(BaseModel):
     expectancy: float = 50.0
     avg_win_loss_ratio: float = 1.5
     exit_efficiency: float = 50.0
+    avg_r: float = 0.5
+    loss_containment: float = 2.0
 
 
 @app.get("/api/goals")
@@ -178,14 +185,16 @@ def get_goals(
         (acct_key,),
     ).fetchone()
     if row:
-        return json.loads(row["value"])
+        # Merge defaults so goals saved before a new goal was introduced remain
+        # forward-compatible instead of silently dropping the new baseline.
+        return {**GOAL_DEFAULTS, **json.loads(row["value"])}
     # If account-specific not found, try global (0)
     if acct_key != 0:
         row = conn.execute(
             "SELECT value FROM settings WHERE account_id = 0 AND key = 'goals'",
         ).fetchone()
         if row:
-            return json.loads(row["value"])
+            return {**GOAL_DEFAULTS, **json.loads(row["value"])}
     return GOAL_DEFAULTS
 
 
@@ -202,6 +211,8 @@ def put_goals(
         "expectancy": body.expectancy,
         "avg_win_loss_ratio": body.avg_win_loss_ratio,
         "exit_efficiency": body.exit_efficiency,
+        "avg_r": body.avg_r,
+        "loss_containment": body.loss_containment,
     })
     conn.execute(
         """INSERT INTO settings (account_id, key, value) VALUES (?, 'goals', ?)
@@ -1460,6 +1471,29 @@ def get_kpis(
 
     avg_pl_pct = _avg_trade_pl_percent(trades)
 
+    # Average R must come from recorded trade-analysis risk data; never infer it
+    # from P&L or option premium. Keep the sample count so the UI can show data
+    # coverage instead of presenting a weak sample as a trustworthy process KPI.
+    r_sql = """
+        SELECT AVG(ta.r_multiple) AS avg_r, COUNT(ta.r_multiple) AS r_count
+        FROM trades t
+        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        WHERE t.net_pnl IS NOT NULL
+    """
+    r_params = []
+    if account_id is not None:
+        r_sql += " AND t.account_id = ?"
+        r_params.append(account_id)
+    if date_from:
+        r_sql += " AND t.date >= ?"
+        r_params.append(date_from)
+    if date_to:
+        r_sql += " AND t.date <= ?"
+        r_params.append(date_to)
+    r_row = conn.execute(r_sql, r_params).fetchone()
+    avg_r = round(float(r_row["avg_r"]), 2) if r_row and r_row["avg_r"] is not None else None
+    r_sample_count = int(r_row["r_count"] or 0) if r_row else 0
+
     # Daily P&L
     daily: dict[str, float] = {}
     for t in trades:
@@ -1569,6 +1603,8 @@ def get_kpis(
         "by_strategy": by_strategy,
         "expectancy": expectancy,
         "avg_pl_pct": avg_pl_pct,
+        "avg_r": avg_r,
+        "r_sample_count": r_sample_count,
         "max_drawdown": round(max_drawdown, 2),
         "by_entry_time": _time_of_day_kpis(trades),
         "entry_time_timezone": "CT",
