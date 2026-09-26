@@ -13,6 +13,7 @@ from le_analysis import (
     _market_sign_status,
     _session_vwap_snapshot,
     analyze_context,
+    build_le_levels,
     entry_datetime,
     market_direction,
 )
@@ -151,6 +152,24 @@ def test_fetch_alpaca_falls_back_when_recent_sip_is_restricted(monkeypatch):
     assert rows
     assert feed == "delayed_sip"
     assert calls == ["sip", "delayed_sip"]
+
+
+def test_build_le_levels_returns_same_reference_levels_without_ai(monkeypatch):
+    async def fake_fetch(symbol, when):
+        return market_bars(pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0), "sip"
+
+    import le_analysis
+    monkeypatch.setattr(le_analysis, "_fetch_alpaca_1m", fake_fetch)
+
+    result = asyncio.run(build_le_levels(base_trade("CALL")))
+    assert result["available"] is True
+    assert result["feed"] == "sip"
+    assert result["levels"] == {
+        "PDH": 100.0,
+        "PDL": 95.0,
+        "PMH": 101.0,
+        "PML": 96.0,
+    }
 
 
 def test_option_direction_uses_contract_type_not_long_ownership():
