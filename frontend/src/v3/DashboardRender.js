@@ -299,7 +299,7 @@ export default function DashboardRender(p) {
   const awin = Math.abs(k.avg_win || 0);
   const aloss = Math.abs(k.avg_loss || 0);
   const ratio = aloss > 0 ? awin / aloss : null;
-  const eff = k.exit_efficiency == null ? null : Number(k.exit_efficiency);
+  const avgPlPct = k.avg_pl_pct == null ? null : Number(k.avg_pl_pct);
 
   // These are the names the goals API actually returns. An earlier version
   // invented *_goal keys, so every goal silently fell back to a default and a
@@ -309,7 +309,6 @@ export default function DashboardRender(p) {
   const gDay = g.day_win_rate ?? 75;
   const gPf = g.profit_factor ?? 1.5;
   const gRatio = g.avg_win_loss_ratio ?? 1.5;
-  const gEff = g.exit_efficiency ?? 50;
   const gExp = g.expectancy ?? 50;
   const cap = (x) => Math.max(0, Math.min(1, x));
 
@@ -334,7 +333,7 @@ export default function DashboardRender(p) {
       read: `$${Number(k.profit_factor || 0).toFixed(2)} won for every $1.00 lost`,
     },
     {
-      label: 'Win / loss size', value: ratio == null ? '—' : ratio.toFixed(2),
+      label: 'Payoff ratio', value: ratio == null ? '—' : ratio.toFixed(2),
       fill: cap((ratio || 0) / gRatio), goal: Number(gRatio).toFixed(2), goalPct: 100,
       met: ratio != null && ratio >= gRatio,
       read: (
@@ -345,10 +344,13 @@ export default function DashboardRender(p) {
       ),
     },
     {
-      label: 'Exit efficiency', value: eff == null ? '—' : `${eff.toFixed(0)}%`,
-      fill: cap((eff || 0) / gEff), goal: `${gEff}%`, goalPct: 100,
-      met: eff != null && eff >= gEff, amber: eff != null && eff < gEff,
-      read: eff == null ? 'Not enough excursion data' : `You capture ${eff.toFixed(0)}% of the move you were right about`,
+      label: 'Avg P/L %',
+      value: avgPlPct == null ? '—' : `${avgPlPct > 0 ? '+' : ''}${avgPlPct.toFixed(1)}%`,
+      tone: avgPlPct != null && avgPlPct < 0 ? 'neg' : undefined,
+      met: avgPlPct != null && avgPlPct > 0,
+      read: avgPlPct == null
+        ? 'Not enough completed trades with entry cost'
+        : 'Average net return per completed trade, using entry premium/notional',
     },
     {
       label: 'Expectancy', value: money2(k.expectancy || 0),
