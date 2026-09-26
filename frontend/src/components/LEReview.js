@@ -34,9 +34,11 @@ function ReviewTag({ tag, existing, applying, onApply }) {
             <span className="text-muted" style={{ fontSize: 11.5, textTransform: 'uppercase', letterSpacing: '.04em' }}>
               {tag.tag_type}
             </span>
-            {tag.confidence != null && (
-              <span className="num text-muted" style={{ fontSize: 11.5 }}>{tag.confidence}%</span>
-            )}
+            {tag.source === 'rule' ? (
+              <span className="text-muted" style={{ fontSize: 11.5 }}>RULE</span>
+            ) : tag.confidence != null ? (
+              <span className="num text-muted" style={{ fontSize: 11.5 }}>Model {tag.confidence}%</span>
+            ) : null}
           </div>
           {tag.reason && (
             <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 7, color: 'var(--text-secondary)' }}>
@@ -122,7 +124,7 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
       }
       if (added.length) onTagsChange?.(prev => [...prev, ...added]);
     } catch (e) {
-      setError(e?.response?.data?.detail || e.message || 'Could not apply proven tags.');
+      setError(e?.response?.data?.detail || e.message || 'Could not apply rule tags.');
     } finally {
       setBatchApplying(false);
     }
@@ -188,7 +190,7 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
 
   const breakSummary = ['PDH', 'PDL', 'PMH', 'PML']
     .filter(k => breaks[k])
-    .join(', ') || 'None proven';
+    .join(', ') || 'None confirmed';
 
   const benchmark = (item) => {
     if (!item || item.price == null) return 'Unknown';
@@ -216,11 +218,12 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
         </div>
         <EvidenceRow label="Directional thesis" value={ev.direction?.toUpperCase()} />
         <EvidenceRow label="Entry time" value={ev.entry_time_et ? new Date(ev.entry_time_et).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' }) + ' ET' : '—'} />
+        <EvidenceRow label="Broker time zone" value={ev.execution_time_zone} />
         <EvidenceRow label="Session" value={(ev.session_window || '').replaceAll('_', ' ')} />
         <EvidenceRow label="PDH / PDL" value={`${money(levels.PDH)} / ${money(levels.PDL)}`} />
         <EvidenceRow label="PMH / PML" value={`${money(levels.PMH)} / ${money(levels.PML)}`} />
         <EvidenceRow label="Level breaks before entry" value={breakSummary} />
-        <EvidenceRow label="Underlying at entry" value={money(ev.underlying_price_at_entry)} />
+        <EvidenceRow label="Last completed 1m close" value={money(ev.underlying_price_last_completed_1m)} />
         <EvidenceRow label="Last completed 10m 8 EMA" value={money(ev.ema8_10m_last_completed)} />
         <EvidenceRow label="Distance from 8 EMA" value={pct(ev.ema_distance_pct)} tone={ev.ema_distance_pct > 1 ? 'var(--result-neg)' : undefined} />
         <EvidenceRow label="SPY" value={benchmark(ev.spy)} />
@@ -292,8 +295,8 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700 }}>
-                    {strategy?.value === 'NONE' ? 'No strategy proven' : strategy?.value}
-                    {strategy?.confidence != null && <span className="num text-muted" style={{ marginLeft: 7, fontSize: 12 }}>{strategy.confidence}%</span>}
+                    {strategy?.value === 'NONE' ? 'No strategy suggested' : strategy?.value}
+                    {strategy?.confidence != null && <span className="num text-muted" style={{ marginLeft: 7, fontSize: 12 }}>Model {strategy.confidence}%</span>}
                   </div>
                   {strategy?.reason && <div className="text-muted" style={{ fontSize: 13, lineHeight: 1.5, marginTop: 5 }}>{strategy.reason}</div>}
                 </div>
