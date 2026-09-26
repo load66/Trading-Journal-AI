@@ -108,6 +108,61 @@ export function execToTs(dateStr, timeStr, bucketMin = 5) {
   ) / 1000);
 }
 
+export function executionTimeLabelET(dateStr, timeStr) {
+  const instant = zonedWallTimeToInstant(dateStr, timeStr, BROKER_EXECUTION_TIME_ZONE);
+  if (!instant) return null;
+  const p = partsInZone(instant, MARKET_TIME_ZONE);
+  return `${p.hour}:${p.minute} ET`;
+}
+
+function formatFillDetail(fill) {
+  const qty = Number(fill.qty || 0);
+  const price = Number(fill.price || 0);
+  return `${qty}@${price.toFixed(2)}`;
+}
+
+export function buildExecutionMarkerGroups(executions, fallbackDate, bucketMin = 5) {
+  const groups = new Map();
+
+  for (const fill of executions || []) {
+    if (!fill?.time) continue;
+    const executionDate = fill.date || fallbackDate;
+    const ts = execToTs(executionDate, fill.time, bucketMin);
+    const minuteLabel = executionTimeLabelET(executionDate, fill.time);
+    if (!ts || !minuteLabel) continue;
+
+    const isBuy = String(fill.action || '').toUpperCase() === 'BOT';
+    const key = `${ts}|${isBuy ? 'BUY' : 'SELL'}`;
+    if (!groups.has(key)) {
+      groups.set(key, { isBuy, time: ts, minutes: new Map() });
+    }
+    const group = groups.get(key);
+    if (!group.minutes.has(minuteLabel)) group.minutes.set(minuteLabel, []);
+    group.minutes.get(minuteLabel).push(fill);
+  }
+
+  return [...groups.values()]
+    .map(group => {
+      const minuteParts = [...group.minutes.entries()].map(([minuteLabel, fills]) => {
+        const counts = new Map();
+        for (const fill of fills) {
+          const detail = formatFillDetail(fill);
+          counts.set(detail, (counts.get(detail) || 0) + 1);
+        }
+        const details = [...counts.entries()]
+          .map(([detail, count]) => count > 1 ? `${detail} ×${count}` : detail)
+          .join(' + ');
+        return `${minuteLabel} · ${details}`;
+      });
+      return {
+        isBuy: group.isBuy,
+        time: group.time,
+        text: minuteParts.join(' | '),
+      };
+    })
+    .sort((a, b) => a.time - b.time || Number(b.isBuy) - Number(a.isBuy));
+}
+
 const avgPrice = (fills) => {
   const qty = fills.reduce((s, f) => s + (f.qty || 0), 0);
   if (!qty) return null;
@@ -423,23 +478,13 @@ export default function TradingChart({
     // fraction of one bar, so there's nothing sensible to anchor a marker to.
     if (!isWide) {
       const bucketMin = TF_MINUTES[timeframe] || 5;
-      const markers = executions
-        .filter(f => f.time)
-        .map(f => {
-          const ts = execToTs(date, f.time, bucketMin);
-          if (!ts) return null;
-          const isBuy = f.action === 'BOT';
-          return {
-            isBuy,
-            time: ts,
-            position: isBuy ? 'belowBar' : 'aboveBar',
-            color: isBuy ? T.up : T.down,
-            shape: isBuy ? 'arrowUp' : 'arrowDown',
-            text: `${f.qty}@${f.price}`,
-          };
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.time - b.time);
+      const markers = buildExecutionMarkerGroups(executions, date, bucketMin)
+        .map(marker => ({
+          ...marker,
+          position: marker.isBuy ? 'belowBar' : 'aboveBar',
+          color: marker.isBuy ? T.up : T.down,
+          shape: marker.isBuy ? 'arrowUp' : 'arrowDown',
+        }));
       layersRef.current.markers = markers;
     }
     applyLayers(layersRef.current, visibleRef.current);
@@ -536,18 +581,30 @@ export default function TradingChart({
         <h2 className="section-title" style={{ fontSize: 17 }}>
           {ticker} · {TIMEFRAMES.find(t => t.id === timeframe)?.label} Chart · <span className="num text-muted" style={{ fontWeight: 500 }}>{date}</span>
         </h2>
-        <div className="seg" role="group" aria-label="Chart timeframe">
-          {TIMEFRAMES.map(tf => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <div className="seg" role="group" aria-label="Chart timeframe">
+            {TIMEFRAMES.map(tf => (
+              <button
+                type="button"
+                key={tf.id}
+                className="seg-btn"
+                aria-pressed={timeframe === tf.id}
+                onClick={() => setTimeframe(tf.id)}
+              >
+                {tf.label}
+              </button>
+            ))}
+          </div>
+          {executions.length > 0 && timeframe !== '1Min' && (
             <button
               type="button"
-              key={tf.id}
-              className="seg-btn"
-              aria-pressed={timeframe === tf.id}
-              onClick={() => setTimeframe(tf.id)}
+              className="chart-legend-item"
+              onClick={() => setTimeframe('1Min')}
+              title="Switch to 1-minute candles so execution markers can be placed at the exact broker-reported minute."
             >
-              {tf.label}
+              Exact fills · 1m
             </button>
-          ))}
+          )}
         </div>
       </div>
 
@@ -585,6 +642,13 @@ export default function TradingChart({
               </span>
             )}
           </div>
+          {!isWide && executions.length > 0 && (
+            <div className="text-muted" style={{ fontSize: 11.5, margin: '3px 0 7px' }}>
+              {timeframe === '1Min'
+                ? 'Execution markers are shown at the broker source minute. Multiple fills in the same minute are grouped without losing quantity or price.'
+                : `Execution markers are anchored to the containing ${TIMEFRAMES.find(t => t.id === timeframe)?.label || timeframe} candle; labels preserve the broker-reported ET minute. Use Exact fills · 1m for minute-by-minute placement.`}
+            </div>
+          )}
           <div ref={containerRef} style={{ width: '100%', background: 'var(--surface-panel)', borderRadius: 'var(--radius-md)' }} />
         </>
       )}
