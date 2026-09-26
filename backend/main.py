@@ -22,7 +22,7 @@ from database import (init_db, get_db, row_to_dict, insert_and_get_id,
                       year_filter_clause, is_integrity_error)
 from auth import AuthError, authorize_header, auth_required, validate_auth_config
 from storage import DiaryStorage
-from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
+from csv_parser import parse_broker_csv, detect_broker, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
     analyze_diary_text,
