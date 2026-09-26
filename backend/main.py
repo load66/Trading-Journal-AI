@@ -38,6 +38,7 @@ from ai_analysis import (
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
 from library import router as library_router, init_library_tables, apply_aliases, library_names
+from le_analysis import build_le_review
 
 load_dotenv()
 
@@ -826,6 +827,32 @@ def get_trade_analysis(trade_group: str, conn: sqlite3.Connection = Depends(get_
         "analysis": row_to_dict(analysis) if analysis else None,
         "tags": [row_to_dict(t) for t in tags],
     }
+
+
+@app.get("/api/trades/{trade_group:path}/le-review")
+async def get_trade_le_review(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Read-only LE evidence review.
+
+    This endpoint never writes strategy/tags automatically. It combines deterministic
+    market-data evidence with a conservative Groq suggestion when Groq is configured.
+    """
+    row = conn.execute(
+        "SELECT * FROM trades WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    trade = row_to_dict(row)
+    try:
+        trade["executions"] = json.loads(trade.get("executions") or "[]")
+    except Exception:
+        trade["executions"] = []
+
+    return await build_le_review(trade)
 
 
 class AnalysisUpdate(BaseModel):
