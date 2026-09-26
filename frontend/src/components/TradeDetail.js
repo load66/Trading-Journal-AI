@@ -190,6 +190,85 @@ function TagBadge({ tag, onDelete }) {
 
 // ── What If helpers ───────────────────────────────────────────────────────────
 
+const BROKER_EXECUTION_TIME_ZONE = 'America/Chicago';
+const DISPLAY_TIME_ZONE = 'America/New_York';
+
+function zonedWallTimeToDate(dateStr, timeStr, timeZone = BROKER_EXECUTION_TIME_ZONE) {
+  if (!dateStr || !timeStr) return null;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const [hour, minute, second = 0] = timeStr.split(':').map(Number);
+  if (![year, month, day, hour, minute, second].every(Number.isFinite)) return null;
+
+  const wallUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  let utcMs = wallUtcMs;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23',
+  });
+
+  // Two passes resolve the zone offset without assuming CST/CDT.
+  for (let i = 0; i < 2; i += 1) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(utcMs))
+        .filter(p => p.type !== 'literal')
+        .map(p => [p.type, p.value])
+    );
+    const renderedAsUtc = Date.UTC(
+      Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+      Number(parts.hour), Number(parts.minute), Number(parts.second)
+    );
+    utcMs += wallUtcMs - renderedAsUtc;
+  }
+  return new Date(utcMs);
+}
+
+function etPartsForExecution(dateStr, timeStr) {
+  const instant = zonedWallTimeToDate(dateStr, timeStr);
+  if (!instant) return null;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: DISPLAY_TIME_ZONE,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(instant)
+      .filter(p => p.type !== 'literal')
+      .map(p => [p.type, p.value])
+  );
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    hhmm: `${parts.hour}:${parts.minute}`,
+  };
+}
+
+function formatExecutionTimeET(dateStr, timeStr) {
+  const parts = etPartsForExecution(dateStr, timeStr);
+  return parts ? `${parts.hhmm} ET` : '—';
+}
+
+function executionTimeETMinutes(dateStr, timeStr) {
+  const parts = etPartsForExecution(dateStr, timeStr);
+  return parts ? parts.hour * 60 + parts.minute : null;
+}
+
+function barETMinutes(timestamp) {
+  if (!timestamp) return null;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: DISPLAY_TIME_ZONE,
+      hour: '2-digit', minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(timestamp))
+      .filter(p => p.type !== 'literal')
+      .map(p => [p.type, p.value])
+  );
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
 const TABS = ['Stats', 'Strategy', 'Tags', 'LE Review', 'Executions', 'What If'];
 
 const SCENARIOS = [
@@ -200,35 +279,28 @@ const SCENARIOS = [
   { label: 'End of day', offsetMin: null },
 ];
 
-function getPriceAt(bars, hhmm) {
-  if (!bars.length) return null;
-  const firstD = new Date(bars[0].t);
-  const firstUTCMin = firstD.getUTCHours() * 60 + firstD.getUTCMinutes();
-  const etOffset = firstUTCMin >= 780 ? -4 : -5;
-  const [h, m] = hhmm.split(':').map(Number);
-  const scenarioUTCMin = (h - etOffset) * 60 + m;
+function getPriceAt(bars, targetETMinutes) {
+  if (!bars.length || targetETMinutes == null) return null;
   for (const bar of bars) {
-    const d = new Date(bar.t);
-    if (d.getUTCHours() * 60 + d.getUTCMinutes() >= scenarioUTCMin) return bar.c;
+    const minutes = barETMinutes(bar.t);
+    if (minutes != null && minutes >= targetETMinutes) return bar.c;
   }
   return bars[bars.length - 1].c;
 }
 
 function computeWhatIf(bars, stats, trade) {
   if (!bars.length || !stats.isClosed || !stats.avgExit || !stats.closeTime) return null;
-  const [exitH, exitM] = stats.closeTime.split(':').map(Number);
+  const exitETMinutes = executionTimeETMinutes(trade.date, stats.closeTime);
+  if (exitETMinutes == null) return null;
   const isStock  = !trade.instrument_type || trade.instrument_type === 'STOCK';
   const sideSign = trade.side === 'LONG' ? 1 : -1;
 
   return SCENARIOS.map(({ label, offsetMin }) => {
-    let scenarioHHMM;
-    if (offsetMin === null) {
-      scenarioHHMM = '16:00';
-    } else {
-      const total = exitH * 60 + exitM + offsetMin;
-      scenarioHHMM = `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
-    }
-    const price = getPriceAt(bars, scenarioHHMM);
+    const scenarioETMinutes = offsetMin === null
+      ? 16 * 60
+      : Math.min(16 * 60, exitETMinutes + offsetMin);
+    const scenarioHHMM = `${String(Math.floor(scenarioETMinutes / 60)).padStart(2, '0')}:${String(scenarioETMinutes % 60).padStart(2, '0')}`;
+    const price = getPriceAt(bars, scenarioETMinutes);
     if (price == null) return { label, scenarioHHMM, price: null, deltaPnl: null, whatIfPnl: null };
     const deltaPnl  = isStock ? (price - stats.avgExit) * stats.totalQty * sideSign : null;
     const whatIfPnl = deltaPnl != null ? (trade.net_pnl ?? 0) + deltaPnl : null;
@@ -243,7 +315,8 @@ const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', 
 function getDayTradeTime(t, which) {
   const execs = Array.isArray(t.executions) ? t.executions : [];
   const times = execs.map(e => e.time).filter(Boolean).sort();
-  return which === 'open' ? times[0]?.slice(0, 5) : times[times.length - 1]?.slice(0, 5);
+  const raw = which === 'open' ? times[0] : times[times.length - 1];
+  return raw ? formatExecutionTimeET(t.date, raw) : null;
 }
 
 function DaySidebar({ currentTrade, onOpenDetail }) {
@@ -542,8 +615,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           <span className="num">{trade.date}</span>
           {' / '}{trade.instrument_type ? trade.instrument_type.charAt(0) + trade.instrument_type.slice(1).toLowerCase() : 'Stock'}
           {' / '}{trade.side === 'LONG' ? 'Long' : trade.side === 'SHORT' ? 'Short' : trade.side}
-          {stats.openTime && <> · Opened <span className="num">{stats.openTime.slice(0, 5)}</span></>}
-          {stats.closeTime && stats.isClosed && <> · Closed <span className="num">{stats.closeTime.slice(0, 5)}</span></>}
+          {stats.openTime && <> · Opened <span className="num">{formatExecutionTimeET(trade.date, stats.openTime)}</span></>}
+          {stats.closeTime && stats.isClosed && <> · Closed <span className="num">{formatExecutionTimeET(trade.date, stats.closeTime)}</span></>}
           {stats.holdMinutes != null && <> · Held <span className="num">{stats.fmtHold(stats.holdMinutes)}</span></>}
         </>}
         actions={tradeNavList.length > 1 ? <>
@@ -686,8 +759,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 <StatRow label="Adjusted Cost" value={stats.adjustedCost ? fmt$(stats.adjustedCost) : '—'} />
                 <StatRow label="Average Entry" value={stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : '—'} />
                 <StatRow label="Average Exit" value={stats.avgExit ? `$${stats.avgExit.toFixed(2)}` : '—'} />
-                <StatRow label="Entry Time" value={stats.openTime?.slice(0, 5) || '—'} />
-                <StatRow label="Exit Time" value={(stats.isClosed && stats.closeTime?.slice(0, 5)) || '—'} />
+                <StatRow label="Entry Time" value={stats.openTime ? formatExecutionTimeET(trade.date, stats.openTime) : '—'} />
+                <StatRow label="Exit Time" value={(stats.isClosed && stats.closeTime) ? formatExecutionTimeET(trade.date, stats.closeTime) : '—'} />
                 <StatRow label="Hold Time" value={stats.fmtHold(stats.holdMinutes)} />
 
                 {editingStats ? (
@@ -1039,7 +1112,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         </div>
                       )}
                       <div className="text-muted" style={{ marginBottom: 10, fontSize: 13 }}>
-                        Actual exit: <strong className="num" style={{ color: 'var(--text-primary)' }}>{stats.closeTime?.slice(0, 5)}</strong> @ <strong className="num" style={{ color: 'var(--text-primary)' }}>${stats.avgExit?.toFixed(2)}</strong>
+                        Actual exit: <strong className="num" style={{ color: 'var(--text-primary)' }}>{formatExecutionTimeET(trade.date, stats.closeTime)}</strong> @ <strong className="num" style={{ color: 'var(--text-primary)' }}>${stats.avgExit?.toFixed(2)}</strong>
                         {isStock && <> · Net P&L: <strong className={`num ${(trade.net_pnl ?? 0) >= 0 ? 'pos' : 'neg'}`}>{fmtSigned$(trade.net_pnl)}</strong></>}
                       </div>
                       <table>
@@ -1165,7 +1238,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               <section className="card">
                 <h2 className="section-title">What If Scenarios</h2>
                 <div className="text-muted" style={{ fontSize: 13, margin: '4px 0 12px' }}>
-                  Actual exit: <strong className="num" style={{ color: 'var(--text-primary)' }}>{stats.closeTime?.slice(0, 5)}</strong> @ <strong className="num" style={{ color: 'var(--text-primary)' }}>${stats.avgExit?.toFixed(2)}</strong>
+                  Actual exit: <strong className="num" style={{ color: 'var(--text-primary)' }}>{formatExecutionTimeET(trade.date, stats.closeTime)}</strong> @ <strong className="num" style={{ color: 'var(--text-primary)' }}>${stats.avgExit?.toFixed(2)}</strong>
                   {isStock && <> · Net P&L: <strong className={`num ${pnl >= 0 ? 'pos' : 'neg'}`}>{fmtSigned$(trade.net_pnl)}</strong></>}
                 </div>
                 {!isStock && (
