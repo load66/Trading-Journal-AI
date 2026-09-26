@@ -92,6 +92,11 @@ def build_daily_context(conn, date: str, account_id) -> dict:
     winners = [p for p in all_pnl if p > 0]
     losers = [p for p in all_pnl if p < 0]
     total_trades = len(trades)
+    winner_effs = [
+        float(t.get("exit_efficiency"))
+        for t in trades
+        if t.get("exit_efficiency") is not None and float(t.get("net_pnl") or 0) > 0
+    ]
     day_kpis = {
         "total_net_pnl": round(sum(all_pnl), 2),
         "total_trades": total_trades,
@@ -101,6 +106,7 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         "avg_win": round(sum(winners) / len(winners), 2) if winners else 0,
         "avg_loss": round(sum(losers) / len(losers), 2) if losers else 0,
         "profit_factor": round(sum(winners) / abs(sum(losers)), 2) if losers else None,
+        "exit_efficiency": round(sum(winner_effs) / len(winner_effs), 2) if winner_effs else None,
     }
 
     # All-time KPIs for context
@@ -141,8 +147,21 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         except Exception:
             pass
 
-    behavior_flags = detect_daily_flags(trades)
+    hist_sql = "SELECT date, COUNT(*) AS c FROM trades WHERE date < ?"
+    hist_params = [date]
+    if account_id is not None:
+        hist_sql += " AND account_id = ?"
+        hist_params.append(account_id)
+    hist_sql += " GROUP BY date ORDER BY date"
+    historical_counts = [int(r["c"]) for r in conn.execute(hist_sql, hist_params).fetchall()]
+
+    behavior_flags = detect_daily_flags(trades, historical_counts)
     verified_strengths = deterministic_strengths(trades, day_kpis)
+    if not behavior_flags and trades:
+        verified_strengths.append({
+            "text": "No deterministic behavioral flags triggered on this session.",
+            "evidence": "VERIFIED",
+        })
     recorded = recorded_observations(trades, diary_summary)
 
     return {
@@ -400,6 +419,7 @@ Generate the daily coaching summary JSON."""
         "loss_reentry": "Mechanical rule: after a loss on a ticker, require a fresh setup before re-entry.",
         "size_escalation_after_loss": "Mechanical rule: never increase position size immediately after a losing trade.",
         "continued_after_3_losses": "Mechanical rule: after three consecutive losses, stop and review before another entry.",
+        "high_trade_count": "Mechanical rule: when trade count exceeds your historical 90th percentile, pause before adding another trade.",
     }
     focus_obs = []
     seen_focus = set()
