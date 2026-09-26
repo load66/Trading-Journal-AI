@@ -83,17 +83,63 @@ class DBAPICursor:
             yield self._wrap(row)
 
 
-class TursoConnectionAdapter:
-    """Small compatibility layer keeping existing sqlite3-style route code unchanged."""
+def translate_qmark_sql(sql: str) -> str:
+    """Translate DB-API qmark placeholders without touching quoted question marks."""
+    out: list[str] = []
+    quote: str | None = None
+    index = 0
+
+    while index < len(sql):
+        ch = sql[index]
+
+        if quote is not None:
+            out.append(ch)
+            if ch == quote:
+                if index + 1 < len(sql) and sql[index + 1] == quote:
+                    out.append(sql[index + 1])
+                    index += 1
+                else:
+                    quote = None
+            index += 1
+            continue
+
+        if ch in {"'", '"'}:
+            quote = ch
+            out.append(ch)
+        elif ch == '?':
+            out.append('%s')
+        else:
+            out.append(ch)
+        index += 1
+
+    return ''.join(out)
+
+
+class PostgresCursorAdapter(DBAPICursor):
+    def execute(self, sql, params=()):
+        self._inner.execute(translate_qmark_sql(sql), params)
+        return self
+
+    def executemany(self, sql, params):
+        self._inner.executemany(translate_qmark_sql(sql), params)
+        return self
+
+
+class PostgresConnectionAdapter:
+    """DB-API compatibility layer for the existing sqlite-oriented route code."""
+
+    dialect = 'postgres'
 
     def __init__(self, inner):
         self._inner = inner
 
     def execute(self, sql, params=()):
-        return DBAPICursor(self._inner.execute(sql, params))
+        return PostgresCursorAdapter(
+            self._inner.execute(translate_qmark_sql(sql), params)
+        )
 
     def cursor(self):
-        return DBAPICursor(self._inner.cursor())
+        return PostgresCursorAdapter(self._inner.cursor())
 
     def commit(self):
         return self._inner.commit()
@@ -231,15 +277,29 @@ def get_db(settings: Settings | None = None):
         conn.execute('PRAGMA foreign_keys=ON')
         return conn
 
-    import turso_serverless
+    import psycopg
 
-    inner = turso_serverless.connect(
-        settings.turso_database_url,
-        auth_token=settings.turso_auth_token,
-    )
-    conn = TursoConnectionAdapter(inner)
-    conn.execute('PRAGMA foreign_keys=ON')
+    inner = psycopg.connect(settings.database_url, autocommit=False)
+    conn = PostgresConnectionAdapter(inner)
+    conn.execute('SET search_path TO journal, public')
     return conn
+
+
+def insert_and_get_id(conn, sql: str, params=()) -> int:
+    """Execute an INSERT and return its generated integer primary key."""
+    if isinstance(conn, PostgresConnectionAdapter):
+        statement = sql.rstrip().rstrip(';')
+        if ' returning ' not in statement.lower():
+            statement += ' RETURNING id'
+        row = conn.execute(statement, params).fetchone()
+        if row is None:
+            raise RuntimeError('Postgres INSERT did not return an id')
+        return int(row[0])
+
+    cursor = conn.execute(sql, params)
+    if cursor.lastrowid is None:
+        raise RuntimeError('SQLite INSERT did not produce a row id')
+    return int(cursor.lastrowid)
 
 
 def _column_names(conn, table: str) -> set[str]:

@@ -33,7 +33,7 @@ class Settings:
     frontend_origins: tuple[str, ...] = ()
     database_mode: str = 'sqlite'
     database_path: str = 'trading_journal.db'
-    supabase_db_url: str = ''
+    database_url: str = ''
     storage_mode: str = 'local'
     upload_dir: str = 'uploads'
     supabase_secret_key: str = ''
@@ -58,9 +58,9 @@ class Settings:
         if storage_mode not in {'local', 'supabase'}:
             raise ConfigError('STORAGE_MODE must be local or supabase')
 
-        supabase_db_url = env.get('SUPABASE_DB_URL', '').strip()
-        if database_mode == 'postgres' and not supabase_db_url:
-            raise ConfigError('SUPABASE_DB_URL is required when DATABASE_MODE=postgres')
+        database_url = env.get('DATABASE_URL', '').strip()
+        if database_mode == 'postgres' and not database_url:
+            raise ConfigError('DATABASE_URL is required when DATABASE_MODE=postgres')
 
         supabase_url = env.get('SUPABASE_URL', '').strip().rstrip('/')
         allowed_user_id = env.get('ALLOWED_USER_ID', '').strip()
@@ -79,7 +79,7 @@ class Settings:
             frontend_origins=_csv(env.get('FRONTEND_ORIGINS', '')),
             database_mode=database_mode,
             database_path=env.get('DATABASE_PATH', 'trading_journal.db').strip() or 'trading_journal.db',
-            supabase_db_url=supabase_db_url,
+            database_url=database_url,
             storage_mode=storage_mode,
             upload_dir=env.get('UPLOAD_DIR', 'uploads').strip() or 'uploads',
             supabase_secret_key=(env.get('SUPABASE_SECRET_KEY', '') or env.get('SUPABASE_SERVICE_ROLE_KEY', '')).strip(),
