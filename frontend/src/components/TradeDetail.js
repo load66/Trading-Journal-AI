@@ -962,7 +962,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     {parseExecs(trade).map((ex, i) => (
                       <tr key={i}>
                         <td className="mono text-muted" style={{ paddingLeft: 20, fontSize: 13, whiteSpace: 'nowrap' }}>{ex.date ? ex.date.slice(5) : '—'}</td>
-                        <td className="mono" style={{ fontSize: 13.5, whiteSpace: 'nowrap' }}>{ex.time?.slice(0, 5) || '—'}</td>
+                        <td className="mono" style={{ fontSize: 13.5, whiteSpace: 'nowrap' }}>{ex.time ? formatExecutionTimeET(ex.date || trade.date, ex.time) : '—'}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>{ex.action}</td>
                         <td className="num mono" style={{ fontSize: 13.5 }}>{ex.qty}</td>
                         <td className="num mono" style={{ fontSize: 13.5 }}>${Number(ex.price ?? 0).toFixed(2)}</td>
@@ -1025,7 +1025,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         <input aria-label="Edit execution date" type="date" value={editExecForm.date} onChange={e => setEditExecForm(f => ({ ...f, date: e.target.value }))} style={inputStyle} />
                       </div>
                       <div>
-                        <div className="field-label" style={{ marginBottom: 4 }}>Time</div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Broker time (CT)</div>
                         <input aria-label="Edit execution time" type="time" value={editExecForm.time} onChange={e => setEditExecForm(f => ({ ...f, time: e.target.value }))} style={inputStyle} />
                       </div>
                     </div>
@@ -1075,7 +1075,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         <input aria-label="New execution date" type="date" value={execForm.date || trade.date} onChange={e => setExecForm(f => ({ ...f, date: e.target.value }))} style={inputStyle} />
                       </div>
                       <div>
-                        <div className="field-label" style={{ marginBottom: 4 }}>Time</div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Broker time (CT)</div>
                         <input aria-label="New execution time" type="time" value={execForm.time} onChange={e => setExecForm(f => ({ ...f, time: e.target.value }))} style={inputStyle} />
                       </div>
                     </div>
