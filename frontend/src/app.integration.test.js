@@ -636,7 +636,9 @@ test('Dashboard context analytics shows evidence status and sample confidence wi
     weakest: rows.find((row) => row.sample_qualified) || null,
   });
 
-  kpisApi.get.mockResolvedValueOnce({
+  // App account initialization can refetch the dashboard; keep the same fixture
+  // for every call in this test so a later account-state fetch cannot overwrite it.
+  kpisApi.get.mockResolvedValue({
     data: {
       total_net_pnl: 226,
       total_trades: 9,
