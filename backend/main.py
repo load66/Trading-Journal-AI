@@ -1421,15 +1421,17 @@ def _net_profit_factor(trades):
     return round(win_pnl / loss_pnl, 2) if loss_pnl else None
 
 
-def _edge_min_sample(total_trades: int) -> int:
-    """Minimum sample before a context label is ranked as an edge/leak."""
-    if total_trades >= 20:
-        return 5
-    if total_trades >= 8:
-        return 3
-    if total_trades >= 3:
-        return 2
-    return 1
+EDGE_DEVELOPING_MIN = 5
+EDGE_RELIABLE_MIN = 15
+
+
+def _edge_confidence(count: int) -> str:
+    """Sample-size confidence for recorded context performance."""
+    if count >= EDGE_RELIABLE_MIN:
+        return "RELIABLE"
+    if count >= EDGE_DEVELOPING_MIN:
+        return "DEVELOPING"
+    return "LOW"
 
 
 def _edge_clean_label(value) -> str | None:
@@ -1441,14 +1443,44 @@ def _edge_clean_label(value) -> str | None:
     return label
 
 
+def _edge_trade_is_closed(trade: dict) -> bool:
+    """Require realized P&L and reject positions that are still open.
+
+    Some legacy/manual rows may not have execution detail, so a populated
+    net_pnl remains the fallback closed-trade signal. When execution detail is
+    present, quantity balance is authoritative.
+    """
+    if trade.get("net_pnl") is None:
+        return False
+
+    raw = trade.get("executions") or []
+    if isinstance(raw, str):
+        try:
+            executions = json.loads(raw)
+        except Exception:
+            executions = []
+    else:
+        executions = raw if isinstance(raw, list) else []
+
+    if not executions:
+        return True
+
+    probe = dict(trade)
+    probe["executions"] = executions
+    return not _is_open_position(probe)
+
+
 def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
     """Recorded-context performance for strategy/source/setup/emotion.
 
     Each trade contributes to at most one label per dimension. Structured fields
-    are authoritative; the matching manual/AI tag is only a fallback when the
-    structured value is absent. Emotion is recorded-only and is never inferred.
+    are authoritative; an explicitly stored matching tag is only a fallback when
+    the structured value is absent. Missing context is never inferred.
+
+    Performance metrics are calculated from the already reconciled trade rows.
+    LOW samples remain visible but are excluded from comparative callouts.
     """
-    eligible_trades = [t for t in trades if t.get("net_pnl") is not None]
+    eligible_trades = [t for t in trades if _edge_trade_is_closed(t)]
     groups = {str(t.get("trade_group") or "") for t in eligible_trades if t.get("trade_group")}
     analysis_by_group: dict[str, dict] = {}
     if groups:
@@ -1486,7 +1518,6 @@ def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
         "emotion": ("emotional_state", "emotion"),
     }
     total = len(eligible_trades)
-    min_sample = _edge_min_sample(total)
     result = {}
 
     for dimension, (structured_field, tag_type) in specs.items():
@@ -1511,6 +1542,7 @@ def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
         rows = []
         for label, sample in buckets.items():
             count = len(sample)
+            confidence = _edge_confidence(count)
             pnls = [float(t.get("net_pnl") or 0) for t in sample]
             wins = sum(1 for pnl in pnls if pnl > 0)
             losses = sum(1 for pnl in pnls if pnl < 0)
@@ -1533,18 +1565,28 @@ def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
                 "profit_factor": _net_profit_factor(sample),
                 "avg_pl_pct": _avg_trade_pl_percent(sample),
                 "avg_r": round(sum(avg_r_values) / len(avg_r_values), 2) if avg_r_values else None,
-                "sample_qualified": count >= min_sample,
+                "confidence": confidence,
+                "sample_qualified": confidence != "LOW",
+                "metric_status": "VERIFIED",
+                "context_status": "RECORDED",
+                "evidence_status": (
+                    "INSUFFICIENT DATA" if confidence == "LOW" else "RECORDED"
+                ),
             }
             rows.append(row)
 
+        confidence_order = {"RELIABLE": 0, "DEVELOPING": 1, "LOW": 2}
         rows.sort(
             key=lambda r: (
-                0 if r["sample_qualified"] else 1,
-                -float(r["win_rate"]),
+                confidence_order.get(str(r.get("confidence")), 3),
                 -int(r["count"]),
                 str(r["label"]).lower(),
             )
         )
+
+        # Comparative callouts deliberately exclude LOW samples. A 100% win
+        # rate over one to four trades remains visible in the table but is not
+        # allowed to become a "highest" or "strongest" dashboard conclusion.
         qualified = [r for r in rows if r["sample_qualified"]]
         best_win_rate = max(
             qualified,
@@ -1567,7 +1609,15 @@ def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
             "coverage_count": labeled_trade_count,
             "coverage_pct": round(labeled_trade_count / total * 100, 1) if total else 0,
             "total_trades": total,
-            "min_sample": min_sample,
+            "min_sample": EDGE_DEVELOPING_MIN,
+            "reliable_min_sample": EDGE_RELIABLE_MIN,
+            "confidence_thresholds": {
+                "low_max": EDGE_DEVELOPING_MIN - 1,
+                "developing_min": EDGE_DEVELOPING_MIN,
+                "reliable_min": EDGE_RELIABLE_MIN,
+            },
+            "metric_status": "VERIFIED" if total else "INSUFFICIENT DATA",
+            "context_status": "RECORDED" if labeled_trade_count else "INSUFFICIENT DATA",
             "best_win_rate": dict(best_win_rate) if best_win_rate else None,
             "strongest": dict(strongest) if strongest else None,
             "weakest": dict(weakest) if weakest else None,

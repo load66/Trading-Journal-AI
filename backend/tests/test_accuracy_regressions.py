@@ -445,7 +445,7 @@ def test_context_edge_breakdowns_keep_dimensions_separate(monkeypatch, tmp_path)
         assert dims["source"]["coverage_count"] == 10
         assert dims["setup"]["coverage_count"] == 10
         assert dims["emotion"]["coverage_count"] == 10
-        assert dims["strategy"]["min_sample"] == 3
+        assert dims["strategy"]["min_sample"] == 5
 
         strategy = {r["label"]: r for r in dims["strategy"]["rows"]}
         setup = {r["label"]: r for r in dims["setup"]["rows"]}
@@ -461,6 +461,10 @@ def test_context_edge_breakdowns_keep_dimensions_separate(monkeypatch, tmp_path)
         assert strategy["Mean Reversion"]["win_rate"] == 20.0
         assert strategy["Momentum"]["expectancy"] > 0
         assert strategy["Mean Reversion"]["expectancy"] < 0
+        assert strategy["Momentum"]["confidence"] == "DEVELOPING"
+        assert strategy["Momentum"]["metric_status"] == "VERIFIED"
+        assert strategy["Momentum"]["context_status"] == "RECORDED"
+        assert strategy["Momentum"]["evidence_status"] == "RECORDED"
         assert dims["strategy"]["best_win_rate"]["label"] == "Momentum"
         assert dims["strategy"]["strongest"]["label"] == "Momentum"
         assert dims["strategy"]["weakest"]["label"] == "Mean Reversion"
@@ -471,5 +475,103 @@ def test_context_edge_breakdowns_keep_dimensions_separate(monkeypatch, tmp_path)
         assert result["by_source"] == dims["source"]["rows"]
         assert result["by_setup"] == dims["setup"]["rows"]
         assert result["by_emotion"] == dims["emotion"]["rows"]
+    finally:
+        conn.close()
+
+
+def test_context_edge_confidence_excludes_low_samples_and_open_positions(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Confidence Edge", "day_trading", "schwab"),
+        )
+
+        rows = [
+            *[(f"lucky-{i}", "Lucky", 40.0 + i) for i in range(4)],
+            ("repeat-0", "Repeatable", 30.0),
+            ("repeat-1", "Repeatable", 25.0),
+            ("repeat-2", "Repeatable", 20.0),
+            ("repeat-3", "Repeatable", -10.0),
+            ("repeat-4", "Repeatable", -5.0),
+        ]
+        for group, strategy, pnl in rows:
+            executions = __import__("json").dumps([
+                {"action": "BOT", "qty": 1, "price": 100.0, "time": "09:30:00"},
+                {"action": "SOLD", "qty": 1, "price": 101.0, "time": "09:35:00"},
+            ])
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, group, "2026-09-25", "SPY", "STOCK", "LONG",
+                    pnl, pnl, 0.0, executions, "imported",
+                ),
+            )
+            conn.execute(
+                """INSERT INTO trade_analysis (trade_group, ticker, date, strategy)
+                   VALUES (?,?,?,?)""",
+                (group, "SPY", "2026-09-25", strategy),
+            )
+
+        # Realized P&L can exist on a partially open position. Context analytics
+        # must not treat that row as a completed sample.
+        open_execs = __import__("json").dumps([
+            {"action": "BOT", "qty": 2, "price": 100.0, "time": "10:00:00"},
+            {"action": "SOLD", "qty": 1, "price": 105.0, "time": "10:05:00"},
+        ])
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                account_id, "open-lucky", "2026-09-25", "SPY", "STOCK", "LONG",
+                500.0, 500.0, 0.0, open_execs, "imported",
+            ),
+        )
+        conn.execute(
+            """INSERT INTO trade_analysis (trade_group, ticker, date, strategy)
+               VALUES (?,?,?,?)""",
+            ("open-lucky", "SPY", "2026-09-25", "Lucky"),
+        )
+        conn.commit()
+
+        result = main.get_kpis(
+            account_id=account_id,
+            date_from="2026-09-01",
+            date_to="2026-09-30",
+            conn=conn,
+        )
+        dim = result["edge_dimensions"]["strategy"]
+        by_label = {row["label"]: row for row in dim["rows"]}
+
+        assert dim["total_trades"] == 9
+        assert dim["coverage_count"] == 9
+        assert dim["min_sample"] == 5
+        assert dim["reliable_min_sample"] == 15
+        assert dim["metric_status"] == "VERIFIED"
+        assert dim["context_status"] == "RECORDED"
+
+        assert by_label["Lucky"]["count"] == 4
+        assert by_label["Lucky"]["win_rate"] == 100.0
+        assert by_label["Lucky"]["confidence"] == "LOW"
+        assert by_label["Lucky"]["sample_qualified"] is False
+        assert by_label["Lucky"]["evidence_status"] == "INSUFFICIENT DATA"
+
+        assert by_label["Repeatable"]["count"] == 5
+        assert by_label["Repeatable"]["confidence"] == "DEVELOPING"
+        assert by_label["Repeatable"]["sample_qualified"] is True
+        assert dim["best_win_rate"]["label"] == "Repeatable"
+        assert dim["strongest"]["label"] == "Repeatable"
+        assert dim["weakest"]["label"] == "Repeatable"
+
+        assert main._edge_confidence(14) == "DEVELOPING"
+        assert main._edge_confidence(15) == "RELIABLE"
     finally:
         conn.close()

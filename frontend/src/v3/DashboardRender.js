@@ -104,8 +104,8 @@ function Patterns({ dimensions, onViewAll }) {
   ];
   const titles = {
     strategy: 'Which recorded strategy is most repeatable',
-    source: 'Which idea source is producing the strongest outcomes',
-    setup: 'Which setup is working — kept separate from strategy',
+    source: 'Which recorded idea source is producing consistent outcomes',
+    setup: 'Which recorded setup is working — kept separate from strategy',
     emotion: 'Recorded emotional state only — never inferred',
   };
   const columnNames = {
@@ -121,9 +121,14 @@ function Patterns({ dimensions, onViewAll }) {
   const strongest = meta.strongest || null;
   const weakest = meta.weakest && (!strongest || meta.weakest.label !== strongest.label)
     ? meta.weakest : null;
+  const minSample = Number(meta.min_sample || 5);
+  const reliableMin = Number(meta.reliable_min_sample || 15);
+  const metricStatus = meta.metric_status || ((meta.total_trades || 0) > 0 ? 'VERIFIED' : 'INSUFFICIENT DATA');
+  const contextStatus = meta.context_status || ((meta.coverage_count || 0) > 0 ? 'RECORDED' : 'INSUFFICIENT DATA');
 
   const fmtPct = (v) => v == null ? '—' : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(1)}%`;
   const fmtPf = (v) => v == null ? '—' : Number(v).toFixed(2);
+  const statusClass = (value) => String(value || '').toLowerCase().replaceAll(' ', '-');
 
   return (
     <>
@@ -132,7 +137,13 @@ function Patterns({ dimensions, onViewAll }) {
           <h2 className="v3-h">What works</h2>
           <p className="v3-h-sub">{titles[tab]}</p>
         </div>
-        <div className="v3-acts">
+        <div className="v3-acts v3-edge-statuses">
+          <span className={`v3-chip v3-edge-status ${statusClass(metricStatus)}`} title="Performance math comes from reconciled closed-trade data">
+            {metricStatus}
+          </span>
+          <span className={`v3-chip v3-edge-status ${statusClass(contextStatus)}`} title="Context values are stored in the journal; missing values are not inferred">
+            {contextStatus}
+          </span>
           <span className="v3-chip">
             Coverage {Number(meta.coverage_pct || 0).toFixed(0)}%
           </span>
@@ -143,39 +154,49 @@ function Patterns({ dimensions, onViewAll }) {
       <Tabs tabs={tabs} active={tab} onChange={setTab} label="Recorded context breakdown" />
 
       <div className="v3-edge-note">
-        <span>{meta.coverage_count || 0} of {meta.total_trades || 0} trades recorded</span>
-        <span>Ranking requires {meta.min_sample || 1}+ trades per label</span>
+        <span>{meta.coverage_count || 0} of {meta.total_trades || 0} closed trades have recorded {columnNames[tab].toLowerCase()}</span>
+        <span>LOW 1–{Math.max(1, minSample - 1)} · DEVELOPING {minSample}–{Math.max(minSample, reliableMin - 1)} · RELIABLE {reliableMin}+</span>
+        <span>Comparisons ignore LOW samples</span>
       </div>
 
       {(bestWin || strongest || weakest) && (
         <div className="v3-edge-insights">
           <article>
-            <span className="v3-lab">Highest win rate</span>
+            <span className="v3-lab">Highest win rate · qualified sample</span>
             {bestWin ? (
               <>
-                <b>{bestWin.label}</b>
+                <div className="v3-edge-insight-title">
+                  <b>{bestWin.label}</b>
+                  <small className={`v3-edge-confidence ${String(bestWin.confidence || '').toLowerCase()}`}>{bestWin.confidence}</small>
+                </div>
                 <strong>{Number(bestWin.win_rate || 0).toFixed(1)}%</strong>
                 <small>{bestWin.count} trades · expectancy {money(bestWin.expectancy)}</small>
               </>
-            ) : <small>Need more recorded trades.</small>}
+            ) : <small>INSUFFICIENT DATA</small>}
           </article>
 
           <article>
-            <span className="v3-lab">Strongest expectancy</span>
+            <span className="v3-lab">Strongest expectancy · qualified sample</span>
             {strongest ? (
               <>
-                <b>{strongest.label}</b>
+                <div className="v3-edge-insight-title">
+                  <b>{strongest.label}</b>
+                  <small className={`v3-edge-confidence ${String(strongest.confidence || '').toLowerCase()}`}>{strongest.confidence}</small>
+                </div>
                 <strong className={tone(strongest.expectancy)}>{money(strongest.expectancy)} / trade</strong>
                 <small>WR {Number(strongest.win_rate || 0).toFixed(0)}% · PF {fmtPf(strongest.profit_factor)}</small>
               </>
-            ) : <small>Need more recorded trades.</small>}
+            ) : <small>INSUFFICIENT DATA</small>}
           </article>
 
           <article>
-            <span className="v3-lab">Needs attention</span>
+            <span className="v3-lab">Needs attention · qualified sample</span>
             {weakest ? (
               <>
-                <b>{weakest.label}</b>
+                <div className="v3-edge-insight-title">
+                  <b>{weakest.label}</b>
+                  <small className={`v3-edge-confidence ${String(weakest.confidence || '').toLowerCase()}`}>{weakest.confidence}</small>
+                </div>
                 <strong className={tone(weakest.expectancy)}>{money(weakest.expectancy)} / trade</strong>
                 <small>WR {Number(weakest.win_rate || 0).toFixed(0)}% · PF {fmtPf(weakest.profit_factor)}</small>
               </>
@@ -185,7 +206,7 @@ function Patterns({ dimensions, onViewAll }) {
       )}
 
       {!rows.length ? (
-        <div className="v3-empty">Nothing recorded for {columnNames[tab].toLowerCase()} in this range.</div>
+        <div className="v3-empty"><strong>INSUFFICIENT DATA</strong> · No recorded {columnNames[tab].toLowerCase()} values in this range.</div>
       ) : (
         <div className="v3-scroll">
           <table className="v3-t v3-edge-table">
@@ -206,7 +227,13 @@ function Patterns({ dimensions, onViewAll }) {
                 <tr key={`${r.label}-${i}`} className={r.sample_qualified ? '' : 'v3-edge-low-sample'}>
                   <td className="v3-tick">
                     <span>{r.label}</span>
-                    {!r.sample_qualified && <small title={`Ranking requires ${meta.min_sample || 1}+ trades`}>small sample</small>}
+                    <span className="v3-edge-badges">
+                      <small className="v3-edge-badge recorded">{r.context_status || 'RECORDED'}</small>
+                      <small className={`v3-edge-badge confidence ${String(r.confidence || 'LOW').toLowerCase()}`}>{r.confidence || 'LOW'}</small>
+                      {r.evidence_status === 'INSUFFICIENT DATA' && (
+                        <small className="v3-edge-badge insufficient-data">INSUFFICIENT DATA</small>
+                      )}
+                    </span>
                   </td>
                   <td className="r v3-mono">{r.count}</td>
                   <td className="r v3-mono v3-hide-s">{r.wins}-{r.losses}</td>

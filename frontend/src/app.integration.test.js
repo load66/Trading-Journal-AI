@@ -585,3 +585,88 @@ test('Goals save failure is shown and keeps the panel open', async () => {
   expect(await screen.findByRole('alert')).toHaveTextContent(/Could not save goals: Server error/);
   expect(screen.getByRole('heading', { name: 'Goals' })).toBeInTheDocument();
 });
+
+
+test('Dashboard context analytics shows evidence status and sample confidence without promoting tiny samples', async () => {
+  const qualified = {
+    label: 'Repeatable',
+    strategy: 'Repeatable',
+    count: 5,
+    wins: 3,
+    losses: 2,
+    win_rate: 60,
+    net_pnl: 60,
+    expectancy: 12,
+    profit_factor: 3.75,
+    avg_pl_pct: 1.2,
+    confidence: 'DEVELOPING',
+    sample_qualified: true,
+    metric_status: 'VERIFIED',
+    context_status: 'RECORDED',
+    evidence_status: 'RECORDED',
+  };
+  const tiny = {
+    label: 'Lucky',
+    strategy: 'Lucky',
+    count: 4,
+    wins: 4,
+    losses: 0,
+    win_rate: 100,
+    net_pnl: 166,
+    expectancy: 41.5,
+    profit_factor: null,
+    avg_pl_pct: 4.1,
+    confidence: 'LOW',
+    sample_qualified: false,
+    metric_status: 'VERIFIED',
+    context_status: 'RECORDED',
+    evidence_status: 'INSUFFICIENT DATA',
+  };
+  const meta = (rows, labelKey) => ({
+    rows: rows.map((row) => ({ ...row, [labelKey]: row.label })),
+    coverage_count: rows.reduce((sum, row) => sum + row.count, 0),
+    coverage_pct: 100,
+    total_trades: rows.reduce((sum, row) => sum + row.count, 0),
+    min_sample: 5,
+    reliable_min_sample: 15,
+    metric_status: 'VERIFIED',
+    context_status: 'RECORDED',
+    best_win_rate: rows.find((row) => row.sample_qualified) || null,
+    strongest: rows.find((row) => row.sample_qualified) || null,
+    weakest: rows.find((row) => row.sample_qualified) || null,
+  });
+
+  // App account initialization can refetch the dashboard; keep the same fixture
+  // for every call in this test so a later account-state fetch cannot overwrite it.
+  kpisApi.get.mockResolvedValue({
+    data: {
+      total_net_pnl: 226,
+      total_trades: 9,
+      winning_trades: 7,
+      losing_trades: 2,
+      win_rate: 77.8,
+      daily_pnl: [],
+      by_strategy: [qualified, tiny],
+      edge_dimensions: {
+        strategy: meta([qualified, tiny], 'strategy'),
+        source: meta([{ ...qualified, label: 'Scanner', source: 'Scanner' }], 'source'),
+        setup: meta([{ ...qualified, label: 'ORB', setup: 'ORB' }], 'setup'),
+        emotion: meta([{ ...qualified, label: 'Focused', emotion: 'Focused' }], 'emotion'),
+      },
+    },
+  });
+
+  await renderApp();
+
+  expect(await screen.findByRole('heading', { name: 'What works' })).toBeVisible();
+  expect(screen.getAllByText('VERIFIED').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('RECORDED').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('DEVELOPING').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('LOW').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('INSUFFICIENT DATA').length).toBeGreaterThan(0);
+  expect(screen.getByText('Comparisons ignore LOW samples')).toBeVisible();
+
+  const sourceTab = screen.getByRole('tab', { name: 'Source' });
+  fireEvent.click(sourceTab);
+  expect(sourceTab).toHaveAttribute('aria-selected', 'true');
+});
