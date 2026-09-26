@@ -93,7 +93,8 @@ def test_first_ten_minutes_and_ticker_labels():
     report = build_performance_report(rows)
     assert report["time_analysis"]["first_10_minutes"]["trade_count"] == 1
     ranking = {r["ticker"]: r for r in report["ticker_ranking"]}
-    assert ranking["SPY"]["label"] == "EDGE"
+    assert ranking["SPY"]["label"] == "MARGINAL"
+    assert ranking["SPY"]["sample_quality"] == "thin"
     assert ranking["TSLA"]["label"] in {"LEAK", "BLEEDING", "HEMORRHAGE"}
 
 
@@ -148,3 +149,26 @@ def test_tilt_size_is_reported_as_multiple_of_typical_instrument_size():
     assert tilt["size_unit"] == "multiple of typical size within instrument family"
     assert tilt["first3_avg_size"] is not None
     assert tilt["post_threshold_avg_size"] is not None
+
+
+def test_ticker_edge_requires_established_sample():
+    rows = [
+        trade(f"edge-{i}", f"2026-09-{13+i:02d}", "SPY", 50,
+              "10:00:00", "10:06:00")
+        for i in range(5)
+    ]
+    report = build_performance_report(rows)
+    spy = next(r for r in report["ticker_ranking"] if r["ticker"] == "SPY")
+    assert spy["label"] == "EDGE"
+    assert spy["sample_quality"] == "established"
+
+
+def test_behavior_counterfactual_reports_pnl_if_eliminated():
+    rows = [
+        trade("loss", "2026-09-20", "SPY", -200, "09:31:00", "09:36:00"),
+        trade("win", "2026-09-20", "QQQ", 50, "10:31:00", "10:36:00"),
+    ]
+    report = build_performance_report(rows)
+    opening = next(x for x in report["behavior"]["ranked_flaws"] if x["name"] == "First 30 minutes")
+    assert opening["dollar_impact"] == 200
+    assert opening["pnl_if_eliminated"] == 50
