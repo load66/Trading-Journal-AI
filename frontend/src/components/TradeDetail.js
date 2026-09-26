@@ -4,6 +4,10 @@ import { tradesApi, chartApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
+import { buildExecutionLedger, parseTradeExecutions } from '../tradeMath';
+import { DISPLAY_TIME_ZONE, executionTimeETMinutes, formatExecutionTimeET } from '../tradeTime';
+
+export { executionTimeETMinutes, formatExecutionTimeET, zonedWallTimeToDate } from '../tradeTime';
 
 const fmt$ = (v) => {
   if (v == null) return '—';
@@ -17,12 +21,7 @@ const fmtSigned$ = (v) => {
   return (n >= 0 ? '+$' : '-$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-function parseExecs(trade) {
-  const raw = trade.executions;
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
-  try { return JSON.parse(raw); } catch { return []; }
-}
+const parseExecs = parseTradeExecutions;
 
 function computeStats(trade) {
   const execs = parseExecs(trade);
@@ -65,8 +64,15 @@ function computeStats(trade) {
 
   const isClosed = exitFills.length > 0;
   const isWin = (trade.net_pnl || 0) > 0;
+  const executionLedger = buildExecutionLedger(trade);
 
-  return { avgEntry, avgExit, totalQty, adjustedCost, plPercent, openTime, closeTime, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
+  return {
+    avgEntry, avgExit, totalQty, adjustedCost, plPercent, openTime, closeTime,
+    holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills,
+    executionLedger,
+    bestTrimReturnPct: executionLedger.bestTrimReturnPct,
+    lastTrimReturnPct: executionLedger.lastTrimReturnPct,
+  };
 }
 
 // ── Stat row helper ────────────────────────────────────────────────────────────
@@ -193,71 +199,6 @@ function TagBadge({ tag, onDelete }) {
 }
 
 // ── What If helpers ───────────────────────────────────────────────────────────
-
-const BROKER_EXECUTION_TIME_ZONE = 'America/Chicago';
-const DISPLAY_TIME_ZONE = 'America/New_York';
-
-export function zonedWallTimeToDate(dateStr, timeStr, timeZone = BROKER_EXECUTION_TIME_ZONE) {
-  if (!dateStr || !timeStr) return null;
-  const [year, month, day] = dateStr.split('-').map(Number);
-  const [hour, minute, second = 0] = timeStr.split(':').map(Number);
-  if (![year, month, day, hour, minute, second].every(Number.isFinite)) return null;
-
-  const wallUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
-  let utcMs = wallUtcMs;
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hourCycle: 'h23',
-  });
-
-  // Two passes resolve the zone offset without assuming CST/CDT.
-  for (let i = 0; i < 2; i += 1) {
-    const parts = Object.fromEntries(
-      formatter.formatToParts(new Date(utcMs))
-        .filter(p => p.type !== 'literal')
-        .map(p => [p.type, p.value])
-    );
-    const renderedAsUtc = Date.UTC(
-      Number(parts.year), Number(parts.month) - 1, Number(parts.day),
-      Number(parts.hour), Number(parts.minute), Number(parts.second)
-    );
-    utcMs += wallUtcMs - renderedAsUtc;
-  }
-  return new Date(utcMs);
-}
-
-function etPartsForExecution(dateStr, timeStr) {
-  const instant = zonedWallTimeToDate(dateStr, timeStr);
-  if (!instant) return null;
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: DISPLAY_TIME_ZONE,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(instant)
-      .filter(p => p.type !== 'literal')
-      .map(p => [p.type, p.value])
-  );
-  return {
-    date: `${parts.year}-${parts.month}-${parts.day}`,
-    hour: Number(parts.hour),
-    minute: Number(parts.minute),
-    hhmm: `${parts.hour}:${parts.minute}`,
-  };
-}
-
-export function formatExecutionTimeET(dateStr, timeStr) {
-  const parts = etPartsForExecution(dateStr, timeStr);
-  return parts ? `${parts.hhmm} ET` : '—';
-}
-
-export function executionTimeETMinutes(dateStr, timeStr) {
-  const parts = etPartsForExecution(dateStr, timeStr);
-  return parts ? parts.hour * 60 + parts.minute : null;
-}
 
 function barETMinutes(timestamp) {
   if (!timestamp) return null;
@@ -757,9 +698,23 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </div>
 
                 <StatRow label="Side" value={trade.side} />
-                <StatRow label="Stocks traded" value={stats.totalQty || '—'} />
+                <StatRow label={trade.instrument_type === 'OPTION' ? 'Contracts traded' : 'Shares traded'} value={stats.totalQty || '—'} />
                 <StatRow label="Commissions & Fees" value={trade.commissions ? fmt$(trade.commissions) : '—'} />
-                <StatRow label="P/L %" value={stats.plPercent != null ? `${stats.plPercent >= 0 ? '+' : ''}${stats.plPercent.toFixed(2)}%` : '—'} valueColor={stats.plPercent != null ? (stats.plPercent >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
+                <StatRow label="Trade Return (net)" value={stats.plPercent != null ? `${stats.plPercent >= 0 ? '+' : ''}${stats.plPercent.toFixed(2)}%` : '—'} valueColor={stats.plPercent != null ? (stats.plPercent >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
+                {stats.exitFills.length > 1 && (
+                  <StatRow
+                    label="Last Trim Return"
+                    value={stats.lastTrimReturnPct != null ? `${stats.lastTrimReturnPct >= 0 ? '+' : ''}${stats.lastTrimReturnPct.toFixed(2)}%` : '—'}
+                    valueColor={stats.lastTrimReturnPct != null ? (stats.lastTrimReturnPct >= 0 ? 'var(--green)' : 'var(--red)') : undefined}
+                  />
+                )}
+                {stats.exitFills.length > 1 && stats.bestTrimReturnPct != null && stats.bestTrimReturnPct !== stats.lastTrimReturnPct && (
+                  <StatRow
+                    label="Best Trim Return"
+                    value={`${stats.bestTrimReturnPct >= 0 ? '+' : ''}${stats.bestTrimReturnPct.toFixed(2)}%`}
+                    valueColor={stats.bestTrimReturnPct >= 0 ? 'var(--green)' : 'var(--red)'}
+                  />
+                )}
                 <StatRow label="Gross P&L" value={trade.gross_pnl != null ? fmt$(trade.gross_pnl) : '—'} valueColor={trade.gross_pnl >= 0 ? 'var(--green)' : 'var(--red)'} />
                 <StatRow label="Adjusted Cost" value={stats.adjustedCost ? fmt$(stats.adjustedCost) : '—'} />
                 <StatRow label="Average Entry" value={stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : '—'} />
@@ -953,25 +908,38 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     trade with enough columns to not fit the fixed-width side panel. An
                     explicit scroll container is what actually makes those reachable. */}
                 <div className="scroll-x" style={{ margin: '0 -20px' }}>
-                <table style={{ minWidth: 470 }}>
+                <table style={{ minWidth: 720 }}>
                   <thead>
                     <tr>
-                      {['Date', 'Time', 'Action', 'Qty', 'Price', 'Comm.', ''].map((h, hi) => (
-                        <th key={h || hi} className={h === 'Date' || h === 'Time' || h === 'Action' ? undefined : 'num'} style={{ paddingLeft: hi === 0 ? 20 : undefined, paddingRight: hi === 6 ? 20 : undefined }}>
+                      {['Date', 'Time', 'Action', 'Qty', 'Price', 'Trim Return', 'Realized P&L', 'Comm.', ''].map((h, hi) => (
+                        <th key={h || hi} className={h === 'Date' || h === 'Time' || h === 'Action' ? undefined : 'num'} style={{ paddingLeft: hi === 0 ? 20 : undefined, paddingRight: hi === 8 ? 20 : undefined }}>
                           {h || <span className="sr-only">Actions</span>}
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {parseExecs(trade).map((ex, i) => (
+                    {stats.executionLedger.rows.map((ex, i) => (
                       <tr key={i}>
                         <td className="mono text-muted" style={{ paddingLeft: 20, fontSize: 13, whiteSpace: 'nowrap' }}>{ex.date ? ex.date.slice(5) : '—'}</td>
                         <td className="mono" style={{ fontSize: 13.5, whiteSpace: 'nowrap' }}>{ex.time ? formatExecutionTimeET(ex.date || trade.date, ex.time) : '—'}</td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{ex.action}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          {ex.action}
+                          {ex.role === 'exit' && (
+                            <span className="text-muted" style={{ marginLeft: 6, fontSize: 11 }}>
+                              {ex.isFinalExit && stats.exitFills.length > 1 ? 'Runner' : stats.exitFills.length > 1 ? `Trim ${ex.exitNumber}` : 'Exit'}
+                            </span>
+                          )}
+                        </td>
                         <td className="num mono" style={{ fontSize: 13.5 }}>{ex.qty}</td>
                         <td className="num mono" style={{ fontSize: 13.5 }}>${Number(ex.price ?? 0).toFixed(2)}</td>
-                        <td className="num mono text-muted" style={{ fontSize: 13.5 }}>{ex.commission ? `$${Number(ex.commission).toFixed(2)}` : '—'}</td>
+                        <td className={`num mono ${ex.trimReturnPct == null ? 'text-muted' : ex.trimReturnPct >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: 13.5 }}>
+                          {ex.trimReturnPct == null ? '—' : `${ex.trimReturnPct >= 0 ? '+' : ''}${ex.trimReturnPct.toFixed(2)}%`}
+                        </td>
+                        <td className={`num mono ${ex.realizedPnl == null ? 'text-muted' : ex.realizedPnl >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: 13.5 }}>
+                          {ex.realizedPnl == null ? '—' : fmtSigned$(ex.realizedPnl)}
+                        </td>
+                        <td className="num mono text-muted" style={{ fontSize: 13.5 }}>{ex.commission ? `${Number(ex.commission).toFixed(2)}` : '—'}</td>
                         <td className="num" style={{ whiteSpace: 'nowrap', paddingRight: 20 }}>
                           <button
                             title="Edit"
@@ -996,9 +964,12 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </table>
                 </div>
 
-                <div className="text-muted" style={{ fontSize: 13, marginTop: 10 }}>
+                <div className="text-muted" style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
                   Gross <span className="num">{trade.gross_pnl != null ? fmtSigned$(trade.gross_pnl) : 'n/a'}</span>
                   {' · '}Commissions <span className="num">{trade.commissions ? fmt$(trade.commissions) : '$0.00'}</span>
+                  {' · '}Trade return <span className="num">{stats.plPercent != null ? `${stats.plPercent >= 0 ? '+' : ''}${stats.plPercent.toFixed(2)}%` : 'n/a'}</span>
+                  <br />
+                  Trim Return is the contract/share price move from the running average entry before fees. Realized P&L allocates entry fees pro rata and includes that exit's fees.
                 </div>
 
                 {/* Edit Execution inline panel */}
