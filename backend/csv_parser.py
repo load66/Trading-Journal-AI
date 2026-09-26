@@ -2,6 +2,7 @@ import re
 import json
 import csv
 import io
+from collections import Counter
 from datetime import datetime
 
 
@@ -426,14 +427,19 @@ def aggregate_executions(fills: list[dict]) -> dict:
     # Serialize executions (drop 'amount' internal field, keep display fields)
     execs = []
     for f in fills:
-        execs.append({
+        item = {
             'date': f.get('iso_date', f.get('date', '')),
             'time': f.get('time', ''),
             'action': f.get('action', ''),
             'qty': f.get('qty', 0),
             'price': f.get('price', 0.0),
             'commission': f.get('commission', 0.0),
-        })
+        }
+        if f.get('source_ref'):
+            item['source_ref'] = str(f.get('source_ref'))
+        if f.get('timestamp_precision'):
+            item['timestamp_precision'] = f.get('timestamp_precision')
+        execs.append(item)
 
     return {
         'side': side,
@@ -490,6 +496,8 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
         misc_fees_idx = col.get('MISC FEES', 5)
         comm_idx = col.get('COMMISSIONS & FEES', 6)
         amount_idx = col.get('AMOUNT', 7)
+        ref_idx = col.get('REF #', col.get('REF NUM', -1))
+        source_ref = row[ref_idx].strip().strip('"=') if ref_idx >= 0 and ref_idx < len(row) else ''
 
         misc_fees = clean_amount(row[misc_fees_idx]) if misc_fees_idx < len(row) else 0.0
         commission = clean_amount(row[comm_idx]) if comm_idx < len(row) else 0.0
@@ -509,10 +517,3235 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
             'amount': amount,
             'commission': total_commission,
             'raw_description': desc,
+            'source_ref': source_ref,
+            'timestamp_precision': 'second' if re.search(r':\d{2}(rows: list[list[str]]) -> list[dict]:
+    """
+    Parse rows from the Futures Statements section.
+    Header: Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance
+    """
+    if not rows:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(rows):
+        joined = ','.join(row).upper()
+        if 'EXEC TIME' in joined or 'EXEC DATE' in joined:
+            header_idx = i
+            break
+
+    if header_idx is None:
+        return []
+
+    header = [h.strip().upper() for h in rows[header_idx]]
+    col = {h: i for i, h in enumerate(header)}
+
+    executions = []
+    for row in rows[header_idx + 1:]:
+        if len(row) < 5:
+            continue
+
+        row_type = row[col.get('TYPE', 3)].strip() if col.get('TYPE', 3) < len(row) else ''
+        if row_type not in ('TRD', 'TRADE'):
+            continue
+
+        trade_date = row[col.get('TRADE DATE', 0)].strip() if col.get('TRADE DATE', 0) < len(row) else ''
+        exec_time = row[col.get('EXEC TIME', 2)].strip() if col.get('EXEC TIME', 2) < len(row) else ''
+        desc = row[col.get('DESCRIPTION', 5)].strip().strip('"') if col.get('DESCRIPTION', 5) < len(row) else ''
+
+        misc_fees_idx = col.get('MISC FEES', 6)
+        comm_idx = col.get('COMMISSIONS & FEES', 7)
+        amount_idx = col.get('AMOUNT', 8)
+        ref_idx = col.get('REF #', col.get('REF NUM', -1))
+        source_ref = row[ref_idx].strip().strip('"=') if ref_idx >= 0 and ref_idx < len(row) else ''
+
+        misc_fees = clean_amount(row[misc_fees_idx]) if misc_fees_idx < len(row) else 0.0
+        commission = clean_amount(row[comm_idx]) if comm_idx < len(row) else 0.0
+        amount = clean_amount(row[amount_idx]) if amount_idx < len(row) else 0.0
+        total_commission = abs(misc_fees) + abs(commission)
+
+        parsed = parse_futures_description(desc)
+        if not parsed:
+            continue
+
+        parsed.update({
+            'date': trade_date,
+            'iso_date': normalize_date(trade_date),
+            'time': exec_time,
+            'amount': amount,
+            'commission': total_commission,
+            'raw_description': desc,
+            'source_ref': source_ref,
+            'timestamp_precision': 'second' if re.search(r':\d{2}(exec_dict: dict) -> str:
+    """Create a unique key for duplicate detection. Uses iso_date so it matches stored executions."""
+    date = exec_dict.get('iso_date') or exec_dict.get('date', '')
+    return f"{date}|{exec_dict.get('time','')}|{exec_dict.get('ticker','')}|{exec_dict.get('action','')}|{exec_dict.get('qty','')}|{exec_dict.get('price','')}"
+
+
+def get_existing_fingerprints(conn, account_id: int) -> set[str]:
+    """Load all existing execution fingerprints for an account.
+    Reads ticker from the trade row (not stored in executions JSON) to match execution_fingerprint format.
+    """
+    cursor = conn.execute(
+        "SELECT ticker, executions FROM trades WHERE account_id = ?", (account_id,)
+    )
+    fingerprints = set()
+    for row in cursor:
+        ticker = row[0] or ''
+        try:
+            execs = json.loads(row[1] or '[]')
+            for e in execs:
+                fp = f"{e.get('date','')}|{e.get('time','')}|{ticker}|{e.get('action','')}|{e.get('qty','')}|{e.get('price','')}"
+                fingerprints.add(fp)
+        except Exception:
+            pass
+    return fingerprints
+
+
+def _make_group_meta(date_str: str, ticker: str, instr: str, fills: list[dict]) -> dict:
+    return {
+        'date': normalize_date(date_str),
+        'raw_date': date_str,
+        'ticker': ticker,
+        'instrument_type': instr,
+        'option_expiry': fills[0].get('option_expiry'),
+        'option_strike': fills[0].get('option_strike'),
+        'option_type': fills[0].get('option_type'),
+    }
+
+
+def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
+    """
+    Group executions into trades based on position open/close cycles.
+    Each time a position returns to 0 shares/contracts, that completes one trade.
+    Fills spanning multiple days are matched correctly (e.g., buy Monday, sell Wednesday).
+    The trade date is the CLOSING fill's date so P&L is realized on the exit day.
+    Multiple cycles per ticker produce separate numbered trades (_1, _2, ...).
+    """
+    # Sort all fills chronologically so multi-day positions process in order
+    executions_sorted = sorted(
+        executions,
+        key=lambda ex: (ex.get('iso_date', ex['date']), ex.get('time', ''))
+    )
+
+    # Key by (ticker, instrument_type) — no date — so multi-day trades stay together.
+    # Options are keyed by their specific contract to avoid mixing different strikes/expiries.
+    by_ticker: dict[tuple, list[dict]] = {}
+    for ex in executions_sorted:
+        if ex['instrument_type'] == 'OPTION':
+            k = (ex['ticker'], ex['instrument_type'],
+                 ex.get('option_expiry', ''), ex.get('option_strike', ''), ex.get('option_type', ''))
+        else:
+            k = (ex['ticker'], ex['instrument_type'])
+        by_ticker.setdefault(k, []).append(ex)
+
+    groups: dict[str, list[dict]] = {}
+    group_meta: dict[str, dict] = {}
+
+    for key_tuple, fills in by_ticker.items():
+        ticker = key_tuple[0]
+        instr = key_tuple[1]
+
+        position = 0
+        seq = 0
+        current_fills: list[dict] = []
+
+        for fill in fills:
+            if _is_flat(position):
+                seq += 1
+                current_fills = []
+                position = 0
+
+            qty = fill['qty']
+            if fill['action'] == 'BOT':
+                position += qty
+            else:
+                position -= qty
+
+            current_fills.append(fill)
+
+            if _is_flat(position):
+                close_date = current_fills[-1]['date']
+                key = trade_group_key(close_date, ticker, instr, seq,
+                                      current_fills[0].get('option_expiry'),
+                                      current_fills[0].get('option_strike'),
+                                      current_fills[0].get('option_type'))
+                groups[key] = list(current_fills)
+                group_meta[key] = _make_group_meta(close_date, ticker, instr, current_fills)
+
+        # Open/unclosed position — use date of the most recent fill
+        if current_fills and not _is_flat(position):
+            last_date = current_fills[-1]['date']
+            key = trade_group_key(last_date, ticker, instr, seq,
+                                  current_fills[0].get('option_expiry'),
+                                  current_fills[0].get('option_strike'),
+                                  current_fills[0].get('option_type'))
+            groups[key] = list(current_fills)
+            group_meta[key] = _make_group_meta(last_date, ticker, instr, current_fills)
+
+    return groups, group_meta
+
+
+def _is_flat(position) -> bool:
+    """Position is back to zero. Tolerance so fractional-share fills (IBKR) still close out."""
+    return abs(position) < 1e-6
+
+
+def _option_pos_key(ticker: str, instr: str, expiry, strike, opt_type) -> tuple:
+    return (ticker, instr, expiry or '', strike or 0, opt_type or '')
+
+
+def _stock_pos_key(ticker: str, instr: str) -> tuple:
+    return (ticker, instr)
+
+
+def _exec_pos_key(ex: dict) -> tuple:
+    instr = ex.get('instrument_type', 'STOCK')
+    if instr == 'OPTION':
+        return _option_pos_key(ex['ticker'], instr,
+                                ex.get('option_expiry'), ex.get('option_strike'), ex.get('option_type'))
+    return _stock_pos_key(ex['ticker'], instr)
+
+
+def load_open_positions_from_db(conn, account_id: int) -> list[dict]:
+    """
+    Return open trade records from the DB (positions where qty_bot != qty_sold).
+    Each record includes the parsed executions list.
+    """
+    rows = conn.execute(
+        """SELECT id, trade_group, ticker, instrument_type,
+                  option_expiry, option_strike, option_type, side, executions
+           FROM trades WHERE account_id = ?""",
+        (account_id,)
+    ).fetchall()
+    open_trades = []
+    for row in rows:
+        d = dict(row)
+        execs = json.loads(d['executions'] or '[]')
+        qty_bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
+        qty_sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
+        if qty_bot != qty_sold:
+            d['parsed_execs'] = execs
+            open_trades.append(d)
+    return open_trades
+
+
+def _rebuild_fill_from_db_exec(e: dict, trade_meta: dict) -> dict:
+    """Reconstruct a full fill dict from a stored execution + trade metadata."""
+    instr = trade_meta['instrument_type']
+    multiplier = 100 if instr == 'OPTION' else 1
+    price = e.get('price', 0.0)
+    qty = e.get('qty', 0)
+    amount = price * qty * multiplier
+    if e.get('action') == 'BOT':
+        amount = -amount
+    return {
+        'action': e.get('action', ''),
+        'qty': qty,
+        'ticker': trade_meta['ticker'],
+        'price': price,
+        'instrument_type': instr,
+        'option_expiry': trade_meta.get('option_expiry'),
+        'option_strike': trade_meta.get('option_strike'),
+        'option_type': trade_meta.get('option_type'),
+        'date': e.get('date', ''),
+        'iso_date': e.get('date', ''),
+        'time': e.get('time', ''),
+        'amount': round(amount, 2),
+        'commission': e.get('commission', 0.0),
+    }
+
+
+def _raw_date(iso_date: str) -> str:
+    """YYYY-MM-DD back to the statement's M/D/YY, the form trade_group keys are built from."""
+    try:
+        y, m, d = iso_date.split('-')
+        return f"{int(m)}/{int(d)}/{y[2:]}"
+    except ValueError:
+        return iso_date
+
+
+def _point_value(ticker: str, instr: str):
+    if instr == 'OPTION':
+        return 100
+    if instr != 'FUTURE':
+        return 1
+    for root in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True):
+        if ticker.upper().startswith(root):
+            return FUTURES_MULTIPLIERS[root]
+    return None
+
+
+def overlapping_db_fills(conn, account_id: int, new_execs: list[dict]) -> tuple[list[dict], set[str]]:
+    """Stored fills that must be regrouped together with the new ones.
+
+    Trade groups are numbered by position cycle within one import (_1, _2, ...). A later
+    import that brings more fills for a ticker already stored that day would number its
+    cycles from 1 again and overwrite the stored trade of the same name, losing it. So for
+    each stock or future with new fills, the stored imported trades that share a day with
+    them (or are still open) are rebuilt from their executions and grouped with the new
+    fills, and the caller replaces them. Futures with an unknown point value are left alone.
+    Returns (rebuilt fills tagged with '_old_group', the old trade_groups they came from).
+    """
+    days: dict[tuple, set] = {}
+    for ex in new_execs:
+        instr = ex.get('instrument_type', 'STOCK')
+        if instr == 'OPTION':
+            continue
+        days.setdefault((ex['ticker'], instr), set()).add(ex.get('iso_date') or normalize_date(ex['date']))
+
+    fills: list[dict] = []
+    old_groups: set[str] = set()
+    for (ticker, instr), dates in days.items():
+        mult = _point_value(ticker, instr)
+        if mult is None:
+            continue
+        rows = conn.execute(
+            """SELECT trade_group, ticker, instrument_type, option_expiry, option_strike, option_type, executions
+               FROM trades WHERE account_id = ? AND ticker = ? AND instrument_type = ?
+               AND COALESCE(source, 'imported') = 'imported'""",
+            (account_id, ticker, instr),
+        ).fetchall()
+        for row in rows:
+            meta = dict(row)
+            execs = json.loads(meta['executions'] or '[]')
+            bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
+            sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
+            if not ({e.get('date', '') for e in execs} & dates) and bot == sold:
+                continue
+            old_groups.add(meta['trade_group'])
+            for e in execs:
+                f = _rebuild_fill_from_db_exec(e, meta)
+                f['amount'] = round(f['amount'] * mult, 2)
+                # keys carry the date the way this broker's parser wrote it
+                slashed = '/' in meta['trade_group'].split('_')[0]
+                f['date'] = _raw_date(f['iso_date']) if slashed else f['iso_date']
+                f['_old_group'] = meta['trade_group']
+                fills.append(f)
+    return fills, old_groups
+
+
+def _cross_section_key(ex: dict) -> str:
+    """Fingerprint for deduplicating across CSV sections (no time field — formats differ)."""
+    return f"{ex.get('iso_date','')}|{ex.get('ticker','')}|{ex.get('action','')}|{ex.get('qty','')}|{ex.get('price','')}"
+
+
+def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Full CSV parse pipeline.
+    Returns (list of trade dicts ready for DB insert, skipped_count).
+    """
+    content = content.lstrip('﻿')
+
+    sections = split_csv_sections(content)
+    cash_rows = find_cash_balance_section(sections)
+    futures_rows = find_futures_section(sections)
+    trade_history_rows = find_trade_history_section(sections)
+
+    all_executions = []
+    if cash_rows:
+        all_executions.extend(parse_cash_balance_section(cash_rows))
+    if futures_rows:
+        all_executions.extend(parse_futures_section_rows(futures_rows))
+
+    # Merge Trade History: add fills not already represented in Cash Balance / Futures.
+    # Use (iso_date, ticker, action, qty, price) to match across sections — time formats differ.
+    # Thinkorswim aggregates partial fills in Trade History (e.g., two CB fills of 40+60 appear as 100).
+    # Check cumulative qty per (date, ticker, action, price) so those aggregated entries are skipped.
+    if trade_history_rows:
+        cb_exact_keys = {_cross_section_key(ex) for ex in all_executions}
+        cb_qty_map: dict[tuple, int] = {}
+        for ex in all_executions:
+            k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
+            cb_qty_map[k] = cb_qty_map.get(k, 0) + ex.get('qty', 0)
+        for ex in parse_trade_history_section(trade_history_rows):
+            if _cross_section_key(ex) in cb_exact_keys:
+                continue
+            k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
+            if cb_qty_map.get(k, 0) >= ex.get('qty', 0):
+                continue  # CB partial fills already cover this aggregated TH fill
+            all_executions.append(ex)
+
+    return build_trades_from_executions(all_executions, account_id, conn)
+
+
+def build_trades_from_executions(all_executions: list[dict], account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Broker-agnostic half of the import pipeline. Takes execution dicts in the
+    common shape (action BOT/SOLD, qty, ticker, price, instrument_type, option_*,
+    date, iso_date, time, amount, commission) and returns (trade dicts, skipped).
+
+    Steps: DB-level duplicate detection, merging fills into open option
+    positions already stored, grouping by position open/close cycles, and
+    aggregating each group into a trade row. Every broker parser ends here so
+    grouping and dedup behave identically regardless of the CSV format.
+    """
+    if not all_executions:
+        return [], 0
+
+    # DB-level dedup only — never dedupe within same file (Thinkorswim legitimately
+    # emits identical time/price/qty fills for large split orders)
+    existing_fps = get_existing_fingerprints(conn, account_id) if conn else Counter()
+    skipped = 0
+    unique_executions = []
+    for exec_dict in all_executions:
+        fp = execution_fingerprint(exec_dict)
+        if existing_fps.get(fp, 0) > 0:
+            existing_fps[fp] -= 1
+            skipped += 1
+        else:
+            unique_executions.append(dict(exec_dict))
+
+    # Merge new fills into existing open OPTION positions from DB.
+    # Options use a specific contract key (expiry/strike/type) so the match is unambiguous.
+    # Stock positions are skipped here — day-trading cycles are too ambiguous to auto-merge.
+    if conn:
+        open_positions = load_open_positions_from_db(conn, account_id)
+        open_by_key: dict[tuple, dict] = {}
+        for pos in open_positions:
+            if pos['instrument_type'] != 'OPTION':
+                continue  # only merge options
+            k = _option_pos_key(pos['ticker'], pos['instrument_type'],
+                                pos.get('option_expiry'), pos.get('option_strike'), pos.get('option_type'))
+            open_by_key[k] = pos
+
+        absorbed = []
+        remaining = []
+        for ex in unique_executions:
+            if ex.get('instrument_type') != 'OPTION':
+                remaining.append(ex)
+                continue
+            k = _option_pos_key(ex['ticker'], ex['instrument_type'],
+                                ex.get('option_expiry'), ex.get('option_strike'), ex.get('option_type'))
+            if k in open_by_key:
+                absorbed.append((ex, open_by_key[k]))
+            else:
+                remaining.append(ex)
+
+        # Group absorbed fills by their matched open position
+        pos_updates: dict[str, list[dict]] = {}
+        for ex, pos in absorbed:
+            tg = pos['trade_group']
+            pos_updates.setdefault(tg, {'pos': pos, 'new_fills': []})['new_fills'].append(ex)
+
+        for tg, update in pos_updates.items():
+            pos = update['pos']
+            new_fills = update['new_fills']
+            old_fills = [_rebuild_fill_from_db_exec(e, pos) for e in pos['parsed_execs']]
+            all_fills = sorted(old_fills + new_fills,
+                               key=lambda f: (f.get('iso_date', ''), f.get('time', '')))
+            agg = aggregate_executions(all_fills)
+
+            # Use closing fill date for closed positions
+            qty_b = sum(f['qty'] for f in all_fills if f['action'] == 'BOT')
+            qty_s = sum(f['qty'] for f in all_fills if f['action'] == 'SOLD')
+            if qty_b == qty_s and all_fills:
+                side = pos['side']
+                exit_action = 'SOLD' if side == 'LONG' else 'BOT'
+                exit_fills = sorted([f for f in all_fills if f['action'] == exit_action],
+                                    key=lambda f: (f.get('iso_date',''), f.get('time','')))
+                new_date = exit_fills[-1].get('iso_date', all_fills[-1].get('iso_date', pos.get('date','')))
+            else:
+                new_date = max(f.get('iso_date', '') for f in all_fills) or pos.get('date', '')
+
+            conn.execute(
+                "UPDATE trades SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=? WHERE trade_group=? AND account_id=?",
+                (agg['executions'], agg['gross_pnl'], agg['net_pnl'], agg['commissions'],
+                 new_date, tg, account_id)
+            )
+
+        conn.commit()
+        unique_executions = remaining
+
+    replaced: set[str] = set()
+    if conn and unique_executions:
+        stored, replaced = overlapping_db_fills(conn, account_id, unique_executions)
+        unique_executions = unique_executions + stored
+
+    groups, group_meta = group_executions_by_position(unique_executions)
+
+    trades = []
+    for key, fills in groups.items():
+        meta = group_meta[key]
+        agg = aggregate_executions(fills)
+        trades.append({
+            'account_id': account_id,
+            'trade_group': key,
+            'date': meta['date'],
+            'ticker': meta['ticker'],
+            'instrument_type': meta['instrument_type'],
+            'side': agg['side'],
+            'gross_pnl': agg['gross_pnl'],
+            'net_pnl': agg['net_pnl'],
+            'commissions': agg['commissions'],
+            'executions': agg['executions'],
+            'option_expiry': meta['option_expiry'],
+            'option_strike': meta['option_strike'],
+            'option_type': meta['option_type'],
+            'source': 'imported',
+            'replaces': sorted({f['_old_group'] for f in fills if f.get('_old_group')}),
+        })
+
+    return trades, skipped
+
+
+# ── Interactive Brokers (IBKR) Activity Statement ─────────────────────────────
+#
+# IBKR's Activity Statement CSV is one flat file where every line is prefixed
+# with its section name and a row kind:
+#
+#   Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,...
+#   Trades,Data,Order,Stocks,USD,AVGO,"2026-01-06, 09:52:00",-4,239.78,252.40,959.12,-0.35,...
+#   Trades,SubTotal,,Stocks,USD,AVGO,,66,,,4099.00,-3.35,...
+#
+# Quantity is signed (buys positive, sells negative), Proceeds is signed the
+# same way Thinkorswim's AMOUNT column is (buys negative, sells positive) and
+# already includes the contract multiplier, and Comm/Fee is negative. That
+# maps straight onto the common execution shape, so the grouping / dedup
+# pipeline in build_trades_from_executions is reused unchanged.
+
+
+def split_ibkr_sections(content: str) -> dict[str, list[dict[str, str]]]:
+    """
+    Split an IBKR Activity Statement CSV into named sections.
+    Returns dict: section_name -> list of records (dict column_name -> value).
+    A section may carry several Header rows (the Trades section repeats its
+    header per asset category, sometimes with different columns), so each
+    Data row is keyed by the most recent Header seen in that section.
+    """
+    sections: dict[str, list[dict[str, str]]] = {}
+    headers: dict[str, list[str]] = {}
+
+    reader = csv.reader(io.StringIO(content))
+    for row in reader:
+        if len(row) < 3:
+            continue
+        section, kind = row[0].strip(), row[1].strip()
+        if kind == 'Header':
+            headers[section] = [h.strip() for h in row[2:]]
+            sections.setdefault(section, [])
+        elif kind == 'Data':
+            header = headers.get(section)
+            if not header:
+                continue
+            values = row[2:]
+            record = {h: (values[i].strip() if i < len(values) else '') for i, h in enumerate(header)}
+            sections.setdefault(section, []).append(record)
+        # SubTotal / Total / Notes rows are summaries, not fills: skip them.
+
+    return sections
+
+
+def parse_ibkr_option_symbol(symbol: str) -> dict | None:
+    """
+    Parse the two option symbol styles IBKR prints in statements:
+      'AAPL 17JAN26 150 C'        (statement style)
+      'AAPL  260117C00150000'     (OCC style, 21 chars)
+    Returns dict with ticker, option_expiry (YYYY-MM-DD), option_strike, option_type.
+    """
+    s = symbol.strip().upper()
+
+    m = re.match(r'^([A-Z.]+)\s+(\d{1,2})([A-Z]{3})(\d{2})\s+([\d.]+)\s+([CP])$', s)
+    if m:
+        ticker, day, mon, yy, strike, cp = m.groups()
+        month = MONTH_MAP.get(mon)
+        if not month:
+            return None
+        return {
+            'ticker': ticker,
+            'option_expiry': f"{2000 + int(yy):04d}-{month:02d}-{int(day):02d}",
+            'option_strike': float(strike),
+            'option_type': 'CALL' if cp == 'C' else 'PUT',
+        }
+
+    m = re.match(r'^([A-Z.]+)\s*(\d{2})(\d{2})(\d{2})([CP])(\d{8})$', s)
+    if m:
+        ticker, yy, mm, dd, cp, strike_raw = m.groups()
+        return {
+            'ticker': ticker,
+            'option_expiry': f"{2000 + int(yy):04d}-{int(mm):02d}-{int(dd):02d}",
+            'option_strike': int(strike_raw) / 1000.0,
+            'option_type': 'CALL' if cp == 'C' else 'PUT',
+        }
+
+    return None
+
+
+def _ibkr_instrument_type(asset_category: str) -> str | None:
+    cat = asset_category.strip().lower()
+    if not cat:
+        return None
+    if 'option' in cat:
+        return 'OPTION'
+    if 'future' in cat:
+        return 'FUTURE'
+    if 'stock' in cat or 'equit' in cat or 'etf' in cat:
+        return 'STOCK'
+    # Forex, bonds, CFDs, warrants, cash rows: not something the journal tracks.
+    return None
+
+
+def _ibkr_qty(value: str) -> float | int | None:
+    """'-4' -> 4, '1,250' -> 1250, '0.5' -> 0.5 (fractional shares keep the decimal)."""
+    s = value.strip().replace(',', '').lstrip('+-')
+    if not s:
+        return None
+    try:
+        q = float(s)
+    except ValueError:
+        return None
+    if q == 0:
+        return None
+    return int(q) if q == int(q) else round(q, 6)
+
+
+def _ibkr_datetime(value: str) -> tuple[str, str] | None:
+    """'2026-01-06, 09:52:00' -> ('2026-01-06', '09:52:00'). Date-only rows get an empty time."""
+    s = value.strip().strip('"')
+    if not s:
+        return None
+    if ',' in s:
+        date_part, time_part = [p.strip() for p in s.split(',', 1)]
+    elif ' ' in s:
+        date_part, time_part = s.split(' ', 1)
+    else:
+        date_part, time_part = s, ''
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_part):
+        return None
+    return date_part, time_part.strip()
+
+
+def parse_ibkr_trades_section(records: list[dict[str, str]]) -> list[dict]:
+    """
+    Turn the Trades section of an IBKR Activity Statement into execution dicts.
+    IBKR emits one row per order by default (DataDiscriminator 'Order'); when a
+    statement is configured to show executions it emits 'Trade' rows instead,
+    and some layouts include both. If both are present only the 'Trade' rows
+    (the real fills) are used so nothing is counted twice. 'ClosedLot' rows are
+    tax-lot detail and always skipped.
+    """
+    if not records:
+        return []
+
+    kinds = {r.get('DataDiscriminator', '').strip() for r in records}
+    use_kind = 'Trade' if 'Trade' in kinds else 'Order'
+
+    executions = []
+    for r in records:
+        if r.get('DataDiscriminator', '').strip() != use_kind:
+            continue
+
+        instrument_type = _ibkr_instrument_type(r.get('Asset Category', ''))
+        if not instrument_type:
+            continue
+
+        symbol = r.get('Symbol', '').strip().upper()
+        if not symbol:
+            continue
+
+        qty = _ibkr_qty(r.get('Quantity', ''))
+        if qty is None:
+            continue
+        signed = r.get('Quantity', '').strip().replace(',', '')
+        action = 'SOLD' if signed.startswith('-') else 'BOT'
+
+        dt = _ibkr_datetime(r.get('Date/Time', '') or r.get('Date', ''))
+        if not dt:
+            continue
+        iso_date, time_part = dt
+
+        price = clean_amount(r.get('T. Price', '') or r.get('Price', ''))
+        proceeds = clean_amount(r.get('Proceeds', ''))
+        commission = abs(clean_amount(r.get('Comm/Fee', '') or r.get('Comm in USD', '')))
+
+        option_expiry = option_strike = option_type = None
+        ticker = symbol
+        if instrument_type == 'OPTION':
+            parsed = parse_ibkr_option_symbol(symbol)
+            if not parsed:
+                continue
+            ticker = parsed['ticker']
+            option_expiry = parsed['option_expiry']
+            option_strike = parsed['option_strike']
+            option_type = parsed['option_type']
+        elif instrument_type == 'FUTURE':
+            # IBKR prints 'ESH6'; the rest of the app uses the Thinkorswim '/ESH6'
+            # convention for futures (multiplier lookup, chart proxy), so match it.
+            ticker = symbol if symbol.startswith('/') else '/' + symbol
+
+        # Proceeds is already signed like Thinkorswim's AMOUNT (buys negative,
+        # sells positive) and already includes the option/futures multiplier.
+        # Fall back to price * qty when a statement leaves Proceeds blank.
+        if proceeds == 0.0 and price:
+            multiplier = 100 if instrument_type == 'OPTION' else 1
+            proceeds = price * qty * multiplier
+            if action == 'BOT':
+                proceeds = -proceeds
+
+        executions.append({
+            'action': action,
+            'qty': qty,
+            'ticker': ticker,
+            'price': abs(price),
+            'instrument_type': instrument_type,
+            'option_expiry': option_expiry,
+            'option_strike': option_strike,
+            'option_type': option_type,
+            'date': iso_date,
+            'iso_date': iso_date,
+            'time': time_part,
+            'amount': round(proceeds, 2),
+            'commission': round(commission, 2),
+            'raw_description': f"{action} {qty} {symbol} @{price}",
+        })
+
+    return executions
+
+
+def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    IBKR Activity Statement CSV parse pipeline (Client Portal -> Performance &
+    Reports -> Statements -> Activity -> CSV). Same output contract as
+    parse_thinkorswim_csv: (trade dicts ready for DB insert, skipped_count).
+    """
+    content = content.lstrip('﻿')
+    sections = split_ibkr_sections(content)
+
+    trade_records = sections.get('Trades')
+    if trade_records is None:
+        raise ValueError(
+            "No 'Trades' section found. Export an IBKR Activity Statement as CSV "
+            "with the Trades section enabled."
+        )
+
+    executions = parse_ibkr_trades_section(trade_records)
+    return build_trades_from_executions(executions, account_id, conn)
+
+
+# ── Generic CSV (any broker, one row per execution) ───────────────────────────
+#
+# For brokers without a dedicated parser. The user copies their fills into the
+# template at frontend/public/templates/generic_trades_template.csv, one row per
+# fill.
+#
+# Required columns: date, time, symbol, side, quantity, price
+# Optional columns: commission, asset_type, expiry, strike, put_call, multiplier
+#
+# Header names are case-insensitive and extra columns are ignored, so a broker
+# export that already uses these headers imports as-is. Rows that cannot be read
+# are never skipped silently: the import stops and names the line, because a
+# missing fill changes every P&L number after it.
+
+GENERIC_REQUIRED = ('date', 'time', 'symbol', 'side', 'quantity', 'price')
+GENERIC_OPTIONAL = ('commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier')
+
+_GENERIC_ALIASES = {
+    'ticker': 'symbol', 'qty': 'quantity', 'shares': 'quantity', 'contracts': 'quantity',
+    'fill_price': 'price', 'execution_price': 'price', 'action': 'side', 'buy_sell': 'side',
+    'fees': 'commission', 'commissions': 'commission', 'comm': 'commission',
+    'type': 'asset_type', 'instrument': 'asset_type', 'instrument_type': 'asset_type',
+    'expiration': 'expiry', 'exp': 'expiry', 'call_put': 'put_call', 'right': 'put_call',
+    'strike_price': 'strike',
+}
+
+
+def _generic_header(cells):
+    """Map canonical column names to indexes, or None if this is not a generic header."""
+    index = {}
+    for i, raw in enumerate(cells):
+        key = re.sub(r'[\s/-]+', '_', raw.strip().lower()).strip('_')
+        key = _GENERIC_ALIASES.get(key, key)
+        if key in GENERIC_REQUIRED or key in GENERIC_OPTIONAL:
+            index.setdefault(key, i)
+    return index if all(k in index for k in GENERIC_REQUIRED) else None
+
+
+def _generic_date(value):
+    """YYYY-MM-DD, or US M/D/YYYY. Day-first dates are refused: 03/04 is ambiguous."""
+    v = value.strip()
+    m = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})$', v)
+    if m:
+        y, mo, d = map(int, m.groups())
+    else:
+        m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', v)
+        if not m:
+            return None
+        mo, d, y = map(int, m.groups())
+        if y < 100:
+            y += 2000
+    try:
+        return datetime(y, mo, d).strftime('%Y-%m-%d')
+    except ValueError:
+        return None
+
+
+def _generic_time(value):
+    """'9:31', '09:31:05', '9:31:05 AM', '14:02' -> 'HH:MM:SS' (24 hour)."""
+    v = value.strip().upper()
+    m = re.match(r'^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$', v)
+    if not m:
+        return None
+    h, mi, sec, ap = m.groups()
+    h, mi, sec = int(h), int(mi), int(sec or 0)
+    if ap == 'PM' and h < 12:
+        h += 12
+    if ap == 'AM' and h == 12:
+        h = 0
+    if h > 23 or mi > 59 or sec > 59:
+        return None
+    return f"{h:02d}:{mi:02d}:{sec:02d}"
+
+
+def _generic_side(value):
+    """BUY, BOT, B, BUY TO OPEN, BUY TO COVER -> BOT. SELL, SOLD, S, SELL SHORT -> SOLD."""
+    v = value.strip().upper()
+    if v in ('B', 'BOT', 'BOUGHT') or v.startswith('BUY'):
+        return 'BOT'
+    if v in ('S', 'SLD', 'SOLD', 'SHORT') or v.startswith('SELL'):
+        return 'SOLD'
+    return None
+
+
+def _generic_asset(value, symbol):
+    v = value.strip().upper()
+    if not v:
+        return 'FUTURE' if symbol.startswith('/') else 'STOCK'
+    if v in ('STOCK', 'STK', 'EQUITY', 'ETF', 'SHARE', 'SHARES'):
+        return 'STOCK'
+    if v in ('OPTION', 'OPT', 'OPTIONS'):
+        return 'OPTION'
+    if v in ('FUTURE', 'FUT', 'FUTURES'):
+        return 'FUTURE'
+    return None
+
+
+def _futures_multiplier(ticker):
+    """Longest known root that prefixes the contract, so /MES wins over /ES."""
+    for root in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True):
+        if ticker.upper().startswith(root):
+            return FUTURES_MULTIPLIERS[root]
+    return None
+
+
+def _num(text):
+    return float(text.replace(',', '').replace('$', '').strip())
+
+
+def parse_generic_rows(content):
+    """Read the generic template into execution dicts. Raises ValueError naming every bad line."""
+    rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
+
+    header_at, col = None, None
+    for i, cells in enumerate(rows[:20]):
+        found = _generic_header(cells)
+        if found:
+            header_at, col = i, found
+            break
+    if col is None:
+        raise ValueError(
+            "This does not look like the generic template. The header row needs these columns: "
+            + ", ".join(GENERIC_REQUIRED) + "."
+        )
+
+    def cell(cells, name):
+        i = col.get(name)
+        return cells[i].strip() if i is not None and i < len(cells) else ''
+
+    executions, problems = [], []
+    for n, cells in enumerate(rows[header_at + 1:], start=header_at + 2):
+        if not any(c.strip() for c in cells):
+            continue
+        why = []
+
+        symbol = cell(cells, 'symbol').upper()
+        date = _generic_date(cell(cells, 'date'))
+        time_ = _generic_time(cell(cells, 'time'))
+        action = _generic_side(cell(cells, 'side'))
+        asset = _generic_asset(cell(cells, 'asset_type'), symbol)
+
+        try:
+            qty = abs(_num(cell(cells, 'quantity')))
+            if qty == 0:
+                raise ValueError
+            qty = int(qty) if qty == int(qty) else round(qty, 6)
+        except ValueError:
+            qty = None
+        try:
+            price = abs(_num(cell(cells, 'price')))
+        except ValueError:
+            price = None
+        try:
+            commission = abs(_num(cell(cells, 'commission') or '0'))
+        except ValueError:
+            commission = None
+
+        if not symbol:
+            why.append("symbol is empty")
+        if not date:
+            why.append(f"date '{cell(cells, 'date')}' is not YYYY-MM-DD or MM/DD/YYYY")
+        if not time_:
+            why.append(f"time '{cell(cells, 'time')}' is not HH:MM or HH:MM:SS")
+        if not action:
+            why.append(f"side '{cell(cells, 'side')}' is not BUY or SELL")
+        if qty is None:
+            why.append(f"quantity '{cell(cells, 'quantity')}' is not a number above zero")
+        if price is None:
+            why.append(f"price '{cell(cells, 'price')}' is not a number")
+        if commission is None:
+            why.append(f"commission '{cell(cells, 'commission')}' is not a number")
+        if not asset:
+            why.append(f"asset_type '{cell(cells, 'asset_type')}' is not STOCK, OPTION or FUTURE")
+
+        option_expiry = option_strike = option_type = None
+        multiplier = 1
+        ticker = symbol
+        if asset == 'OPTION':
+            option_expiry = _generic_date(cell(cells, 'expiry'))
+            pc = cell(cells, 'put_call').upper()
+            option_type = 'CALL' if pc in ('C', 'CALL') else 'PUT' if pc in ('P', 'PUT') else None
+            try:
+                option_strike = _num(cell(cells, 'strike'))
+            except ValueError:
+                option_strike = None
+            if not (option_expiry and option_type and option_strike is not None):
+                why.append("options need expiry, strike and put_call")
+            multiplier = 100
+        elif asset == 'FUTURE':
+            ticker = symbol if symbol.startswith('/') else '/' + symbol
+            multiplier = _futures_multiplier(ticker)
+
+        override = cell(cells, 'multiplier')
+        if override:
+            try:
+                multiplier = _num(override)
+            except ValueError:
+                why.append(f"multiplier '{override}' is not a number")
+        if asset == 'FUTURE' and not multiplier:
+            # Guessing 1 would understate a /ES trade fifty times over.
+            why.append(f"no known point value for {ticker}; add a multiplier column (50 for /ES, for example)")
+
+        if why:
+            problems.append(f"line {n}: " + "; ".join(why))
+            continue
+
+        amount = price * qty * multiplier
+        if action == 'BOT':
+            amount = -amount
+
+        executions.append({
+            'action': action,
+            'qty': qty,
+            'ticker': ticker,
+            'price': price,
+            'instrument_type': asset,
+            'option_expiry': option_expiry,
+            'option_strike': option_strike,
+            'option_type': option_type,
+            'date': date,
+            'iso_date': date,
+            'time': time_,
+            'amount': round(amount, 2),
+            'commission': round(commission, 2),
+            'raw_description': f"{action} {qty} {ticker} @{price}",
+        })
+
+    if problems:
+        more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ""
+        raise ValueError(
+            f"{len(problems)} row(s) could not be read, so nothing was imported{more}. "
+            + " | ".join(problems[:8])
+        )
+    if not executions:
+        raise ValueError("The file has the template header but no trade rows.")
+    return executions
+
+
+def parse_generic_csv(content, account_id, conn=None):
+    """Generic template pipeline. Same output contract as the broker parsers."""
+    return build_trades_from_executions(parse_generic_rows(content), account_id, conn)
+
+
+# ── Broker dispatch ────────────────────────────────────────────────────────────
+
+BROKER_PARSERS = {
+    'thinkorswim': parse_thinkorswim_csv,
+    'schwab_transactions': parse_schwab_transactions_csv,
+    'ibkr': parse_ibkr_csv,
+    'generic': parse_generic_csv,
+}
+
+BROKER_LABELS = {
+    'thinkorswim': 'Thinkorswim account statement',
+    'schwab_transactions': 'Schwab transaction history',
+    'ibkr': 'Interactive Brokers',
+    'generic': 'the generic template',
+}
+
+
+def detect_broker(content: str) -> str | None:
+    """Sniff the CSV format. Returns a BROKER_PARSERS key or None if unrecognised."""
+    head = content.lstrip('﻿')[:4000]
+    first_lines = [ln.strip() for ln in head.splitlines()[:5] if ln.strip()]
+    if any(ln.startswith(('Statement,Header', 'Trades,Header', 'Account Information,Header'))
+           for ln in first_lines):
+        return 'ibkr'
+    if 'DataDiscriminator' in content and re.search(r'^[\w /&-]+,(Header|Data),', head, re.MULTILINE):
+        return 'ibkr'
+    upper = head.upper()
+    first_csv = next((row for row in csv.reader(io.StringIO(head)) if any(x.strip() for x in row)), [])
+    normalized_header = {re.sub(r'[^A-Z0-9]+', ' ', x.strip().upper()).strip() for x in first_csv}
+    if {'DATE', 'DESCRIPTION', 'AMOUNT'}.issubset(normalized_header) and (
+        'REF NUM' in normalized_header or 'REF' in normalized_header
+    ):
+        return 'schwab_transactions'
+    if ('CASH BALANCE' in upper or 'ACCOUNT STATEMENT' in upper
+            or 'ACCOUNT TRADE HISTORY' in upper or 'FUTURES STATEMENTS' in upper):
+        return 'thinkorswim'
+    # Checked last: the first non-empty row is a header with the template's columns.
+    for cells in csv.reader(io.StringIO(head)):
+        if not any(c.strip() for c in cells):
+            continue
+        return 'generic' if _generic_header(cells) else None
+    return None
+
+
+def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Route a CSV to the right broker parser. broker is a BROKER_PARSERS key or
+    'auto'. An explicit broker that clearly does not match the file raises a
+    ValueError with a hint, instead of importing zero trades silently.
+    """
+    key = (broker or 'auto').strip().lower()
+    detected = detect_broker(content)
+
+    if key == 'auto':
+        if not detected:
+            raise ValueError(
+                "Could not recognise this CSV. Pick the broker from the dropdown, "
+                "export a Thinkorswim account statement, Schwab transaction-history CSV, "
+                "or IBKR Activity Statement, or copy your fills into the "
+                "generic template (Import page, 'Broker not listed?')."
+            )
+        key = detected
+
+    if key not in BROKER_PARSERS:
+        raise ValueError(f"Unsupported broker '{broker}'. Supported: {', '.join(BROKER_LABELS.values())}.")
+
+    if detected and detected != key:
+        raise ValueError(
+            f"This file looks like an export from {BROKER_LABELS[detected]}, but "
+            f"{BROKER_LABELS[key]} is selected. Change the broker dropdown and try again."
+        )
+
+    return BROKER_PARSERS[key](content, account_id, conn)
+, time_val) else 'minute',
         })
         executions.append(parsed)
 
     return executions
+
+
+def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """Parse Schwab/Thinkorswim transaction-history CSVs like Alltos.csv.
+
+    Expected columns include Date, Type, Description, Ref Num, Misc Fees,
+    Commissions, Amount and Balance. Date contains the local execution clock
+    (for example 9/25/26 10:11 AM). These exports are minute-precision; the
+    importer records seconds as :00 and explicitly stores timestamp_precision
+    so sub-minute analytics never pretend the source was more precise.
+    """
+    rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
+    header_idx = None
+    col = {}
+    for i, row in enumerate(rows[:20]):
+        normalized = [re.sub(r'[^A-Z0-9]+', ' ', x.strip().upper()).strip() for x in row]
+        if 'DATE' in normalized and 'DESCRIPTION' in normalized and 'AMOUNT' in normalized:
+            header_idx = i
+            col = {h: j for j, h in enumerate(normalized)}
+            break
+    if header_idx is None:
+        raise ValueError("Schwab transaction CSV header was not found.")
+
+    def cell(row, *names):
+        for name in names:
+            idx = col.get(name)
+            if idx is not None and idx < len(row):
+                return row[idx].strip()
+        return ''
+
+    executions = []
+    problems = []
+    for line_no, row in enumerate(rows[header_idx + 1:], start=header_idx + 2):
+        if not any(x.strip() for x in row):
+            continue
+        row_type = cell(row, 'TYPE').upper()
+        if row_type != 'TRD':
+            continue
+
+        dt_text = cell(row, 'DATE')
+        dt = None
+        for fmt in ('%m/%d/%y %I:%M %p', '%m/%d/%Y %I:%M %p'):
+            try:
+                dt = datetime.strptime(dt_text, fmt)
+                break
+            except ValueError:
+                pass
+        if dt is None:
+            problems.append(f"line {line_no}: Date '{dt_text}' is not a supported Schwab timestamp")
+            continue
+
+        desc = cell(row, 'DESCRIPTION').strip('"')
+        parsed = parse_cash_description(desc)
+        if not parsed:
+            problems.append(f"line {line_no}: trade description could not be parsed: {desc}")
+            continue
+
+        misc = clean_amount(cell(row, 'MISC FEES'))
+        comm = clean_amount(cell(row, 'COMMISSIONS', 'COMMISSIONS FEES'))
+        amount = clean_amount(cell(row, 'AMOUNT'))
+        ref = cell(row, 'REF NUM', 'REF')
+        raw_date = f"{dt.month}/{dt.day}/{str(dt.year)[2:]}"
+
+        parsed.update({
+            'date': raw_date,
+            'iso_date': dt.strftime('%Y-%m-%d'),
+            'time': dt.strftime('%H:%M:00'),
+            'amount': amount,
+            'commission': abs(misc) + abs(comm),
+            'raw_description': desc,
+            'source_ref': ref,
+            'timestamp_precision': 'minute',
+        })
+        executions.append(parsed)
+
+    if problems:
+        more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ''
+        raise ValueError(
+            f"{len(problems)} Schwab trade row(s) could not be read, so nothing was imported{more}. "
+            + " | ".join(problems[:8])
+        )
+    if not executions:
+        raise ValueError("The Schwab transaction CSV contains no trade rows.")
+    return build_trades_from_executions(executions, account_id, conn)
+
+
+def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
+    """
+    Parse rows from the Futures Statements section.
+    Header: Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance
+    """
+    if not rows:
+        return []
+
+    header_idx = None
+    for i, row in enumerate(rows):
+        joined = ','.join(row).upper()
+        if 'EXEC TIME' in joined or 'EXEC DATE' in joined:
+            header_idx = i
+            break
+
+    if header_idx is None:
+        return []
+
+    header = [h.strip().upper() for h in rows[header_idx]]
+    col = {h: i for i, h in enumerate(header)}
+
+    executions = []
+    for row in rows[header_idx + 1:]:
+        if len(row) < 5:
+            continue
+
+        row_type = row[col.get('TYPE', 3)].strip() if col.get('TYPE', 3) < len(row) else ''
+        if row_type not in ('TRD', 'TRADE'):
+            continue
+
+        trade_date = row[col.get('TRADE DATE', 0)].strip() if col.get('TRADE DATE', 0) < len(row) else ''
+        exec_time = row[col.get('EXEC TIME', 2)].strip() if col.get('EXEC TIME', 2) < len(row) else ''
+        desc = row[col.get('DESCRIPTION', 5)].strip().strip('"') if col.get('DESCRIPTION', 5) < len(row) else ''
+
+        misc_fees_idx = col.get('MISC FEES', 6)
+        comm_idx = col.get('COMMISSIONS & FEES', 7)
+        amount_idx = col.get('AMOUNT', 8)
+
+        misc_fees = clean_amount(row[misc_fees_idx]) if misc_fees_idx < len(row) else 0.0
+        commission = clean_amount(row[comm_idx]) if comm_idx < len(row) else 0.0
+        amount = clean_amount(row[amount_idx]) if amount_idx < len(row) else 0.0
+        total_commission = abs(misc_fees) + abs(commission)
+
+        parsed = parse_futures_description(desc)
+        if not parsed:
+            continue
+
+        parsed.update({
+            'date': trade_date,
+            'iso_date': normalize_date(trade_date),
+            'time': exec_time,
+            'amount': amount,
+            'commission': total_commission,
+            'raw_description': desc,
+        })
+        executions.append(parsed)
+
+    return executions
+
+
+def _make_group_meta(date_str: str, ticker: str, instr: str, fills: list[dict]) -> dict:
+    return {
+        'date': normalize_date(date_str),
+        'raw_date': date_str,
+        'ticker': ticker,
+        'instrument_type': instr,
+        'option_expiry': fills[0].get('option_expiry'),
+        'option_strike': fills[0].get('option_strike'),
+        'option_type': fills[0].get('option_type'),
+    }
+
+
+def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
+    """
+    Group executions into trades based on position open/close cycles.
+    Each time a position returns to 0 shares/contracts, that completes one trade.
+    Fills spanning multiple days are matched correctly (e.g., buy Monday, sell Wednesday).
+    The trade date is the CLOSING fill's date so P&L is realized on the exit day.
+    Multiple cycles per ticker produce separate numbered trades (_1, _2, ...).
+    """
+    # Sort all fills chronologically so multi-day positions process in order
+    executions_sorted = sorted(
+        executions,
+        key=lambda ex: (ex.get('iso_date', ex['date']), ex.get('time', ''))
+    )
+
+    # Key by (ticker, instrument_type) — no date — so multi-day trades stay together.
+    # Options are keyed by their specific contract to avoid mixing different strikes/expiries.
+    by_ticker: dict[tuple, list[dict]] = {}
+    for ex in executions_sorted:
+        if ex['instrument_type'] == 'OPTION':
+            k = (ex['ticker'], ex['instrument_type'],
+                 ex.get('option_expiry', ''), ex.get('option_strike', ''), ex.get('option_type', ''))
+        else:
+            k = (ex['ticker'], ex['instrument_type'])
+        by_ticker.setdefault(k, []).append(ex)
+
+    groups: dict[str, list[dict]] = {}
+    group_meta: dict[str, dict] = {}
+
+    for key_tuple, fills in by_ticker.items():
+        ticker = key_tuple[0]
+        instr = key_tuple[1]
+
+        position = 0
+        seq = 0
+        current_fills: list[dict] = []
+
+        for fill in fills:
+            if _is_flat(position):
+                seq += 1
+                current_fills = []
+                position = 0
+
+            qty = fill['qty']
+            if fill['action'] == 'BOT':
+                position += qty
+            else:
+                position -= qty
+
+            current_fills.append(fill)
+
+            if _is_flat(position):
+                close_date = current_fills[-1]['date']
+                key = trade_group_key(close_date, ticker, instr, seq,
+                                      current_fills[0].get('option_expiry'),
+                                      current_fills[0].get('option_strike'),
+                                      current_fills[0].get('option_type'))
+                groups[key] = list(current_fills)
+                group_meta[key] = _make_group_meta(close_date, ticker, instr, current_fills)
+
+        # Open/unclosed position — use date of the most recent fill
+        if current_fills and not _is_flat(position):
+            last_date = current_fills[-1]['date']
+            key = trade_group_key(last_date, ticker, instr, seq,
+                                  current_fills[0].get('option_expiry'),
+                                  current_fills[0].get('option_strike'),
+                                  current_fills[0].get('option_type'))
+            groups[key] = list(current_fills)
+            group_meta[key] = _make_group_meta(last_date, ticker, instr, current_fills)
+
+    return groups, group_meta
+
+
+def _is_flat(position) -> bool:
+    """Position is back to zero. Tolerance so fractional-share fills (IBKR) still close out."""
+    return abs(position) < 1e-6
+
+
+def _option_pos_key(ticker: str, instr: str, expiry, strike, opt_type) -> tuple:
+    return (ticker, instr, expiry or '', strike or 0, opt_type or '')
+
+
+def _stock_pos_key(ticker: str, instr: str) -> tuple:
+    return (ticker, instr)
+
+
+def _exec_pos_key(ex: dict) -> tuple:
+    instr = ex.get('instrument_type', 'STOCK')
+    if instr == 'OPTION':
+        return _option_pos_key(ex['ticker'], instr,
+                                ex.get('option_expiry'), ex.get('option_strike'), ex.get('option_type'))
+    return _stock_pos_key(ex['ticker'], instr)
+
+
+def load_open_positions_from_db(conn, account_id: int) -> list[dict]:
+    """
+    Return open trade records from the DB (positions where qty_bot != qty_sold).
+    Each record includes the parsed executions list.
+    """
+    rows = conn.execute(
+        """SELECT id, trade_group, ticker, instrument_type,
+                  option_expiry, option_strike, option_type, side, executions
+           FROM trades WHERE account_id = ?""",
+        (account_id,)
+    ).fetchall()
+    open_trades = []
+    for row in rows:
+        d = dict(row)
+        execs = json.loads(d['executions'] or '[]')
+        qty_bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
+        qty_sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
+        if qty_bot != qty_sold:
+            d['parsed_execs'] = execs
+            open_trades.append(d)
+    return open_trades
+
+
+def _rebuild_fill_from_db_exec(e: dict, trade_meta: dict) -> dict:
+    """Reconstruct a full fill dict from a stored execution + trade metadata."""
+    instr = trade_meta['instrument_type']
+    multiplier = 100 if instr == 'OPTION' else 1
+    price = e.get('price', 0.0)
+    qty = e.get('qty', 0)
+    amount = price * qty * multiplier
+    if e.get('action') == 'BOT':
+        amount = -amount
+    return {
+        'action': e.get('action', ''),
+        'qty': qty,
+        'ticker': trade_meta['ticker'],
+        'price': price,
+        'instrument_type': instr,
+        'option_expiry': trade_meta.get('option_expiry'),
+        'option_strike': trade_meta.get('option_strike'),
+        'option_type': trade_meta.get('option_type'),
+        'date': e.get('date', ''),
+        'iso_date': e.get('date', ''),
+        'time': e.get('time', ''),
+        'amount': round(amount, 2),
+        'commission': e.get('commission', 0.0),
+    }
+
+
+def _raw_date(iso_date: str) -> str:
+    """YYYY-MM-DD back to the statement's M/D/YY, the form trade_group keys are built from."""
+    try:
+        y, m, d = iso_date.split('-')
+        return f"{int(m)}/{int(d)}/{y[2:]}"
+    except ValueError:
+        return iso_date
+
+
+def _point_value(ticker: str, instr: str):
+    if instr == 'OPTION':
+        return 100
+    if instr != 'FUTURE':
+        return 1
+    for root in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True):
+        if ticker.upper().startswith(root):
+            return FUTURES_MULTIPLIERS[root]
+    return None
+
+
+def overlapping_db_fills(conn, account_id: int, new_execs: list[dict]) -> tuple[list[dict], set[str]]:
+    """Stored fills that must be regrouped together with the new ones.
+
+    Trade groups are numbered by position cycle within one import (_1, _2, ...). A later
+    import that brings more fills for a ticker already stored that day would number its
+    cycles from 1 again and overwrite the stored trade of the same name, losing it. So for
+    each stock or future with new fills, the stored imported trades that share a day with
+    them (or are still open) are rebuilt from their executions and grouped with the new
+    fills, and the caller replaces them. Futures with an unknown point value are left alone.
+    Returns (rebuilt fills tagged with '_old_group', the old trade_groups they came from).
+    """
+    days: dict[tuple, set] = {}
+    for ex in new_execs:
+        instr = ex.get('instrument_type', 'STOCK')
+        if instr == 'OPTION':
+            continue
+        days.setdefault((ex['ticker'], instr), set()).add(ex.get('iso_date') or normalize_date(ex['date']))
+
+    fills: list[dict] = []
+    old_groups: set[str] = set()
+    for (ticker, instr), dates in days.items():
+        mult = _point_value(ticker, instr)
+        if mult is None:
+            continue
+        rows = conn.execute(
+            """SELECT trade_group, ticker, instrument_type, option_expiry, option_strike, option_type, executions
+               FROM trades WHERE account_id = ? AND ticker = ? AND instrument_type = ?
+               AND COALESCE(source, 'imported') = 'imported'""",
+            (account_id, ticker, instr),
+        ).fetchall()
+        for row in rows:
+            meta = dict(row)
+            execs = json.loads(meta['executions'] or '[]')
+            bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
+            sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
+            if not ({e.get('date', '') for e in execs} & dates) and bot == sold:
+                continue
+            old_groups.add(meta['trade_group'])
+            for e in execs:
+                f = _rebuild_fill_from_db_exec(e, meta)
+                f['amount'] = round(f['amount'] * mult, 2)
+                # keys carry the date the way this broker's parser wrote it
+                slashed = '/' in meta['trade_group'].split('_')[0]
+                f['date'] = _raw_date(f['iso_date']) if slashed else f['iso_date']
+                f['_old_group'] = meta['trade_group']
+                fills.append(f)
+    return fills, old_groups
+
+
+def _cross_section_key(ex: dict) -> str:
+    """Fingerprint for deduplicating across CSV sections (no time field — formats differ)."""
+    return f"{ex.get('iso_date','')}|{ex.get('ticker','')}|{ex.get('action','')}|{ex.get('qty','')}|{ex.get('price','')}"
+
+
+def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Full CSV parse pipeline.
+    Returns (list of trade dicts ready for DB insert, skipped_count).
+    """
+    content = content.lstrip('﻿')
+
+    sections = split_csv_sections(content)
+    cash_rows = find_cash_balance_section(sections)
+    futures_rows = find_futures_section(sections)
+    trade_history_rows = find_trade_history_section(sections)
+
+    all_executions = []
+    if cash_rows:
+        all_executions.extend(parse_cash_balance_section(cash_rows))
+    if futures_rows:
+        all_executions.extend(parse_futures_section_rows(futures_rows))
+
+    # Merge Trade History: add fills not already represented in Cash Balance / Futures.
+    # Use (iso_date, ticker, action, qty, price) to match across sections — time formats differ.
+    # Thinkorswim aggregates partial fills in Trade History (e.g., two CB fills of 40+60 appear as 100).
+    # Check cumulative qty per (date, ticker, action, price) so those aggregated entries are skipped.
+    if trade_history_rows:
+        cb_exact_keys = {_cross_section_key(ex) for ex in all_executions}
+        cb_qty_map: dict[tuple, int] = {}
+        for ex in all_executions:
+            k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
+            cb_qty_map[k] = cb_qty_map.get(k, 0) + ex.get('qty', 0)
+        for ex in parse_trade_history_section(trade_history_rows):
+            if _cross_section_key(ex) in cb_exact_keys:
+                continue
+            k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
+            if cb_qty_map.get(k, 0) >= ex.get('qty', 0):
+                continue  # CB partial fills already cover this aggregated TH fill
+            all_executions.append(ex)
+
+    return build_trades_from_executions(all_executions, account_id, conn)
+
+
+def build_trades_from_executions(all_executions: list[dict], account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Broker-agnostic half of the import pipeline. Takes execution dicts in the
+    common shape (action BOT/SOLD, qty, ticker, price, instrument_type, option_*,
+    date, iso_date, time, amount, commission) and returns (trade dicts, skipped).
+
+    Steps: DB-level duplicate detection, merging fills into open option
+    positions already stored, grouping by position open/close cycles, and
+    aggregating each group into a trade row. Every broker parser ends here so
+    grouping and dedup behave identically regardless of the CSV format.
+    """
+    if not all_executions:
+        return [], 0
+
+    # DB-level dedup only — never dedupe within same file (Thinkorswim legitimately
+    # emits identical time/price/qty fills for large split orders)
+    existing_fps = get_existing_fingerprints(conn, account_id) if conn else set()
+    skipped = 0
+    unique_executions = []
+    for exec_dict in all_executions:
+        fp = execution_fingerprint(exec_dict)
+        if fp in existing_fps:
+            skipped += 1
+        else:
+            # Enrich with ticker/date for serialization
+            exec_copy = dict(exec_dict)
+            unique_executions.append(exec_copy)
+
+    # Merge new fills into existing open OPTION positions from DB.
+    # Options use a specific contract key (expiry/strike/type) so the match is unambiguous.
+    # Stock positions are skipped here — day-trading cycles are too ambiguous to auto-merge.
+    if conn:
+        open_positions = load_open_positions_from_db(conn, account_id)
+        open_by_key: dict[tuple, dict] = {}
+        for pos in open_positions:
+            if pos['instrument_type'] != 'OPTION':
+                continue  # only merge options
+            k = _option_pos_key(pos['ticker'], pos['instrument_type'],
+                                pos.get('option_expiry'), pos.get('option_strike'), pos.get('option_type'))
+            open_by_key[k] = pos
+
+        absorbed = []
+        remaining = []
+        for ex in unique_executions:
+            if ex.get('instrument_type') != 'OPTION':
+                remaining.append(ex)
+                continue
+            k = _option_pos_key(ex['ticker'], ex['instrument_type'],
+                                ex.get('option_expiry'), ex.get('option_strike'), ex.get('option_type'))
+            if k in open_by_key:
+                absorbed.append((ex, open_by_key[k]))
+            else:
+                remaining.append(ex)
+
+        # Group absorbed fills by their matched open position
+        pos_updates: dict[str, list[dict]] = {}
+        for ex, pos in absorbed:
+            tg = pos['trade_group']
+            pos_updates.setdefault(tg, {'pos': pos, 'new_fills': []})['new_fills'].append(ex)
+
+        for tg, update in pos_updates.items():
+            pos = update['pos']
+            new_fills = update['new_fills']
+            old_fills = [_rebuild_fill_from_db_exec(e, pos) for e in pos['parsed_execs']]
+            all_fills = sorted(old_fills + new_fills,
+                               key=lambda f: (f.get('iso_date', ''), f.get('time', '')))
+            agg = aggregate_executions(all_fills)
+
+            # Use closing fill date for closed positions
+            qty_b = sum(f['qty'] for f in all_fills if f['action'] == 'BOT')
+            qty_s = sum(f['qty'] for f in all_fills if f['action'] == 'SOLD')
+            if qty_b == qty_s and all_fills:
+                side = pos['side']
+                exit_action = 'SOLD' if side == 'LONG' else 'BOT'
+                exit_fills = sorted([f for f in all_fills if f['action'] == exit_action],
+                                    key=lambda f: (f.get('iso_date',''), f.get('time','')))
+                new_date = exit_fills[-1].get('iso_date', all_fills[-1].get('iso_date', pos.get('date','')))
+            else:
+                new_date = max(f.get('iso_date', '') for f in all_fills) or pos.get('date', '')
+
+            conn.execute(
+                "UPDATE trades SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=? WHERE trade_group=? AND account_id=?",
+                (agg['executions'], agg['gross_pnl'], agg['net_pnl'], agg['commissions'],
+                 new_date, tg, account_id)
+            )
+
+        conn.commit()
+        unique_executions = remaining
+
+    replaced: set[str] = set()
+    if conn and unique_executions:
+        stored, replaced = overlapping_db_fills(conn, account_id, unique_executions)
+        unique_executions = unique_executions + stored
+
+    groups, group_meta = group_executions_by_position(unique_executions)
+
+    trades = []
+    for key, fills in groups.items():
+        meta = group_meta[key]
+        agg = aggregate_executions(fills)
+        trades.append({
+            'account_id': account_id,
+            'trade_group': key,
+            'date': meta['date'],
+            'ticker': meta['ticker'],
+            'instrument_type': meta['instrument_type'],
+            'side': agg['side'],
+            'gross_pnl': agg['gross_pnl'],
+            'net_pnl': agg['net_pnl'],
+            'commissions': agg['commissions'],
+            'executions': agg['executions'],
+            'option_expiry': meta['option_expiry'],
+            'option_strike': meta['option_strike'],
+            'option_type': meta['option_type'],
+            'source': 'imported',
+            'replaces': sorted({f['_old_group'] for f in fills if f.get('_old_group')}),
+        })
+
+    return trades, skipped
+
+
+# ── Interactive Brokers (IBKR) Activity Statement ─────────────────────────────
+#
+# IBKR's Activity Statement CSV is one flat file where every line is prefixed
+# with its section name and a row kind:
+#
+#   Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,...
+#   Trades,Data,Order,Stocks,USD,AVGO,"2026-01-06, 09:52:00",-4,239.78,252.40,959.12,-0.35,...
+#   Trades,SubTotal,,Stocks,USD,AVGO,,66,,,4099.00,-3.35,...
+#
+# Quantity is signed (buys positive, sells negative), Proceeds is signed the
+# same way Thinkorswim's AMOUNT column is (buys negative, sells positive) and
+# already includes the contract multiplier, and Comm/Fee is negative. That
+# maps straight onto the common execution shape, so the grouping / dedup
+# pipeline in build_trades_from_executions is reused unchanged.
+
+
+def split_ibkr_sections(content: str) -> dict[str, list[dict[str, str]]]:
+    """
+    Split an IBKR Activity Statement CSV into named sections.
+    Returns dict: section_name -> list of records (dict column_name -> value).
+    A section may carry several Header rows (the Trades section repeats its
+    header per asset category, sometimes with different columns), so each
+    Data row is keyed by the most recent Header seen in that section.
+    """
+    sections: dict[str, list[dict[str, str]]] = {}
+    headers: dict[str, list[str]] = {}
+
+    reader = csv.reader(io.StringIO(content))
+    for row in reader:
+        if len(row) < 3:
+            continue
+        section, kind = row[0].strip(), row[1].strip()
+        if kind == 'Header':
+            headers[section] = [h.strip() for h in row[2:]]
+            sections.setdefault(section, [])
+        elif kind == 'Data':
+            header = headers.get(section)
+            if not header:
+                continue
+            values = row[2:]
+            record = {h: (values[i].strip() if i < len(values) else '') for i, h in enumerate(header)}
+            sections.setdefault(section, []).append(record)
+        # SubTotal / Total / Notes rows are summaries, not fills: skip them.
+
+    return sections
+
+
+def parse_ibkr_option_symbol(symbol: str) -> dict | None:
+    """
+    Parse the two option symbol styles IBKR prints in statements:
+      'AAPL 17JAN26 150 C'        (statement style)
+      'AAPL  260117C00150000'     (OCC style, 21 chars)
+    Returns dict with ticker, option_expiry (YYYY-MM-DD), option_strike, option_type.
+    """
+    s = symbol.strip().upper()
+
+    m = re.match(r'^([A-Z.]+)\s+(\d{1,2})([A-Z]{3})(\d{2})\s+([\d.]+)\s+([CP])$', s)
+    if m:
+        ticker, day, mon, yy, strike, cp = m.groups()
+        month = MONTH_MAP.get(mon)
+        if not month:
+            return None
+        return {
+            'ticker': ticker,
+            'option_expiry': f"{2000 + int(yy):04d}-{month:02d}-{int(day):02d}",
+            'option_strike': float(strike),
+            'option_type': 'CALL' if cp == 'C' else 'PUT',
+        }
+
+    m = re.match(r'^([A-Z.]+)\s*(\d{2})(\d{2})(\d{2})([CP])(\d{8})$', s)
+    if m:
+        ticker, yy, mm, dd, cp, strike_raw = m.groups()
+        return {
+            'ticker': ticker,
+            'option_expiry': f"{2000 + int(yy):04d}-{int(mm):02d}-{int(dd):02d}",
+            'option_strike': int(strike_raw) / 1000.0,
+            'option_type': 'CALL' if cp == 'C' else 'PUT',
+        }
+
+    return None
+
+
+def _ibkr_instrument_type(asset_category: str) -> str | None:
+    cat = asset_category.strip().lower()
+    if not cat:
+        return None
+    if 'option' in cat:
+        return 'OPTION'
+    if 'future' in cat:
+        return 'FUTURE'
+    if 'stock' in cat or 'equit' in cat or 'etf' in cat:
+        return 'STOCK'
+    # Forex, bonds, CFDs, warrants, cash rows: not something the journal tracks.
+    return None
+
+
+def _ibkr_qty(value: str) -> float | int | None:
+    """'-4' -> 4, '1,250' -> 1250, '0.5' -> 0.5 (fractional shares keep the decimal)."""
+    s = value.strip().replace(',', '').lstrip('+-')
+    if not s:
+        return None
+    try:
+        q = float(s)
+    except ValueError:
+        return None
+    if q == 0:
+        return None
+    return int(q) if q == int(q) else round(q, 6)
+
+
+def _ibkr_datetime(value: str) -> tuple[str, str] | None:
+    """'2026-01-06, 09:52:00' -> ('2026-01-06', '09:52:00'). Date-only rows get an empty time."""
+    s = value.strip().strip('"')
+    if not s:
+        return None
+    if ',' in s:
+        date_part, time_part = [p.strip() for p in s.split(',', 1)]
+    elif ' ' in s:
+        date_part, time_part = s.split(' ', 1)
+    else:
+        date_part, time_part = s, ''
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_part):
+        return None
+    return date_part, time_part.strip()
+
+
+def parse_ibkr_trades_section(records: list[dict[str, str]]) -> list[dict]:
+    """
+    Turn the Trades section of an IBKR Activity Statement into execution dicts.
+    IBKR emits one row per order by default (DataDiscriminator 'Order'); when a
+    statement is configured to show executions it emits 'Trade' rows instead,
+    and some layouts include both. If both are present only the 'Trade' rows
+    (the real fills) are used so nothing is counted twice. 'ClosedLot' rows are
+    tax-lot detail and always skipped.
+    """
+    if not records:
+        return []
+
+    kinds = {r.get('DataDiscriminator', '').strip() for r in records}
+    use_kind = 'Trade' if 'Trade' in kinds else 'Order'
+
+    executions = []
+    for r in records:
+        if r.get('DataDiscriminator', '').strip() != use_kind:
+            continue
+
+        instrument_type = _ibkr_instrument_type(r.get('Asset Category', ''))
+        if not instrument_type:
+            continue
+
+        symbol = r.get('Symbol', '').strip().upper()
+        if not symbol:
+            continue
+
+        qty = _ibkr_qty(r.get('Quantity', ''))
+        if qty is None:
+            continue
+        signed = r.get('Quantity', '').strip().replace(',', '')
+        action = 'SOLD' if signed.startswith('-') else 'BOT'
+
+        dt = _ibkr_datetime(r.get('Date/Time', '') or r.get('Date', ''))
+        if not dt:
+            continue
+        iso_date, time_part = dt
+
+        price = clean_amount(r.get('T. Price', '') or r.get('Price', ''))
+        proceeds = clean_amount(r.get('Proceeds', ''))
+        commission = abs(clean_amount(r.get('Comm/Fee', '') or r.get('Comm in USD', '')))
+
+        option_expiry = option_strike = option_type = None
+        ticker = symbol
+        if instrument_type == 'OPTION':
+            parsed = parse_ibkr_option_symbol(symbol)
+            if not parsed:
+                continue
+            ticker = parsed['ticker']
+            option_expiry = parsed['option_expiry']
+            option_strike = parsed['option_strike']
+            option_type = parsed['option_type']
+        elif instrument_type == 'FUTURE':
+            # IBKR prints 'ESH6'; the rest of the app uses the Thinkorswim '/ESH6'
+            # convention for futures (multiplier lookup, chart proxy), so match it.
+            ticker = symbol if symbol.startswith('/') else '/' + symbol
+
+        # Proceeds is already signed like Thinkorswim's AMOUNT (buys negative,
+        # sells positive) and already includes the option/futures multiplier.
+        # Fall back to price * qty when a statement leaves Proceeds blank.
+        if proceeds == 0.0 and price:
+            multiplier = 100 if instrument_type == 'OPTION' else 1
+            proceeds = price * qty * multiplier
+            if action == 'BOT':
+                proceeds = -proceeds
+
+        executions.append({
+            'action': action,
+            'qty': qty,
+            'ticker': ticker,
+            'price': abs(price),
+            'instrument_type': instrument_type,
+            'option_expiry': option_expiry,
+            'option_strike': option_strike,
+            'option_type': option_type,
+            'date': iso_date,
+            'iso_date': iso_date,
+            'time': time_part,
+            'amount': round(proceeds, 2),
+            'commission': round(commission, 2),
+            'raw_description': f"{action} {qty} {symbol} @{price}",
+        })
+
+    return executions
+
+
+def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    IBKR Activity Statement CSV parse pipeline (Client Portal -> Performance &
+    Reports -> Statements -> Activity -> CSV). Same output contract as
+    parse_thinkorswim_csv: (trade dicts ready for DB insert, skipped_count).
+    """
+    content = content.lstrip('﻿')
+    sections = split_ibkr_sections(content)
+
+    trade_records = sections.get('Trades')
+    if trade_records is None:
+        raise ValueError(
+            "No 'Trades' section found. Export an IBKR Activity Statement as CSV "
+            "with the Trades section enabled."
+        )
+
+    executions = parse_ibkr_trades_section(trade_records)
+    return build_trades_from_executions(executions, account_id, conn)
+
+
+# ── Generic CSV (any broker, one row per execution) ───────────────────────────
+#
+# For brokers without a dedicated parser. The user copies their fills into the
+# template at frontend/public/templates/generic_trades_template.csv, one row per
+# fill.
+#
+# Required columns: date, time, symbol, side, quantity, price
+# Optional columns: commission, asset_type, expiry, strike, put_call, multiplier
+#
+# Header names are case-insensitive and extra columns are ignored, so a broker
+# export that already uses these headers imports as-is. Rows that cannot be read
+# are never skipped silently: the import stops and names the line, because a
+# missing fill changes every P&L number after it.
+
+GENERIC_REQUIRED = ('date', 'time', 'symbol', 'side', 'quantity', 'price')
+GENERIC_OPTIONAL = ('commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier')
+
+_GENERIC_ALIASES = {
+    'ticker': 'symbol', 'qty': 'quantity', 'shares': 'quantity', 'contracts': 'quantity',
+    'fill_price': 'price', 'execution_price': 'price', 'action': 'side', 'buy_sell': 'side',
+    'fees': 'commission', 'commissions': 'commission', 'comm': 'commission',
+    'type': 'asset_type', 'instrument': 'asset_type', 'instrument_type': 'asset_type',
+    'expiration': 'expiry', 'exp': 'expiry', 'call_put': 'put_call', 'right': 'put_call',
+    'strike_price': 'strike',
+}
+
+
+def _generic_header(cells):
+    """Map canonical column names to indexes, or None if this is not a generic header."""
+    index = {}
+    for i, raw in enumerate(cells):
+        key = re.sub(r'[\s/-]+', '_', raw.strip().lower()).strip('_')
+        key = _GENERIC_ALIASES.get(key, key)
+        if key in GENERIC_REQUIRED or key in GENERIC_OPTIONAL:
+            index.setdefault(key, i)
+    return index if all(k in index for k in GENERIC_REQUIRED) else None
+
+
+def _generic_date(value):
+    """YYYY-MM-DD, or US M/D/YYYY. Day-first dates are refused: 03/04 is ambiguous."""
+    v = value.strip()
+    m = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})$', v)
+    if m:
+        y, mo, d = map(int, m.groups())
+    else:
+        m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', v)
+        if not m:
+            return None
+        mo, d, y = map(int, m.groups())
+        if y < 100:
+            y += 2000
+    try:
+        return datetime(y, mo, d).strftime('%Y-%m-%d')
+    except ValueError:
+        return None
+
+
+def _generic_time(value):
+    """'9:31', '09:31:05', '9:31:05 AM', '14:02' -> 'HH:MM:SS' (24 hour)."""
+    v = value.strip().upper()
+    m = re.match(r'^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$', v)
+    if not m:
+        return None
+    h, mi, sec, ap = m.groups()
+    h, mi, sec = int(h), int(mi), int(sec or 0)
+    if ap == 'PM' and h < 12:
+        h += 12
+    if ap == 'AM' and h == 12:
+        h = 0
+    if h > 23 or mi > 59 or sec > 59:
+        return None
+    return f"{h:02d}:{mi:02d}:{sec:02d}"
+
+
+def _generic_side(value):
+    """BUY, BOT, B, BUY TO OPEN, BUY TO COVER -> BOT. SELL, SOLD, S, SELL SHORT -> SOLD."""
+    v = value.strip().upper()
+    if v in ('B', 'BOT', 'BOUGHT') or v.startswith('BUY'):
+        return 'BOT'
+    if v in ('S', 'SLD', 'SOLD', 'SHORT') or v.startswith('SELL'):
+        return 'SOLD'
+    return None
+
+
+def _generic_asset(value, symbol):
+    v = value.strip().upper()
+    if not v:
+        return 'FUTURE' if symbol.startswith('/') else 'STOCK'
+    if v in ('STOCK', 'STK', 'EQUITY', 'ETF', 'SHARE', 'SHARES'):
+        return 'STOCK'
+    if v in ('OPTION', 'OPT', 'OPTIONS'):
+        return 'OPTION'
+    if v in ('FUTURE', 'FUT', 'FUTURES'):
+        return 'FUTURE'
+    return None
+
+
+def _futures_multiplier(ticker):
+    """Longest known root that prefixes the contract, so /MES wins over /ES."""
+    for root in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True):
+        if ticker.upper().startswith(root):
+            return FUTURES_MULTIPLIERS[root]
+    return None
+
+
+def _num(text):
+    return float(text.replace(',', '').replace('$', '').strip())
+
+
+def parse_generic_rows(content):
+    """Read the generic template into execution dicts. Raises ValueError naming every bad line."""
+    rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
+
+    header_at, col = None, None
+    for i, cells in enumerate(rows[:20]):
+        found = _generic_header(cells)
+        if found:
+            header_at, col = i, found
+            break
+    if col is None:
+        raise ValueError(
+            "This does not look like the generic template. The header row needs these columns: "
+            + ", ".join(GENERIC_REQUIRED) + "."
+        )
+
+    def cell(cells, name):
+        i = col.get(name)
+        return cells[i].strip() if i is not None and i < len(cells) else ''
+
+    executions, problems = [], []
+    for n, cells in enumerate(rows[header_at + 1:], start=header_at + 2):
+        if not any(c.strip() for c in cells):
+            continue
+        why = []
+
+        symbol = cell(cells, 'symbol').upper()
+        date = _generic_date(cell(cells, 'date'))
+        time_ = _generic_time(cell(cells, 'time'))
+        action = _generic_side(cell(cells, 'side'))
+        asset = _generic_asset(cell(cells, 'asset_type'), symbol)
+
+        try:
+            qty = abs(_num(cell(cells, 'quantity')))
+            if qty == 0:
+                raise ValueError
+            qty = int(qty) if qty == int(qty) else round(qty, 6)
+        except ValueError:
+            qty = None
+        try:
+            price = abs(_num(cell(cells, 'price')))
+        except ValueError:
+            price = None
+        try:
+            commission = abs(_num(cell(cells, 'commission') or '0'))
+        except ValueError:
+            commission = None
+
+        if not symbol:
+            why.append("symbol is empty")
+        if not date:
+            why.append(f"date '{cell(cells, 'date')}' is not YYYY-MM-DD or MM/DD/YYYY")
+        if not time_:
+            why.append(f"time '{cell(cells, 'time')}' is not HH:MM or HH:MM:SS")
+        if not action:
+            why.append(f"side '{cell(cells, 'side')}' is not BUY or SELL")
+        if qty is None:
+            why.append(f"quantity '{cell(cells, 'quantity')}' is not a number above zero")
+        if price is None:
+            why.append(f"price '{cell(cells, 'price')}' is not a number")
+        if commission is None:
+            why.append(f"commission '{cell(cells, 'commission')}' is not a number")
+        if not asset:
+            why.append(f"asset_type '{cell(cells, 'asset_type')}' is not STOCK, OPTION or FUTURE")
+
+        option_expiry = option_strike = option_type = None
+        multiplier = 1
+        ticker = symbol
+        if asset == 'OPTION':
+            option_expiry = _generic_date(cell(cells, 'expiry'))
+            pc = cell(cells, 'put_call').upper()
+            option_type = 'CALL' if pc in ('C', 'CALL') else 'PUT' if pc in ('P', 'PUT') else None
+            try:
+                option_strike = _num(cell(cells, 'strike'))
+            except ValueError:
+                option_strike = None
+            if not (option_expiry and option_type and option_strike is not None):
+                why.append("options need expiry, strike and put_call")
+            multiplier = 100
+        elif asset == 'FUTURE':
+            ticker = symbol if symbol.startswith('/') else '/' + symbol
+            multiplier = _futures_multiplier(ticker)
+
+        override = cell(cells, 'multiplier')
+        if override:
+            try:
+                multiplier = _num(override)
+            except ValueError:
+                why.append(f"multiplier '{override}' is not a number")
+        if asset == 'FUTURE' and not multiplier:
+            # Guessing 1 would understate a /ES trade fifty times over.
+            why.append(f"no known point value for {ticker}; add a multiplier column (50 for /ES, for example)")
+
+        if why:
+            problems.append(f"line {n}: " + "; ".join(why))
+            continue
+
+        amount = price * qty * multiplier
+        if action == 'BOT':
+            amount = -amount
+
+        executions.append({
+            'action': action,
+            'qty': qty,
+            'ticker': ticker,
+            'price': price,
+            'instrument_type': asset,
+            'option_expiry': option_expiry,
+            'option_strike': option_strike,
+            'option_type': option_type,
+            'date': date,
+            'iso_date': date,
+            'time': time_,
+            'amount': round(amount, 2),
+            'commission': round(commission, 2),
+            'raw_description': f"{action} {qty} {ticker} @{price}",
+        })
+
+    if problems:
+        more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ""
+        raise ValueError(
+            f"{len(problems)} row(s) could not be read, so nothing was imported{more}. "
+            + " | ".join(problems[:8])
+        )
+    if not executions:
+        raise ValueError("The file has the template header but no trade rows.")
+    return executions
+
+
+def parse_generic_csv(content, account_id, conn=None):
+    """Generic template pipeline. Same output contract as the broker parsers."""
+    return build_trades_from_executions(parse_generic_rows(content), account_id, conn)
+
+
+# ── Broker dispatch ────────────────────────────────────────────────────────────
+
+BROKER_PARSERS = {
+    'thinkorswim': parse_thinkorswim_csv,
+    'ibkr': parse_ibkr_csv,
+    'generic': parse_generic_csv,
+}
+
+BROKER_LABELS = {
+    'thinkorswim': 'Thinkorswim',
+    'ibkr': 'Interactive Brokers',
+    'generic': 'the generic template',
+}
+
+
+def detect_broker(content: str) -> str | None:
+    """Sniff the CSV format. Returns a BROKER_PARSERS key or None if unrecognised."""
+    head = content.lstrip('﻿')[:4000]
+    first_lines = [ln.strip() for ln in head.splitlines()[:5] if ln.strip()]
+    if any(ln.startswith(('Statement,Header', 'Trades,Header', 'Account Information,Header'))
+           for ln in first_lines):
+        return 'ibkr'
+    if 'DataDiscriminator' in content and re.search(r'^[\w /&-]+,(Header|Data),', head, re.MULTILINE):
+        return 'ibkr'
+    upper = head.upper()
+    if ('CASH BALANCE' in upper or 'ACCOUNT STATEMENT' in upper
+            or 'ACCOUNT TRADE HISTORY' in upper or 'FUTURES STATEMENTS' in upper):
+        return 'thinkorswim'
+    # Checked last: the first non-empty row is a header with the template's columns.
+    for cells in csv.reader(io.StringIO(head)):
+        if not any(c.strip() for c in cells):
+            continue
+        return 'generic' if _generic_header(cells) else None
+    return None
+
+
+def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Route a CSV to the right broker parser. broker is a BROKER_PARSERS key or
+    'auto'. An explicit broker that clearly does not match the file raises a
+    ValueError with a hint, instead of importing zero trades silently.
+    """
+    key = (broker or 'auto').strip().lower()
+    detected = detect_broker(content)
+
+    if key == 'auto':
+        if not detected:
+            raise ValueError(
+                "Could not recognise this CSV. Pick the broker from the dropdown, "
+                "export an account statement from Thinkorswim or an Activity "
+                "Statement from Interactive Brokers, or copy your fills into the "
+                "generic template (Import page, 'Broker not listed?')."
+            )
+        key = detected
+
+    if key not in BROKER_PARSERS:
+        raise ValueError(f"Unsupported broker '{broker}'. Supported: {', '.join(BROKER_LABELS.values())}.")
+
+    if detected and detected != key:
+        raise ValueError(
+            f"This file looks like an export from {BROKER_LABELS[detected]}, but "
+            f"{BROKER_LABELS[key]} is selected. Change the broker dropdown and try again."
+        )
+
+    return BROKER_PARSERS[key](content, account_id, conn)
+, exec_time) else 'minute',
+        })
+        executions.append(parsed)
+
+    return executions
+
+
+def _fingerprint_num(value):
+    try:
+        return f"{float(value):.8f}".rstrip('0').rstrip('.')
+    except (TypeError, ValueError):
+        return str(value or '')
+
+
+def execution_fingerprint(exec_dict: dict) -> str:
+    """Contract-aware execution identity used for re-import dedupe.
+
+    When the broker provides a stable reference number, use it instead of the
+    timestamp so minute-vs-second export precision cannot create a duplicate.
+    A Counter is used by the caller, so legitimate repeated split fills remain
+    distinct even when every visible field is identical.
+    """
+    date = exec_dict.get('iso_date') or exec_dict.get('date', '')
+    instr = exec_dict.get('instrument_type', 'STOCK')
+    parts = [
+        date,
+        str(exec_dict.get('ticker', '')).upper(),
+        instr,
+        str(exec_dict.get('option_expiry') or ''),
+        _fingerprint_num(exec_dict.get('option_strike')),
+        str(exec_dict.get('option_type') or ''),
+        str(exec_dict.get('action') or ''),
+        _fingerprint_num(exec_dict.get('qty')),
+        _fingerprint_num(exec_dict.get('price')),
+        _fingerprint_num(exec_dict.get('commission')),
+        _fingerprint_num(exec_dict.get('amount')),
+    ]
+    source_ref = str(exec_dict.get('source_ref') or '').strip()
+    if source_ref:
+        parts.insert(1, f"ref:{source_ref}")
+    else:
+        parts.insert(1, f"time:{exec_dict.get('time','')}")
+    return '|'.join(parts)
+
+
+def get_existing_fingerprints(conn, account_id: int) -> Counter:
+    """Load stored execution identities as a multiset, not a set.
+
+    Multiset matching is critical because brokers legitimately emit multiple
+    identical split fills. Contract metadata comes from the trade row so two
+    option strikes can never collide merely because ticker/time/price match.
+    """
+    cursor = conn.execute(
+        """SELECT ticker, instrument_type, option_expiry, option_strike,
+                  option_type, executions
+           FROM trades WHERE account_id = ?""",
+        (account_id,)
+    )
+    fingerprints = Counter()
+    for row in cursor:
+        try:
+            ticker, instr, expiry, strike, opt_type, raw_execs = row
+            multiplier = 100 if instr == 'OPTION' else 1
+            execs = json.loads(raw_execs or '[]')
+            for e in execs:
+                amount = float(e.get('price') or 0) * float(e.get('qty') or 0) * multiplier
+                if e.get('action') == 'BOT':
+                    amount = -amount
+                payload = {
+                    **e,
+                    'ticker': ticker or '',
+                    'instrument_type': instr or 'STOCK',
+                    'option_expiry': expiry,
+                    'option_strike': strike,
+                    'option_type': opt_type,
+                    'iso_date': e.get('date', ''),
+                    'amount': round(amount, 2),
+                    'source_ref': e.get('source_ref'),
+                }
+                fingerprints[execution_fingerprint(payload)] += 1
+        except Exception:
+            pass
+    return fingerprints
+
+
+def _make_group_meta(exec_dict: dict) -> str:
+    """Create a unique key for duplicate detection. Uses iso_date so it matches stored executions."""
+    date = exec_dict.get('iso_date') or exec_dict.get('date', '')
+    return f"{date}|{exec_dict.get('time','')}|{exec_dict.get('ticker','')}|{exec_dict.get('action','')}|{exec_dict.get('qty','')}|{exec_dict.get('price','')}"
+
+
+def get_existing_fingerprints(conn, account_id: int) -> set[str]:
+    """Load all existing execution fingerprints for an account.
+    Reads ticker from the trade row (not stored in executions JSON) to match execution_fingerprint format.
+    """
+    cursor = conn.execute(
+        "SELECT ticker, executions FROM trades WHERE account_id = ?", (account_id,)
+    )
+    fingerprints = set()
+    for row in cursor:
+        ticker = row[0] or ''
+        try:
+            execs = json.loads(row[1] or '[]')
+            for e in execs:
+                fp = f"{e.get('date','')}|{e.get('time','')}|{ticker}|{e.get('action','')}|{e.get('qty','')}|{e.get('price','')}"
+                fingerprints.add(fp)
+        except Exception:
+            pass
+    return fingerprints
+
+
+def _make_group_meta(date_str: str, ticker: str, instr: str, fills: list[dict]) -> dict:
+    return {
+        'date': normalize_date(date_str),
+        'raw_date': date_str,
+        'ticker': ticker,
+        'instrument_type': instr,
+        'option_expiry': fills[0].get('option_expiry'),
+        'option_strike': fills[0].get('option_strike'),
+        'option_type': fills[0].get('option_type'),
+    }
+
+
+def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
+    """
+    Group executions into trades based on position open/close cycles.
+    Each time a position returns to 0 shares/contracts, that completes one trade.
+    Fills spanning multiple days are matched correctly (e.g., buy Monday, sell Wednesday).
+    The trade date is the CLOSING fill's date so P&L is realized on the exit day.
+    Multiple cycles per ticker produce separate numbered trades (_1, _2, ...).
+    """
+    # Sort all fills chronologically so multi-day positions process in order
+    executions_sorted = sorted(
+        executions,
+        key=lambda ex: (ex.get('iso_date', ex['date']), ex.get('time', ''))
+    )
+
+    # Key by (ticker, instrument_type) — no date — so multi-day trades stay together.
+    # Options are keyed by their specific contract to avoid mixing different strikes/expiries.
+    by_ticker: dict[tuple, list[dict]] = {}
+    for ex in executions_sorted:
+        if ex['instrument_type'] == 'OPTION':
+            k = (ex['ticker'], ex['instrument_type'],
+                 ex.get('option_expiry', ''), ex.get('option_strike', ''), ex.get('option_type', ''))
+        else:
+            k = (ex['ticker'], ex['instrument_type'])
+        by_ticker.setdefault(k, []).append(ex)
+
+    groups: dict[str, list[dict]] = {}
+    group_meta: dict[str, dict] = {}
+
+    for key_tuple, fills in by_ticker.items():
+        ticker = key_tuple[0]
+        instr = key_tuple[1]
+
+        position = 0
+        seq = 0
+        current_fills: list[dict] = []
+
+        for fill in fills:
+            if _is_flat(position):
+                seq += 1
+                current_fills = []
+                position = 0
+
+            qty = fill['qty']
+            if fill['action'] == 'BOT':
+                position += qty
+            else:
+                position -= qty
+
+            current_fills.append(fill)
+
+            if _is_flat(position):
+                close_date = current_fills[-1]['date']
+                key = trade_group_key(close_date, ticker, instr, seq,
+                                      current_fills[0].get('option_expiry'),
+                                      current_fills[0].get('option_strike'),
+                                      current_fills[0].get('option_type'))
+                groups[key] = list(current_fills)
+                group_meta[key] = _make_group_meta(close_date, ticker, instr, current_fills)
+
+        # Open/unclosed position — use date of the most recent fill
+        if current_fills and not _is_flat(position):
+            last_date = current_fills[-1]['date']
+            key = trade_group_key(last_date, ticker, instr, seq,
+                                  current_fills[0].get('option_expiry'),
+                                  current_fills[0].get('option_strike'),
+                                  current_fills[0].get('option_type'))
+            groups[key] = list(current_fills)
+            group_meta[key] = _make_group_meta(last_date, ticker, instr, current_fills)
+
+    return groups, group_meta
+
+
+def _is_flat(position) -> bool:
+    """Position is back to zero. Tolerance so fractional-share fills (IBKR) still close out."""
+    return abs(position) < 1e-6
+
+
+def _option_pos_key(ticker: str, instr: str, expiry, strike, opt_type) -> tuple:
+    return (ticker, instr, expiry or '', strike or 0, opt_type or '')
+
+
+def _stock_pos_key(ticker: str, instr: str) -> tuple:
+    return (ticker, instr)
+
+
+def _exec_pos_key(ex: dict) -> tuple:
+    instr = ex.get('instrument_type', 'STOCK')
+    if instr == 'OPTION':
+        return _option_pos_key(ex['ticker'], instr,
+                                ex.get('option_expiry'), ex.get('option_strike'), ex.get('option_type'))
+    return _stock_pos_key(ex['ticker'], instr)
+
+
+def load_open_positions_from_db(conn, account_id: int) -> list[dict]:
+    """
+    Return open trade records from the DB (positions where qty_bot != qty_sold).
+    Each record includes the parsed executions list.
+    """
+    rows = conn.execute(
+        """SELECT id, trade_group, ticker, instrument_type,
+                  option_expiry, option_strike, option_type, side, executions
+           FROM trades WHERE account_id = ?""",
+        (account_id,)
+    ).fetchall()
+    open_trades = []
+    for row in rows:
+        d = dict(row)
+        execs = json.loads(d['executions'] or '[]')
+        qty_bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
+        qty_sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
+        if qty_bot != qty_sold:
+            d['parsed_execs'] = execs
+            open_trades.append(d)
+    return open_trades
+
+
+def _rebuild_fill_from_db_exec(e: dict, trade_meta: dict) -> dict:
+    """Reconstruct a full fill dict from a stored execution + trade metadata."""
+    instr = trade_meta['instrument_type']
+    multiplier = 100 if instr == 'OPTION' else 1
+    price = e.get('price', 0.0)
+    qty = e.get('qty', 0)
+    amount = price * qty * multiplier
+    if e.get('action') == 'BOT':
+        amount = -amount
+    return {
+        'action': e.get('action', ''),
+        'qty': qty,
+        'ticker': trade_meta['ticker'],
+        'price': price,
+        'instrument_type': instr,
+        'option_expiry': trade_meta.get('option_expiry'),
+        'option_strike': trade_meta.get('option_strike'),
+        'option_type': trade_meta.get('option_type'),
+        'date': e.get('date', ''),
+        'iso_date': e.get('date', ''),
+        'time': e.get('time', ''),
+        'amount': round(amount, 2),
+        'commission': e.get('commission', 0.0),
+    }
+
+
+def _raw_date(iso_date: str) -> str:
+    """YYYY-MM-DD back to the statement's M/D/YY, the form trade_group keys are built from."""
+    try:
+        y, m, d = iso_date.split('-')
+        return f"{int(m)}/{int(d)}/{y[2:]}"
+    except ValueError:
+        return iso_date
+
+
+def _point_value(ticker: str, instr: str):
+    if instr == 'OPTION':
+        return 100
+    if instr != 'FUTURE':
+        return 1
+    for root in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True):
+        if ticker.upper().startswith(root):
+            return FUTURES_MULTIPLIERS[root]
+    return None
+
+
+def overlapping_db_fills(conn, account_id: int, new_execs: list[dict]) -> tuple[list[dict], set[str]]:
+    """Stored fills that must be regrouped together with the new ones.
+
+    Trade groups are numbered by position cycle within one import (_1, _2, ...). A later
+    import that brings more fills for a ticker already stored that day would number its
+    cycles from 1 again and overwrite the stored trade of the same name, losing it. So for
+    each stock or future with new fills, the stored imported trades that share a day with
+    them (or are still open) are rebuilt from their executions and grouped with the new
+    fills, and the caller replaces them. Futures with an unknown point value are left alone.
+    Returns (rebuilt fills tagged with '_old_group', the old trade_groups they came from).
+    """
+    days: dict[tuple, set] = {}
+    for ex in new_execs:
+        instr = ex.get('instrument_type', 'STOCK')
+        if instr == 'OPTION':
+            continue
+        days.setdefault((ex['ticker'], instr), set()).add(ex.get('iso_date') or normalize_date(ex['date']))
+
+    fills: list[dict] = []
+    old_groups: set[str] = set()
+    for (ticker, instr), dates in days.items():
+        mult = _point_value(ticker, instr)
+        if mult is None:
+            continue
+        rows = conn.execute(
+            """SELECT trade_group, ticker, instrument_type, option_expiry, option_strike, option_type, executions
+               FROM trades WHERE account_id = ? AND ticker = ? AND instrument_type = ?
+               AND COALESCE(source, 'imported') = 'imported'""",
+            (account_id, ticker, instr),
+        ).fetchall()
+        for row in rows:
+            meta = dict(row)
+            execs = json.loads(meta['executions'] or '[]')
+            bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
+            sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
+            if not ({e.get('date', '') for e in execs} & dates) and bot == sold:
+                continue
+            old_groups.add(meta['trade_group'])
+            for e in execs:
+                f = _rebuild_fill_from_db_exec(e, meta)
+                f['amount'] = round(f['amount'] * mult, 2)
+                # keys carry the date the way this broker's parser wrote it
+                slashed = '/' in meta['trade_group'].split('_')[0]
+                f['date'] = _raw_date(f['iso_date']) if slashed else f['iso_date']
+                f['_old_group'] = meta['trade_group']
+                fills.append(f)
+    return fills, old_groups
+
+
+def _cross_section_key(ex: dict) -> str:
+    """Fingerprint for deduplicating across CSV sections (no time field — formats differ)."""
+    return f"{ex.get('iso_date','')}|{ex.get('ticker','')}|{ex.get('action','')}|{ex.get('qty','')}|{ex.get('price','')}"
+
+
+def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Full CSV parse pipeline.
+    Returns (list of trade dicts ready for DB insert, skipped_count).
+    """
+    content = content.lstrip('﻿')
+
+    sections = split_csv_sections(content)
+    cash_rows = find_cash_balance_section(sections)
+    futures_rows = find_futures_section(sections)
+    trade_history_rows = find_trade_history_section(sections)
+
+    all_executions = []
+    if cash_rows:
+        all_executions.extend(parse_cash_balance_section(cash_rows))
+    if futures_rows:
+        all_executions.extend(parse_futures_section_rows(futures_rows))
+
+    # Merge Trade History: add fills not already represented in Cash Balance / Futures.
+    # Use (iso_date, ticker, action, qty, price) to match across sections — time formats differ.
+    # Thinkorswim aggregates partial fills in Trade History (e.g., two CB fills of 40+60 appear as 100).
+    # Check cumulative qty per (date, ticker, action, price) so those aggregated entries are skipped.
+    if trade_history_rows:
+        cb_exact_keys = {_cross_section_key(ex) for ex in all_executions}
+        cb_qty_map: dict[tuple, int] = {}
+        for ex in all_executions:
+            k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
+            cb_qty_map[k] = cb_qty_map.get(k, 0) + ex.get('qty', 0)
+        for ex in parse_trade_history_section(trade_history_rows):
+            if _cross_section_key(ex) in cb_exact_keys:
+                continue
+            k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
+            if cb_qty_map.get(k, 0) >= ex.get('qty', 0):
+                continue  # CB partial fills already cover this aggregated TH fill
+            all_executions.append(ex)
+
+    return build_trades_from_executions(all_executions, account_id, conn)
+
+
+def build_trades_from_executions(all_executions: list[dict], account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Broker-agnostic half of the import pipeline. Takes execution dicts in the
+    common shape (action BOT/SOLD, qty, ticker, price, instrument_type, option_*,
+    date, iso_date, time, amount, commission) and returns (trade dicts, skipped).
+
+    Steps: DB-level duplicate detection, merging fills into open option
+    positions already stored, grouping by position open/close cycles, and
+    aggregating each group into a trade row. Every broker parser ends here so
+    grouping and dedup behave identically regardless of the CSV format.
+    """
+    if not all_executions:
+        return [], 0
+
+    # DB-level dedup only — never dedupe within same file (Thinkorswim legitimately
+    # emits identical time/price/qty fills for large split orders)
+    existing_fps = get_existing_fingerprints(conn, account_id) if conn else set()
+    skipped = 0
+    unique_executions = []
+    for exec_dict in all_executions:
+        fp = execution_fingerprint(exec_dict)
+        if fp in existing_fps:
+            skipped += 1
+        else:
+            # Enrich with ticker/date for serialization
+            exec_copy = dict(exec_dict)
+            unique_executions.append(exec_copy)
+
+    # Merge new fills into existing open OPTION positions from DB.
+    # Options use a specific contract key (expiry/strike/type) so the match is unambiguous.
+    # Stock positions are skipped here — day-trading cycles are too ambiguous to auto-merge.
+    if conn:
+        open_positions = load_open_positions_from_db(conn, account_id)
+        open_by_key: dict[tuple, dict] = {}
+        for pos in open_positions:
+            if pos['instrument_type'] != 'OPTION':
+                continue  # only merge options
+            k = _option_pos_key(pos['ticker'], pos['instrument_type'],
+                                pos.get('option_expiry'), pos.get('option_strike'), pos.get('option_type'))
+            open_by_key[k] = pos
+
+        absorbed = []
+        remaining = []
+        for ex in unique_executions:
+            if ex.get('instrument_type') != 'OPTION':
+                remaining.append(ex)
+                continue
+            k = _option_pos_key(ex['ticker'], ex['instrument_type'],
+                                ex.get('option_expiry'), ex.get('option_strike'), ex.get('option_type'))
+            if k in open_by_key:
+                absorbed.append((ex, open_by_key[k]))
+            else:
+                remaining.append(ex)
+
+        # Group absorbed fills by their matched open position
+        pos_updates: dict[str, list[dict]] = {}
+        for ex, pos in absorbed:
+            tg = pos['trade_group']
+            pos_updates.setdefault(tg, {'pos': pos, 'new_fills': []})['new_fills'].append(ex)
+
+        for tg, update in pos_updates.items():
+            pos = update['pos']
+            new_fills = update['new_fills']
+            old_fills = [_rebuild_fill_from_db_exec(e, pos) for e in pos['parsed_execs']]
+            all_fills = sorted(old_fills + new_fills,
+                               key=lambda f: (f.get('iso_date', ''), f.get('time', '')))
+            agg = aggregate_executions(all_fills)
+
+            # Use closing fill date for closed positions
+            qty_b = sum(f['qty'] for f in all_fills if f['action'] == 'BOT')
+            qty_s = sum(f['qty'] for f in all_fills if f['action'] == 'SOLD')
+            if qty_b == qty_s and all_fills:
+                side = pos['side']
+                exit_action = 'SOLD' if side == 'LONG' else 'BOT'
+                exit_fills = sorted([f for f in all_fills if f['action'] == exit_action],
+                                    key=lambda f: (f.get('iso_date',''), f.get('time','')))
+                new_date = exit_fills[-1].get('iso_date', all_fills[-1].get('iso_date', pos.get('date','')))
+            else:
+                new_date = max(f.get('iso_date', '') for f in all_fills) or pos.get('date', '')
+
+            conn.execute(
+                "UPDATE trades SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=? WHERE trade_group=? AND account_id=?",
+                (agg['executions'], agg['gross_pnl'], agg['net_pnl'], agg['commissions'],
+                 new_date, tg, account_id)
+            )
+
+        conn.commit()
+        unique_executions = remaining
+
+    replaced: set[str] = set()
+    if conn and unique_executions:
+        stored, replaced = overlapping_db_fills(conn, account_id, unique_executions)
+        unique_executions = unique_executions + stored
+
+    groups, group_meta = group_executions_by_position(unique_executions)
+
+    trades = []
+    for key, fills in groups.items():
+        meta = group_meta[key]
+        agg = aggregate_executions(fills)
+        trades.append({
+            'account_id': account_id,
+            'trade_group': key,
+            'date': meta['date'],
+            'ticker': meta['ticker'],
+            'instrument_type': meta['instrument_type'],
+            'side': agg['side'],
+            'gross_pnl': agg['gross_pnl'],
+            'net_pnl': agg['net_pnl'],
+            'commissions': agg['commissions'],
+            'executions': agg['executions'],
+            'option_expiry': meta['option_expiry'],
+            'option_strike': meta['option_strike'],
+            'option_type': meta['option_type'],
+            'source': 'imported',
+            'replaces': sorted({f['_old_group'] for f in fills if f.get('_old_group')}),
+        })
+
+    return trades, skipped
+
+
+# ── Interactive Brokers (IBKR) Activity Statement ─────────────────────────────
+#
+# IBKR's Activity Statement CSV is one flat file where every line is prefixed
+# with its section name and a row kind:
+#
+#   Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,...
+#   Trades,Data,Order,Stocks,USD,AVGO,"2026-01-06, 09:52:00",-4,239.78,252.40,959.12,-0.35,...
+#   Trades,SubTotal,,Stocks,USD,AVGO,,66,,,4099.00,-3.35,...
+#
+# Quantity is signed (buys positive, sells negative), Proceeds is signed the
+# same way Thinkorswim's AMOUNT column is (buys negative, sells positive) and
+# already includes the contract multiplier, and Comm/Fee is negative. That
+# maps straight onto the common execution shape, so the grouping / dedup
+# pipeline in build_trades_from_executions is reused unchanged.
+
+
+def split_ibkr_sections(content: str) -> dict[str, list[dict[str, str]]]:
+    """
+    Split an IBKR Activity Statement CSV into named sections.
+    Returns dict: section_name -> list of records (dict column_name -> value).
+    A section may carry several Header rows (the Trades section repeats its
+    header per asset category, sometimes with different columns), so each
+    Data row is keyed by the most recent Header seen in that section.
+    """
+    sections: dict[str, list[dict[str, str]]] = {}
+    headers: dict[str, list[str]] = {}
+
+    reader = csv.reader(io.StringIO(content))
+    for row in reader:
+        if len(row) < 3:
+            continue
+        section, kind = row[0].strip(), row[1].strip()
+        if kind == 'Header':
+            headers[section] = [h.strip() for h in row[2:]]
+            sections.setdefault(section, [])
+        elif kind == 'Data':
+            header = headers.get(section)
+            if not header:
+                continue
+            values = row[2:]
+            record = {h: (values[i].strip() if i < len(values) else '') for i, h in enumerate(header)}
+            sections.setdefault(section, []).append(record)
+        # SubTotal / Total / Notes rows are summaries, not fills: skip them.
+
+    return sections
+
+
+def parse_ibkr_option_symbol(symbol: str) -> dict | None:
+    """
+    Parse the two option symbol styles IBKR prints in statements:
+      'AAPL 17JAN26 150 C'        (statement style)
+      'AAPL  260117C00150000'     (OCC style, 21 chars)
+    Returns dict with ticker, option_expiry (YYYY-MM-DD), option_strike, option_type.
+    """
+    s = symbol.strip().upper()
+
+    m = re.match(r'^([A-Z.]+)\s+(\d{1,2})([A-Z]{3})(\d{2})\s+([\d.]+)\s+([CP])$', s)
+    if m:
+        ticker, day, mon, yy, strike, cp = m.groups()
+        month = MONTH_MAP.get(mon)
+        if not month:
+            return None
+        return {
+            'ticker': ticker,
+            'option_expiry': f"{2000 + int(yy):04d}-{month:02d}-{int(day):02d}",
+            'option_strike': float(strike),
+            'option_type': 'CALL' if cp == 'C' else 'PUT',
+        }
+
+    m = re.match(r'^([A-Z.]+)\s*(\d{2})(\d{2})(\d{2})([CP])(\d{8})$', s)
+    if m:
+        ticker, yy, mm, dd, cp, strike_raw = m.groups()
+        return {
+            'ticker': ticker,
+            'option_expiry': f"{2000 + int(yy):04d}-{int(mm):02d}-{int(dd):02d}",
+            'option_strike': int(strike_raw) / 1000.0,
+            'option_type': 'CALL' if cp == 'C' else 'PUT',
+        }
+
+    return None
+
+
+def _ibkr_instrument_type(asset_category: str) -> str | None:
+    cat = asset_category.strip().lower()
+    if not cat:
+        return None
+    if 'option' in cat:
+        return 'OPTION'
+    if 'future' in cat:
+        return 'FUTURE'
+    if 'stock' in cat or 'equit' in cat or 'etf' in cat:
+        return 'STOCK'
+    # Forex, bonds, CFDs, warrants, cash rows: not something the journal tracks.
+    return None
+
+
+def _ibkr_qty(value: str) -> float | int | None:
+    """'-4' -> 4, '1,250' -> 1250, '0.5' -> 0.5 (fractional shares keep the decimal)."""
+    s = value.strip().replace(',', '').lstrip('+-')
+    if not s:
+        return None
+    try:
+        q = float(s)
+    except ValueError:
+        return None
+    if q == 0:
+        return None
+    return int(q) if q == int(q) else round(q, 6)
+
+
+def _ibkr_datetime(value: str) -> tuple[str, str] | None:
+    """'2026-01-06, 09:52:00' -> ('2026-01-06', '09:52:00'). Date-only rows get an empty time."""
+    s = value.strip().strip('"')
+    if not s:
+        return None
+    if ',' in s:
+        date_part, time_part = [p.strip() for p in s.split(',', 1)]
+    elif ' ' in s:
+        date_part, time_part = s.split(' ', 1)
+    else:
+        date_part, time_part = s, ''
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_part):
+        return None
+    return date_part, time_part.strip()
+
+
+def parse_ibkr_trades_section(records: list[dict[str, str]]) -> list[dict]:
+    """
+    Turn the Trades section of an IBKR Activity Statement into execution dicts.
+    IBKR emits one row per order by default (DataDiscriminator 'Order'); when a
+    statement is configured to show executions it emits 'Trade' rows instead,
+    and some layouts include both. If both are present only the 'Trade' rows
+    (the real fills) are used so nothing is counted twice. 'ClosedLot' rows are
+    tax-lot detail and always skipped.
+    """
+    if not records:
+        return []
+
+    kinds = {r.get('DataDiscriminator', '').strip() for r in records}
+    use_kind = 'Trade' if 'Trade' in kinds else 'Order'
+
+    executions = []
+    for r in records:
+        if r.get('DataDiscriminator', '').strip() != use_kind:
+            continue
+
+        instrument_type = _ibkr_instrument_type(r.get('Asset Category', ''))
+        if not instrument_type:
+            continue
+
+        symbol = r.get('Symbol', '').strip().upper()
+        if not symbol:
+            continue
+
+        qty = _ibkr_qty(r.get('Quantity', ''))
+        if qty is None:
+            continue
+        signed = r.get('Quantity', '').strip().replace(',', '')
+        action = 'SOLD' if signed.startswith('-') else 'BOT'
+
+        dt = _ibkr_datetime(r.get('Date/Time', '') or r.get('Date', ''))
+        if not dt:
+            continue
+        iso_date, time_part = dt
+
+        price = clean_amount(r.get('T. Price', '') or r.get('Price', ''))
+        proceeds = clean_amount(r.get('Proceeds', ''))
+        commission = abs(clean_amount(r.get('Comm/Fee', '') or r.get('Comm in USD', '')))
+
+        option_expiry = option_strike = option_type = None
+        ticker = symbol
+        if instrument_type == 'OPTION':
+            parsed = parse_ibkr_option_symbol(symbol)
+            if not parsed:
+                continue
+            ticker = parsed['ticker']
+            option_expiry = parsed['option_expiry']
+            option_strike = parsed['option_strike']
+            option_type = parsed['option_type']
+        elif instrument_type == 'FUTURE':
+            # IBKR prints 'ESH6'; the rest of the app uses the Thinkorswim '/ESH6'
+            # convention for futures (multiplier lookup, chart proxy), so match it.
+            ticker = symbol if symbol.startswith('/') else '/' + symbol
+
+        # Proceeds is already signed like Thinkorswim's AMOUNT (buys negative,
+        # sells positive) and already includes the option/futures multiplier.
+        # Fall back to price * qty when a statement leaves Proceeds blank.
+        if proceeds == 0.0 and price:
+            multiplier = 100 if instrument_type == 'OPTION' else 1
+            proceeds = price * qty * multiplier
+            if action == 'BOT':
+                proceeds = -proceeds
+
+        executions.append({
+            'action': action,
+            'qty': qty,
+            'ticker': ticker,
+            'price': abs(price),
+            'instrument_type': instrument_type,
+            'option_expiry': option_expiry,
+            'option_strike': option_strike,
+            'option_type': option_type,
+            'date': iso_date,
+            'iso_date': iso_date,
+            'time': time_part,
+            'amount': round(proceeds, 2),
+            'commission': round(commission, 2),
+            'raw_description': f"{action} {qty} {symbol} @{price}",
+        })
+
+    return executions
+
+
+def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    IBKR Activity Statement CSV parse pipeline (Client Portal -> Performance &
+    Reports -> Statements -> Activity -> CSV). Same output contract as
+    parse_thinkorswim_csv: (trade dicts ready for DB insert, skipped_count).
+    """
+    content = content.lstrip('﻿')
+    sections = split_ibkr_sections(content)
+
+    trade_records = sections.get('Trades')
+    if trade_records is None:
+        raise ValueError(
+            "No 'Trades' section found. Export an IBKR Activity Statement as CSV "
+            "with the Trades section enabled."
+        )
+
+    executions = parse_ibkr_trades_section(trade_records)
+    return build_trades_from_executions(executions, account_id, conn)
+
+
+# ── Generic CSV (any broker, one row per execution) ───────────────────────────
+#
+# For brokers without a dedicated parser. The user copies their fills into the
+# template at frontend/public/templates/generic_trades_template.csv, one row per
+# fill.
+#
+# Required columns: date, time, symbol, side, quantity, price
+# Optional columns: commission, asset_type, expiry, strike, put_call, multiplier
+#
+# Header names are case-insensitive and extra columns are ignored, so a broker
+# export that already uses these headers imports as-is. Rows that cannot be read
+# are never skipped silently: the import stops and names the line, because a
+# missing fill changes every P&L number after it.
+
+GENERIC_REQUIRED = ('date', 'time', 'symbol', 'side', 'quantity', 'price')
+GENERIC_OPTIONAL = ('commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier')
+
+_GENERIC_ALIASES = {
+    'ticker': 'symbol', 'qty': 'quantity', 'shares': 'quantity', 'contracts': 'quantity',
+    'fill_price': 'price', 'execution_price': 'price', 'action': 'side', 'buy_sell': 'side',
+    'fees': 'commission', 'commissions': 'commission', 'comm': 'commission',
+    'type': 'asset_type', 'instrument': 'asset_type', 'instrument_type': 'asset_type',
+    'expiration': 'expiry', 'exp': 'expiry', 'call_put': 'put_call', 'right': 'put_call',
+    'strike_price': 'strike',
+}
+
+
+def _generic_header(cells):
+    """Map canonical column names to indexes, or None if this is not a generic header."""
+    index = {}
+    for i, raw in enumerate(cells):
+        key = re.sub(r'[\s/-]+', '_', raw.strip().lower()).strip('_')
+        key = _GENERIC_ALIASES.get(key, key)
+        if key in GENERIC_REQUIRED or key in GENERIC_OPTIONAL:
+            index.setdefault(key, i)
+    return index if all(k in index for k in GENERIC_REQUIRED) else None
+
+
+def _generic_date(value):
+    """YYYY-MM-DD, or US M/D/YYYY. Day-first dates are refused: 03/04 is ambiguous."""
+    v = value.strip()
+    m = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})$', v)
+    if m:
+        y, mo, d = map(int, m.groups())
+    else:
+        m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', v)
+        if not m:
+            return None
+        mo, d, y = map(int, m.groups())
+        if y < 100:
+            y += 2000
+    try:
+        return datetime(y, mo, d).strftime('%Y-%m-%d')
+    except ValueError:
+        return None
+
+
+def _generic_time(value):
+    """'9:31', '09:31:05', '9:31:05 AM', '14:02' -> 'HH:MM:SS' (24 hour)."""
+    v = value.strip().upper()
+    m = re.match(r'^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$', v)
+    if not m:
+        return None
+    h, mi, sec, ap = m.groups()
+    h, mi, sec = int(h), int(mi), int(sec or 0)
+    if ap == 'PM' and h < 12:
+        h += 12
+    if ap == 'AM' and h == 12:
+        h = 0
+    if h > 23 or mi > 59 or sec > 59:
+        return None
+    return f"{h:02d}:{mi:02d}:{sec:02d}"
+
+
+def _generic_side(value):
+    """BUY, BOT, B, BUY TO OPEN, BUY TO COVER -> BOT. SELL, SOLD, S, SELL SHORT -> SOLD."""
+    v = value.strip().upper()
+    if v in ('B', 'BOT', 'BOUGHT') or v.startswith('BUY'):
+        return 'BOT'
+    if v in ('S', 'SLD', 'SOLD', 'SHORT') or v.startswith('SELL'):
+        return 'SOLD'
+    return None
+
+
+def _generic_asset(value, symbol):
+    v = value.strip().upper()
+    if not v:
+        return 'FUTURE' if symbol.startswith('/') else 'STOCK'
+    if v in ('STOCK', 'STK', 'EQUITY', 'ETF', 'SHARE', 'SHARES'):
+        return 'STOCK'
+    if v in ('OPTION', 'OPT', 'OPTIONS'):
+        return 'OPTION'
+    if v in ('FUTURE', 'FUT', 'FUTURES'):
+        return 'FUTURE'
+    return None
+
+
+def _futures_multiplier(ticker):
+    """Longest known root that prefixes the contract, so /MES wins over /ES."""
+    for root in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True):
+        if ticker.upper().startswith(root):
+            return FUTURES_MULTIPLIERS[root]
+    return None
+
+
+def _num(text):
+    return float(text.replace(',', '').replace('$', '').strip())
+
+
+def parse_generic_rows(content):
+    """Read the generic template into execution dicts. Raises ValueError naming every bad line."""
+    rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
+
+    header_at, col = None, None
+    for i, cells in enumerate(rows[:20]):
+        found = _generic_header(cells)
+        if found:
+            header_at, col = i, found
+            break
+    if col is None:
+        raise ValueError(
+            "This does not look like the generic template. The header row needs these columns: "
+            + ", ".join(GENERIC_REQUIRED) + "."
+        )
+
+    def cell(cells, name):
+        i = col.get(name)
+        return cells[i].strip() if i is not None and i < len(cells) else ''
+
+    executions, problems = [], []
+    for n, cells in enumerate(rows[header_at + 1:], start=header_at + 2):
+        if not any(c.strip() for c in cells):
+            continue
+        why = []
+
+        symbol = cell(cells, 'symbol').upper()
+        date = _generic_date(cell(cells, 'date'))
+        time_ = _generic_time(cell(cells, 'time'))
+        action = _generic_side(cell(cells, 'side'))
+        asset = _generic_asset(cell(cells, 'asset_type'), symbol)
+
+        try:
+            qty = abs(_num(cell(cells, 'quantity')))
+            if qty == 0:
+                raise ValueError
+            qty = int(qty) if qty == int(qty) else round(qty, 6)
+        except ValueError:
+            qty = None
+        try:
+            price = abs(_num(cell(cells, 'price')))
+        except ValueError:
+            price = None
+        try:
+            commission = abs(_num(cell(cells, 'commission') or '0'))
+        except ValueError:
+            commission = None
+
+        if not symbol:
+            why.append("symbol is empty")
+        if not date:
+            why.append(f"date '{cell(cells, 'date')}' is not YYYY-MM-DD or MM/DD/YYYY")
+        if not time_:
+            why.append(f"time '{cell(cells, 'time')}' is not HH:MM or HH:MM:SS")
+        if not action:
+            why.append(f"side '{cell(cells, 'side')}' is not BUY or SELL")
+        if qty is None:
+            why.append(f"quantity '{cell(cells, 'quantity')}' is not a number above zero")
+        if price is None:
+            why.append(f"price '{cell(cells, 'price')}' is not a number")
+        if commission is None:
+            why.append(f"commission '{cell(cells, 'commission')}' is not a number")
+        if not asset:
+            why.append(f"asset_type '{cell(cells, 'asset_type')}' is not STOCK, OPTION or FUTURE")
+
+        option_expiry = option_strike = option_type = None
+        multiplier = 1
+        ticker = symbol
+        if asset == 'OPTION':
+            option_expiry = _generic_date(cell(cells, 'expiry'))
+            pc = cell(cells, 'put_call').upper()
+            option_type = 'CALL' if pc in ('C', 'CALL') else 'PUT' if pc in ('P', 'PUT') else None
+            try:
+                option_strike = _num(cell(cells, 'strike'))
+            except ValueError:
+                option_strike = None
+            if not (option_expiry and option_type and option_strike is not None):
+                why.append("options need expiry, strike and put_call")
+            multiplier = 100
+        elif asset == 'FUTURE':
+            ticker = symbol if symbol.startswith('/') else '/' + symbol
+            multiplier = _futures_multiplier(ticker)
+
+        override = cell(cells, 'multiplier')
+        if override:
+            try:
+                multiplier = _num(override)
+            except ValueError:
+                why.append(f"multiplier '{override}' is not a number")
+        if asset == 'FUTURE' and not multiplier:
+            # Guessing 1 would understate a /ES trade fifty times over.
+            why.append(f"no known point value for {ticker}; add a multiplier column (50 for /ES, for example)")
+
+        if why:
+            problems.append(f"line {n}: " + "; ".join(why))
+            continue
+
+        amount = price * qty * multiplier
+        if action == 'BOT':
+            amount = -amount
+
+        executions.append({
+            'action': action,
+            'qty': qty,
+            'ticker': ticker,
+            'price': price,
+            'instrument_type': asset,
+            'option_expiry': option_expiry,
+            'option_strike': option_strike,
+            'option_type': option_type,
+            'date': date,
+            'iso_date': date,
+            'time': time_,
+            'amount': round(amount, 2),
+            'commission': round(commission, 2),
+            'raw_description': f"{action} {qty} {ticker} @{price}",
+        })
+
+    if problems:
+        more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ""
+        raise ValueError(
+            f"{len(problems)} row(s) could not be read, so nothing was imported{more}. "
+            + " | ".join(problems[:8])
+        )
+    if not executions:
+        raise ValueError("The file has the template header but no trade rows.")
+    return executions
+
+
+def parse_generic_csv(content, account_id, conn=None):
+    """Generic template pipeline. Same output contract as the broker parsers."""
+    return build_trades_from_executions(parse_generic_rows(content), account_id, conn)
+
+
+# ── Broker dispatch ────────────────────────────────────────────────────────────
+
+BROKER_PARSERS = {
+    'thinkorswim': parse_thinkorswim_csv,
+    'ibkr': parse_ibkr_csv,
+    'generic': parse_generic_csv,
+}
+
+BROKER_LABELS = {
+    'thinkorswim': 'Thinkorswim',
+    'ibkr': 'Interactive Brokers',
+    'generic': 'the generic template',
+}
+
+
+def detect_broker(content: str) -> str | None:
+    """Sniff the CSV format. Returns a BROKER_PARSERS key or None if unrecognised."""
+    head = content.lstrip('﻿')[:4000]
+    first_lines = [ln.strip() for ln in head.splitlines()[:5] if ln.strip()]
+    if any(ln.startswith(('Statement,Header', 'Trades,Header', 'Account Information,Header'))
+           for ln in first_lines):
+        return 'ibkr'
+    if 'DataDiscriminator' in content and re.search(r'^[\w /&-]+,(Header|Data),', head, re.MULTILINE):
+        return 'ibkr'
+    upper = head.upper()
+    if ('CASH BALANCE' in upper or 'ACCOUNT STATEMENT' in upper
+            or 'ACCOUNT TRADE HISTORY' in upper or 'FUTURES STATEMENTS' in upper):
+        return 'thinkorswim'
+    # Checked last: the first non-empty row is a header with the template's columns.
+    for cells in csv.reader(io.StringIO(head)):
+        if not any(c.strip() for c in cells):
+            continue
+        return 'generic' if _generic_header(cells) else None
+    return None
+
+
+def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """
+    Route a CSV to the right broker parser. broker is a BROKER_PARSERS key or
+    'auto'. An explicit broker that clearly does not match the file raises a
+    ValueError with a hint, instead of importing zero trades silently.
+    """
+    key = (broker or 'auto').strip().lower()
+    detected = detect_broker(content)
+
+    if key == 'auto':
+        if not detected:
+            raise ValueError(
+                "Could not recognise this CSV. Pick the broker from the dropdown, "
+                "export an account statement from Thinkorswim or an Activity "
+                "Statement from Interactive Brokers, or copy your fills into the "
+                "generic template (Import page, 'Broker not listed?')."
+            )
+        key = detected
+
+    if key not in BROKER_PARSERS:
+        raise ValueError(f"Unsupported broker '{broker}'. Supported: {', '.join(BROKER_LABELS.values())}.")
+
+    if detected and detected != key:
+        raise ValueError(
+            f"This file looks like an export from {BROKER_LABELS[detected]}, but "
+            f"{BROKER_LABELS[key]} is selected. Change the broker dropdown and try again."
+        )
+
+    return BROKER_PARSERS[key](content, account_id, conn)
+, time_val) else 'minute',
+        })
+        executions.append(parsed)
+
+    return executions
+
+
+def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """Parse Schwab/Thinkorswim transaction-history CSVs like Alltos.csv.
+
+    Expected columns include Date, Type, Description, Ref Num, Misc Fees,
+    Commissions, Amount and Balance. Date contains the local execution clock
+    (for example 9/25/26 10:11 AM). These exports are minute-precision; the
+    importer records seconds as :00 and explicitly stores timestamp_precision
+    so sub-minute analytics never pretend the source was more precise.
+    """
+    rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
+    header_idx = None
+    col = {}
+    for i, row in enumerate(rows[:20]):
+        normalized = [re.sub(r'[^A-Z0-9]+', ' ', x.strip().upper()).strip() for x in row]
+        if 'DATE' in normalized and 'DESCRIPTION' in normalized and 'AMOUNT' in normalized:
+            header_idx = i
+            col = {h: j for j, h in enumerate(normalized)}
+            break
+    if header_idx is None:
+        raise ValueError("Schwab transaction CSV header was not found.")
+
+    def cell(row, *names):
+        for name in names:
+            idx = col.get(name)
+            if idx is not None and idx < len(row):
+                return row[idx].strip()
+        return ''
+
+    executions = []
+    problems = []
+    for line_no, row in enumerate(rows[header_idx + 1:], start=header_idx + 2):
+        if not any(x.strip() for x in row):
+            continue
+        row_type = cell(row, 'TYPE').upper()
+        if row_type != 'TRD':
+            continue
+
+        dt_text = cell(row, 'DATE')
+        dt = None
+        for fmt in ('%m/%d/%y %I:%M %p', '%m/%d/%Y %I:%M %p'):
+            try:
+                dt = datetime.strptime(dt_text, fmt)
+                break
+            except ValueError:
+                pass
+        if dt is None:
+            problems.append(f"line {line_no}: Date '{dt_text}' is not a supported Schwab timestamp")
+            continue
+
+        desc = cell(row, 'DESCRIPTION').strip('"')
+        parsed = parse_cash_description(desc)
+        if not parsed:
+            problems.append(f"line {line_no}: trade description could not be parsed: {desc}")
+            continue
+
+        misc = clean_amount(cell(row, 'MISC FEES'))
+        comm = clean_amount(cell(row, 'COMMISSIONS', 'COMMISSIONS FEES'))
+        amount = clean_amount(cell(row, 'AMOUNT'))
+        ref = cell(row, 'REF NUM', 'REF')
+        raw_date = f"{dt.month}/{dt.day}/{str(dt.year)[2:]}"
+
+        parsed.update({
+            'date': raw_date,
+            'iso_date': dt.strftime('%Y-%m-%d'),
+            'time': dt.strftime('%H:%M:00'),
+            'amount': amount,
+            'commission': abs(misc) + abs(comm),
+            'raw_description': desc,
+            'source_ref': ref,
+            'timestamp_precision': 'minute',
+        })
+        executions.append(parsed)
+
+    if problems:
+        more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ''
+        raise ValueError(
+            f"{len(problems)} Schwab trade row(s) could not be read, so nothing was imported{more}. "
+            + " | ".join(problems[:8])
+        )
+    if not executions:
+        raise ValueError("The Schwab transaction CSV contains no trade rows.")
+    return build_trades_from_executions(executions, account_id, conn)
 
 
 def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
