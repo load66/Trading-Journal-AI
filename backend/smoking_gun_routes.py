@@ -164,33 +164,34 @@ def remove_smoking_gun_report(
     return Response(status_code=204)
 
 
-@router.get("/{report_id}/export")
-def export_smoking_gun_report(
+@router.get("/{report_id}/report.html")
+def export_smoking_gun_html(
     report_id: int,
-    format: str = Query("html", pattern="^(html|csv)$"),
     conn=Depends(get_connection),
 ):
     report = get_saved_report(conn, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="Smoking Gun report not found.")
     report = decorate_stale_status(conn, [report])[0]
-
-    if format == "csv":
-        return PlainTextResponse(
-            render_trade_ledger_csv(report),
-            media_type="text/csv; charset=utf-8",
-            headers={
-                "Content-Disposition": (
-                    f'attachment; filename="smoking-gun-report-{report_id}-ledger.csv"'
-                )
-            },
-        )
-
+    filename = f"smoking-gun-{report['date_from']}-{report['date_to']}.html"
     return HTMLResponse(
         render_saved_report_html(report),
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="smoking-gun-report-{report_id}.html"'
-            )
-        },
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{report_id}/trade-ledger.csv")
+def export_smoking_gun_ledger(
+    report_id: int,
+    conn=Depends(get_connection),
+):
+    report = get_saved_report(conn, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Smoking Gun report not found.")
+    report = decorate_stale_status(conn, [report])[0]
+    filename = f"smoking-gun-ledger-{report['date_from']}-{report['date_to']}.csv"
+    return PlainTextResponse(
+        render_trade_ledger_csv(report),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
