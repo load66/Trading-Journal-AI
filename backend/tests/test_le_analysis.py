@@ -1,7 +1,14 @@
+import asyncio
+
+import httpx
+
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from le_analysis import (
+    _fetch_alpaca_1m,
+    _historical_feed_order,
+    _history_window,
     _le_json_schema,
     _market_sign_status,
     _session_vwap_snapshot,
@@ -80,6 +87,70 @@ def market_bars(*, pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0):
 
 def tag_names(review):
     return {(t["tag_type"], t["tag_value"]) for t in review["auto_tags"]}
+
+
+def test_historical_feed_order_prefers_consolidated_data(monkeypatch):
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+    # The module-level fallback remains IEX, but SIP must still be tried first.
+    order = _historical_feed_order()
+    assert order[0] == "sip"
+    assert order[1] == "delayed_sip"
+    assert order[-1] == "iex"
+
+
+def test_history_window_ends_at_entry_not_market_close():
+    entry = datetime(2026, 9, 25, 10, 47, 4, tzinfo=ET)
+    start, end = _history_window(entry)
+    assert end == entry
+    assert end.hour == 10
+    assert end.minute == 47
+    assert start.date() == (entry.date() - timedelta(days=8))
+
+
+def test_fetch_alpaca_uses_sip_first_and_stops_after_success(monkeypatch):
+    monkeypatch.setenv("APCA_API_KEY_ID", "test-key")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "test-secret")
+    calls = []
+
+    async def fake_request(symbol, start_dt, end_dt, feed, key, secret):
+        calls.append((feed, end_dt))
+        return [{"t": "2026-09-25T13:30:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]
+
+    import le_analysis
+    monkeypatch.setattr(le_analysis, "_request_alpaca_bars", fake_request)
+
+    entry = datetime(2026, 9, 25, 10, 47, 4, tzinfo=ET)
+    rows, feed = asyncio.run(_fetch_alpaca_1m("QCOM", entry))
+
+    assert rows
+    assert feed == "sip"
+    assert calls == [("sip", entry)]
+
+
+def test_fetch_alpaca_falls_back_when_recent_sip_is_restricted(monkeypatch):
+    monkeypatch.setenv("APCA_API_KEY_ID", "test-key")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "test-secret")
+    calls = []
+
+    async def fake_request(symbol, start_dt, end_dt, feed, key, secret):
+        calls.append(feed)
+        if feed == "sip":
+            request = httpx.Request("GET", "https://data.alpaca.markets/test")
+            response = httpx.Response(403, request=request)
+            raise httpx.HTTPStatusError("restricted", request=request, response=response)
+        if feed == "delayed_sip":
+            return [{"t": "2026-09-25T13:30:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]
+        return []
+
+    import le_analysis
+    monkeypatch.setattr(le_analysis, "_request_alpaca_bars", fake_request)
+
+    entry = datetime(2026, 9, 25, 10, 47, 4, tzinfo=ET)
+    rows, feed = asyncio.run(_fetch_alpaca_1m("QCOM", entry))
+
+    assert rows
+    assert feed == "delayed_sip"
+    assert calls == ["sip", "delayed_sip"]
 
 
 def test_option_direction_uses_contract_type_not_long_ownership():
