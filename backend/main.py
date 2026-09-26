@@ -1,5 +1,6 @@
 import os
 import logging
+import tempfile
 import json
 import sqlite3
 import aiofiles
@@ -10,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -21,6 +22,7 @@ import httpx
 
 from database import init_db, get_db, row_to_dict
 from auth import AuthError, authorize_header, auth_required, validate_auth_config
+from storage import DiaryStorage
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
@@ -41,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 SETTINGS = Settings.from_env()
 UPLOAD_DIR = SETTINGS.upload_dir
+DIARY_STORAGE = DiaryStorage(SETTINGS)
 
 
 @asynccontextmanager
@@ -1154,8 +1157,8 @@ async def upload_diary(
                 "Could not convert this HEIC photo. On iPhone, Settings > Camera > "
                 f"Formats > Most Compatible saves as JPEG instead. ({exc})")
 
-    async with aiofiles.open(save_path, 'wb') as f:
-        await f.write(raw)
+    content_type = file.content_type or "application/octet-stream"
+    DIARY_STORAGE.save(safe_name, raw, content_type)
 
     # Insert diary entry row
     cursor = conn.execute(
@@ -1176,7 +1179,10 @@ async def upload_diary(
             text_content = raw.decode('utf-8', errors='replace')
             analysis = analyze_diary_text(text_content, date, trades_context)
         else:
-            analysis = analyze_diary_entry(str(save_path.absolute()), date, trades_context)
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=True) as temp_image:
+                temp_image.write(raw)
+                temp_image.flush()
+                analysis = analyze_diary_entry(temp_image.name, date, trades_context)
         analysis = apply_aliases(conn, analysis)
         # Persist analysis
         conn.execute(
@@ -1200,6 +1206,12 @@ async def upload_diary(
 
 
 # ── Diary List ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/diary-files/{filename:path}")
+def get_diary_file(filename: str):
+    data, content_type = DIARY_STORAGE.read(filename)
+    return Response(content=data, media_type=content_type)
+
 
 @app.get("/api/diary")
 def list_diary(
@@ -1237,6 +1249,11 @@ def delete_diary_by_date(
     if account_id is not None:
         where += " AND account_id=?"
         params.append(account_id)
+    files = [
+        row["image_path"]
+        for row in conn.execute(f"SELECT image_path FROM diary_entries WHERE {where}", params).fetchall()
+        if row["image_path"]
+    ]
     # trade_analysis.diary_entry_id points back here, so unlink first: the
     # analysis (including anything edited by hand) stays on the trade.
     conn.execute(
@@ -1244,16 +1261,21 @@ def delete_diary_by_date(
         f"(SELECT id FROM diary_entries WHERE {where})", params)
     conn.execute(f"DELETE FROM diary_entries WHERE {where}", params)
     conn.commit()
+    for name in files:
+        DIARY_STORAGE.delete(name)
     return {"ok": True}
 
 
 @app.delete("/api/diary/{entry_id}")
 def delete_diary_entry(entry_id: int, conn: sqlite3.Connection = Depends(get_connection)):
+    row = conn.execute("SELECT image_path FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
     # Unlink the analyses this entry produced, otherwise the foreign key blocks
     # the delete with a 500. The analysis stays on the trade.
     conn.execute("UPDATE trade_analysis SET diary_entry_id = NULL WHERE diary_entry_id = ?", (entry_id,))
     conn.execute("DELETE FROM diary_entries WHERE id=?", (entry_id,))
     conn.commit()
+    if row and row["image_path"]:
+        DIARY_STORAGE.delete(row["image_path"])
     return {"ok": True}
 
 
