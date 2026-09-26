@@ -22,3 +22,19 @@ test('shows authentication errors without exposing the application', async () =>
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Invalid login credentials');
 });
+
+
+test('sends a password recovery email from the login screen', async () => {
+  const onSignIn = jest.fn();
+  const onResetPassword = jest.fn().mockResolvedValue(undefined);
+  render(<Login onSignIn={onSignIn} onResetPassword={onResetPassword} />);
+
+  fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'owner@example.com' } });
+  fireEvent.click(screen.getByRole('button', { name: /forgot password/i }));
+
+  expect(screen.queryByLabelText(/^password$/i)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /send reset link/i }));
+
+  await waitFor(() => expect(onResetPassword).toHaveBeenCalledWith('owner@example.com'));
+  expect(screen.getByRole('status')).toHaveTextContent(/password reset email sent/i);
+});
