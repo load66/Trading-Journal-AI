@@ -8,6 +8,7 @@ import DateRangePicker from './DateRangePicker';
 import { RMultipleDist, EmotionTable, MistakeFreq, HoldTime } from './Edge';
 import { PageHeader, PanelHead } from './ui';
 import { Measures, Seg } from '../v3/parts';
+import SmokingGunReport from './SmokingGunReport';
 
 const fmt$ = (v) =>
   `${v < 0 ? '-' : ''}$${Math.abs(Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -20,6 +21,7 @@ const AXIS_TICK = { fontSize: 11, fill: 'var(--text-secondary)' };
 export const THIN_SAMPLE = 10;
 
 const TABS = [
+  { id: 'smoking-gun', label: 'Smoking Gun' },
   { id: 'overview', label: 'Overview' },
   { id: 'setups', label: 'Setups & Strategy' },
   { id: 'sources-tags', label: 'Sources & Tags' },
@@ -327,6 +329,10 @@ export default function Reports({ accountId }) {
         <div className="card"><NoData msg="Import trades to see reports." /></div>
       ) : (
         <div style={gap} role="tabpanel" id="report-panel" aria-labelledby={`report-tab-${tab}`}>
+
+          {tab === 'smoking-gun' && (
+            <SmokingGunReport accountId={accountId} dateFrom={dateFrom} dateTo={dateTo} />
+          )}
 
           {tab === 'overview' && (
             <>
