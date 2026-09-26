@@ -357,3 +357,112 @@ def test_time_of_day_kpis_group_by_first_entry(monkeypatch, tmp_path):
     assert rows[1]["label"] == "9:00 AM–9:30 AM"
     assert rows[1]["count"] == 1
     assert rows[1]["net_pnl"] == 60.0
+
+
+def test_context_edge_breakdowns_keep_dimensions_separate(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Context Edge", "day_trading", "schwab"),
+        )
+        pnls = [100, 80, 60, 40, -20, 20, -40, -50, -60, -70]
+        fallback_tags = []
+
+        for i, pnl in enumerate(pnls):
+            strong = i < 5
+            group = f"edge-{i}"
+            setup = "ORB" if strong else "CHASE"
+            strategy = "Momentum" if strong else "Mean Reversion"
+            source = "Scanner" if strong else "Social Media"
+            emotion = "Focused" if strong else "Anxious"
+
+            # Exercise structured-field fallback to explicit tags once per dimension.
+            if i == 0:
+                strategy = None
+                fallback_tags.append((group, "strategy", "Momentum"))
+            if i == 1:
+                source = None
+                fallback_tags.append((group, "source", "Scanner"))
+            if i == 2:
+                setup = None
+                fallback_tags.append((group, "setup", "ORB"))
+            if i == 3:
+                emotion = None
+                fallback_tags.append((group, "emotion", "Focused"))
+
+            executions = __import__("json").dumps([
+                {"action": "BOT", "qty": 1, "price": 100.0, "time": "09:30:00"},
+                {"action": "SOLD", "qty": 1, "price": 101.0, "time": "09:35:00"},
+            ])
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source, setup)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, group, "2026-09-25", "SPY", "STOCK", "LONG",
+                    float(pnl), float(pnl), 0.0, executions, "imported", setup,
+                ),
+            )
+            conn.execute(
+                """INSERT INTO trade_analysis
+                   (trade_group, ticker, date, strategy, idea_source, emotional_state, r_multiple)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (
+                    group, "SPY", "2026-09-25", strategy, source, emotion,
+                    1.0 if pnl > 0 else -1.0,
+                ),
+            )
+
+        for group, tag_type, tag_value in fallback_tags:
+            conn.execute(
+                """INSERT INTO trade_tags (trade_group, tag_type, tag_value, source)
+                   VALUES (?,?,?,'manual')""",
+                (group, tag_type, tag_value),
+            )
+        conn.commit()
+
+        result = main.get_kpis(
+            account_id=account_id,
+            date_from="2026-09-01",
+            date_to="2026-09-30",
+            conn=conn,
+        )
+        dims = result["edge_dimensions"]
+
+        assert dims["strategy"]["coverage_count"] == 10
+        assert dims["source"]["coverage_count"] == 10
+        assert dims["setup"]["coverage_count"] == 10
+        assert dims["emotion"]["coverage_count"] == 10
+        assert dims["strategy"]["min_sample"] == 3
+
+        strategy = {r["label"]: r for r in dims["strategy"]["rows"]}
+        setup = {r["label"]: r for r in dims["setup"]["rows"]}
+        source = {r["label"]: r for r in dims["source"]["rows"]}
+        emotion = {r["label"]: r for r in dims["emotion"]["rows"]}
+
+        assert set(strategy) == {"Momentum", "Mean Reversion"}
+        assert set(setup) == {"ORB", "CHASE"}
+        assert set(source) == {"Scanner", "Social Media"}
+        assert set(emotion) == {"Focused", "Anxious"}
+
+        assert strategy["Momentum"]["win_rate"] == 80.0
+        assert strategy["Mean Reversion"]["win_rate"] == 20.0
+        assert strategy["Momentum"]["expectancy"] > 0
+        assert strategy["Mean Reversion"]["expectancy"] < 0
+        assert dims["strategy"]["best_win_rate"]["label"] == "Momentum"
+        assert dims["strategy"]["strongest"]["label"] == "Momentum"
+        assert dims["strategy"]["weakest"]["label"] == "Mean Reversion"
+
+        # Setup is no longer silently substituted into Strategy.
+        assert "ORB" not in strategy
+        assert result["by_strategy"] == dims["strategy"]["rows"]
+        assert result["by_source"] == dims["source"]["rows"]
+        assert result["by_setup"] == dims["setup"]["rows"]
+        assert result["by_emotion"] == dims["emotion"]["rows"]
+    finally:
+        conn.close()
