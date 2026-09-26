@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 import httpx
 
-from database import init_db, get_db, row_to_dict\nfrom runtime_config import load_runtime_config\nfrom auth import SingleUserAuthMiddleware
+from database import init_db, get_db, row_to_dict\nfrom runtime_config import load_runtime_config\nfrom auth import SingleUserAuthMiddleware\nfrom storage import get_diary_storage, safe_diary_object_path, content_type_for
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
@@ -43,7 +43,8 @@ async def lifespan(app: FastAPI):
         init_library_tables(_conn)
     finally:
         _conn.close()
-    Path(UPLOAD_DIR).mkdir(exist_ok=True)
+    if config.storage_mode == "local":
+        Path(config.upload_dir).mkdir(parents=True, exist_ok=True)
     yield
 
 
@@ -64,9 +65,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve uploaded diary screenshots (create the folder on first run)
-Path(UPLOAD_DIR).mkdir(exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# Local development keeps the original /uploads route. Hosted production uses
+# private Supabase Storage and therefore exposes no public file directory.
+if os.getenv("STORAGE_MODE", "local").strip().lower() == "local":
+    Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Settings > Library (strategies, sources, tags)
 app.include_router(library_router)
@@ -1094,6 +1097,39 @@ ALLOWED_TEXT_EXTENSIONS = {'.txt', '.csv'}
 ALLOWED_DIARY_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_TEXT_EXTENSIONS
 
 
+def _diary_storage():
+    return get_diary_storage(load_runtime_config())
+
+
+def _signed_diary_url(storage, image_path: str | None):
+    if not image_path:
+        return None
+    try:
+        return storage.signed_url(image_path, expires_in=900)
+    except Exception:
+        logger.warning(
+            "Could not create signed diary URL for %s",
+            image_path,
+            exc_info=True,
+        )
+        return None
+
+
+def _delete_diary_objects(paths):
+    storage = _diary_storage()
+    for path in {p for p in paths if p}:
+        try:
+            storage.delete(path)
+        except Exception:
+            # The relational delete is authoritative. A storage cleanup failure
+            # leaves an orphan object rather than resurrecting deleted journal data.
+            logger.warning(
+                "Could not delete diary storage object %s",
+                path,
+                exc_info=True,
+            )
+
+
 @app.post("/api/upload-diary")
 async def upload_diary(
     date: str = Form(...),
@@ -1101,76 +1137,123 @@ async def upload_diary(
     file: UploadFile = File(...),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    ext = Path(file.filename).suffix.lower()
+    original_filename = Path(file.filename or "upload").name
+    ext = Path(original_filename).suffix.lower()
     if ext not in ALLOWED_DIARY_EXTENSIONS:
         raise ValueError(f"File must be one of {ALLOWED_DIARY_EXTENSIONS}")
 
-    account = conn.execute("SELECT id FROM accounts WHERE id=?", (account_id,)).fetchone()
+    account = conn.execute(
+        "SELECT id FROM accounts WHERE id=?",
+        (account_id,),
+    ).fetchone()
     if not account:
         raise ValueError(f"Account {account_id} not found")
 
-    # Save image file
-    safe_name = f"{date}_{account_id}_{file.filename.replace(' ', '_')}"
-    save_path = Path(UPLOAD_DIR) / safe_name
-
     raw = await file.read()
+    upload_content_type = file.content_type or content_type_for(original_filename)
 
     # iPhone photos arrive as HEIC, which the vision API cannot read. Convert to
-    # JPEG on the way in so a phone snap of handwritten notes just works.
+    # JPEG before both private storage and AI analysis.
     if ext in {'.heic', '.heif'}:
         try:
             import io
             import pillow_heif
             from PIL import Image as PILImage
+
             pillow_heif.register_heif_opener()
             img = PILImage.open(io.BytesIO(raw)).convert('RGB')
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=90)
             raw = buf.getvalue()
             ext = '.jpg'
-            safe_name = str(Path(safe_name).with_suffix('.jpg'))
-            save_path = Path(UPLOAD_DIR) / safe_name
+            upload_content_type = 'image/jpeg'
         except Exception as exc:
             raise ValueError(
                 "Could not convert this HEIC photo. On iPhone, Settings > Camera > "
-                f"Formats > Most Compatible saves as JPEG instead. ({exc})")
+                f"Formats > Most Compatible saves as JPEG instead. ({exc})"
+            )
 
-    async with aiofiles.open(save_path, 'wb') as f:
-        await f.write(raw)
-
-    # Insert diary entry row
-    cursor = conn.execute(
-        "INSERT INTO diary_entries (account_id, entry_date, image_path) VALUES (?,?,?)",
-        (account_id, date, safe_name)
+    object_path = safe_diary_object_path(
+        date,
+        account_id,
+        original_filename,
+        suffix=ext,
     )
-    conn.commit()
-    diary_entry_id = cursor.lastrowid
+    storage = _diary_storage()
+    storage.save(object_path, raw, upload_content_type)
 
-    # Build trades context for Claude
+    try:
+        cursor = conn.execute(
+            "INSERT INTO diary_entries (account_id, entry_date, image_path) VALUES (?,?,?)",
+            (account_id, date, object_path),
+        )
+        conn.commit()
+        diary_entry_id = cursor.lastrowid
+    except Exception:
+        conn.rollback()
+        try:
+            storage.delete(object_path)
+        except Exception:
+            logger.warning(
+                "Could not roll back diary object after database failure: %s",
+                object_path,
+                exc_info=True,
+            )
+        raise
+
     trades_context = build_trades_context(conn, date, account_id)
 
-    # Call Claude — image vision or text depending on file type
     analysis_error = None
     analysis = None
+    temporary_path = None
     try:
         if ext in ALLOWED_TEXT_EXTENSIONS:
             text_content = raw.decode('utf-8', errors='replace')
             analysis = analyze_diary_text(text_content, date, trades_context)
         else:
-            analysis = analyze_diary_entry(str(save_path.absolute()), date, trades_context)
+            analysis_path = storage.local_path(object_path)
+            if analysis_path is None:
+                tmp = tempfile.NamedTemporaryFile(
+                    prefix="trading-journal-diary-",
+                    suffix=ext,
+                    delete=False,
+                )
+                try:
+                    tmp.write(raw)
+                    tmp.flush()
+                finally:
+                    tmp.close()
+                temporary_path = Path(tmp.name)
+                analysis_path = temporary_path
+
+            try:
+                analysis = analyze_diary_entry(
+                    str(Path(analysis_path).absolute()),
+                    date,
+                    trades_context,
+                )
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+
         analysis = apply_aliases(conn, analysis)
-        # Persist analysis
         conn.execute(
             "UPDATE diary_entries SET ai_analysis=? WHERE id=?",
-            (json.dumps(analysis), diary_entry_id)
+            (json.dumps(analysis), diary_entry_id),
         )
         conn.commit()
         save_analysis_to_db(conn, diary_entry_id, analysis)
-    except Exception as e:
-        analysis_error = str(e)
+    except Exception as exc:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        analysis_error = str(exc)
 
-    diary_row = conn.execute("SELECT * FROM diary_entries WHERE id=?", (diary_entry_id,)).fetchone()
+    diary_row = conn.execute(
+        "SELECT * FROM diary_entries WHERE id=?",
+        (diary_entry_id,),
+    ).fetchone()
     result = row_to_dict(diary_row)
+    result['image_url'] = _signed_diary_url(storage, result.get('image_path'))
 
     if analysis_error:
         result['analysis_error'] = analysis_error
@@ -1194,6 +1277,7 @@ def list_diary(
         params.append(account_id)
     sql += " ORDER BY entry_date DESC"
 
+    storage = _diary_storage()
     rows = conn.execute(sql, params).fetchall()
     result = []
     for row in rows:
@@ -1202,6 +1286,7 @@ def list_diary(
             d['ai_analysis'] = json.loads(d['ai_analysis']) if d.get('ai_analysis') else None
         except Exception:
             d['ai_analysis'] = None
+        d['image_url'] = _signed_diary_url(storage, d.get('image_path'))
         result.append(d)
 
     return result
@@ -1218,23 +1303,45 @@ def delete_diary_by_date(
     if account_id is not None:
         where += " AND account_id=?"
         params.append(account_id)
-    # trade_analysis.diary_entry_id points back here, so unlink first: the
-    # analysis (including anything edited by hand) stays on the trade.
+
+    path_rows = conn.execute(
+        f"SELECT image_path FROM diary_entries WHERE {where}",
+        params,
+    ).fetchall()
+    paths = [row['image_path'] for row in path_rows if row['image_path']]
+
     conn.execute(
         f"UPDATE trade_analysis SET diary_entry_id = NULL WHERE diary_entry_id IN "
-        f"(SELECT id FROM diary_entries WHERE {where})", params)
+        f"(SELECT id FROM diary_entries WHERE {where})",
+        params,
+    )
     conn.execute(f"DELETE FROM diary_entries WHERE {where}", params)
     conn.commit()
+
+    _delete_diary_objects(paths)
     return {"ok": True}
 
 
 @app.delete("/api/diary/{entry_id}")
-def delete_diary_entry(entry_id: int, conn: sqlite3.Connection = Depends(get_connection)):
-    # Unlink the analyses this entry produced, otherwise the foreign key blocks
-    # the delete with a 500. The analysis stays on the trade.
-    conn.execute("UPDATE trade_analysis SET diary_entry_id = NULL WHERE diary_entry_id = ?", (entry_id,))
+def delete_diary_entry(
+    entry_id: int,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    row = conn.execute(
+        "SELECT image_path FROM diary_entries WHERE id=?",
+        (entry_id,),
+    ).fetchone()
+    image_path = row['image_path'] if row and row['image_path'] else None
+
+    conn.execute(
+        "UPDATE trade_analysis SET diary_entry_id = NULL WHERE diary_entry_id = ?",
+        (entry_id,),
+    )
     conn.execute("DELETE FROM diary_entries WHERE id=?", (entry_id,))
     conn.commit()
+
+    if image_path:
+        _delete_diary_objects([image_path])
     return {"ok": True}
 
 
