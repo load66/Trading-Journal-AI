@@ -1,5 +1,8 @@
 const STORAGE_KEY = 'trading-journal-auth';
 const AUTH_EVENT = 'trading-journal-auth-changed';
+const REFRESH_EARLY_SECONDS = 300;
+
+let refreshPromise = null;
 
 const supabaseUrl = () => (process.env.REACT_APP_SUPABASE_URL || '').replace(/\/+$/, '');
 const publishableKey = () => process.env.REACT_APP_SUPABASE_PUBLISHABLE_KEY || '';
@@ -96,31 +99,93 @@ export async function updatePassword(password) {
 
 async function refreshSession(session) {
   if (!session?.refresh_token) return null;
-  try {
-    const refreshed = await authRequest('token?grant_type=refresh_token', {
-      refresh_token: session.refresh_token,
-    });
-    return saveSession(refreshed);
-  } catch {
-    clearSession();
-    return null;
-  }
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const refreshed = await authRequest('token?grant_type=refresh_token', {
+        refresh_token: session.refresh_token,
+      });
+      return saveSession(refreshed);
+    } catch {
+      clearSession();
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
+function needsRefresh(session, earlySeconds = REFRESH_EARLY_SECONDS) {
+  if (!session?.access_token || !session?.refresh_token) return false;
+  const now = Math.floor(Date.now() / 1000);
+  return Number(session.expires_at || 0) <= now + earlySeconds;
 }
 
 export function getSession() {
   return readSession();
 }
 
+export async function restoreSession() {
+  if (!authConfigured()) return readSession();
+
+  const session = readSession();
+  if (!session?.access_token || !session?.refresh_token) return null;
+  if (!needsRefresh(session)) return session;
+  return refreshSession(session);
+}
+
+export function startSessionAutoRefresh({ onSession, onSignedOut } = {}) {
+  let timer = null;
+  let stopped = false;
+
+  const schedule = () => {
+    if (stopped) return;
+    if (timer) clearTimeout(timer);
+
+    const session = readSession();
+    if (!session?.refresh_token) return;
+
+    const now = Math.floor(Date.now() / 1000);
+    const refreshAt = Number(session.expires_at || now) - REFRESH_EARLY_SECONDS;
+    const delayMs = Math.max(5000, (refreshAt - now) * 1000);
+
+    timer = setTimeout(async () => {
+      const next = await restoreSession();
+      if (stopped) return;
+      if (next) onSession?.(next);
+      else onSignedOut?.();
+      schedule();
+    }, delayMs);
+  };
+
+  const refreshWhenActive = async () => {
+    if (stopped || document.visibilityState === 'hidden') return;
+    const next = await restoreSession();
+    if (stopped) return;
+    if (next) onSession?.(next);
+    else if (readSession() === null) onSignedOut?.();
+    schedule();
+  };
+
+  document.addEventListener('visibilitychange', refreshWhenActive);
+  window.addEventListener('focus', refreshWhenActive);
+  schedule();
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    document.removeEventListener('visibilitychange', refreshWhenActive);
+    window.removeEventListener('focus', refreshWhenActive);
+  };
+}
+
 export async function getAccessToken() {
   if (!authRequired() && !authConfigured()) return null;
-  const session = readSession();
-  if (!session?.access_token) return null;
-  const now = Math.floor(Date.now() / 1000);
-  if (Number(session.expires_at || 0) <= now + 60) {
-    const refreshed = await refreshSession(session);
-    return refreshed?.access_token || null;
-  }
-  return session.access_token;
+  const session = await restoreSession();
+  return session?.access_token || null;
 }
 
 export function clearSession() {
