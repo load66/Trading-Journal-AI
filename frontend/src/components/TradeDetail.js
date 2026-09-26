@@ -690,6 +690,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             <TradingChart
               ticker={trade.ticker}
               date={trade.date}
+              tradeGroup={trade.trade_group}
               executions={parseExecs(trade)}
               side={trade.side}
               analysis={analysis}
