@@ -65,6 +65,12 @@ def build_source_fingerprint(
     for trade in trades:
         row = {field: trade.get(field) for field in _FINGERPRINT_FIELDS}
         row["executions"] = _parse_executions(row.get("executions"))
+        for field in ("gross_pnl", "net_pnl", "commissions", "option_strike"):
+            if row.get(field) is not None:
+                row[field] = float(row[field])
+        for field in ("id", "account_id"):
+            if row.get(field) is not None:
+                row[field] = int(row[field])
         canonical_trades.append(row)
 
     canonical_trades.sort(
