@@ -939,9 +939,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         <td className={`num mono ${ex.realizedPnl == null ? 'text-muted' : ex.realizedPnl >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: 13.5 }}>
                           {ex.realizedPnl == null ? '—' : fmtSigned$(ex.realizedPnl)}
                         </td>
-                        <td className="num mono text-muted" style={{ fontSize: 13.5 }}>{ex.commission ? '
-                        <td className="num" style={{ whiteSpace: 'nowrap', paddingRight: 20 }}>
-                          <button
+                        <td className="num mono text-muted" style={{ fontSize: 13.5 }}>{ex.commission ? '                          <button
                             title="Edit"
                             onClick={() => {
                               setEditingExecIdx(i);
@@ -1291,12 +1289,9 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </table>
                 </div>
 
-                <div className="text-muted" style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
+                <div className="text-muted" style={{ fontSize: 13, marginTop: 10 }}>
                   Gross <span className="num">{trade.gross_pnl != null ? fmtSigned$(trade.gross_pnl) : 'n/a'}</span>
                   {' · '}Commissions <span className="num">{trade.commissions ? fmt$(trade.commissions) : '$0.00'}</span>
-                  {' · '}Trade return <span className="num">{stats.plPercent != null ? `${stats.plPercent >= 0 ? '+' : ''}${stats.plPercent.toFixed(2)}%` : 'n/a'}</span>
-                  <br />
-                  Trim Return is the contract/share price move from the running average entry before fees. Realized P&L allocates entry fees pro rata and includes that exit's fees.
                 </div>
 
                 {/* Edit Execution inline panel */}
