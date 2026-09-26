@@ -6,24 +6,33 @@ import { Measures, Tabs, Grade, money, money2, tone } from './parts';
 const OPEN = 9.5;
 const CLOSE = 16;
 
-export function tradeTime(t) {
-  const execs = t.executions || [];
-  const raw = execs.length ? (execs[0].time || execs[0].datetime || '') : (t.open_time || t.time || '');
+export function tradeTime(t, which = 'entry') {
+  let execs = t.executions || [];
+  if (!Array.isArray(execs)) {
+    try { execs = JSON.parse(execs || '[]'); } catch { execs = []; }
+  }
+  const times = execs
+    .map((e) => e.time || e.datetime || '')
+    .filter(Boolean)
+    .sort();
+  const raw = times.length
+    ? (which === 'exit' ? times[times.length - 1] : times[0])
+    : (which === 'exit' ? (t.close_time || t.time || '') : (t.open_time || t.time || ''));
   const m = String(raw).match(/(\d{1,2}):(\d{2})/);
   if (!m) return null;
   return Number(m[1]) + Number(m[2]) / 60;
 }
 
 /* ── the day, as one picture ────────────────────────────────────────────────
-   The session's running P&L from the open to the close, with every trade
-   marked on the curve at the time it was entered. Replaces having a separate
-   equity line and a separate timeline showing the same session twice.      */
+   Realized session P&L. A trade's final P&L is booked at its last execution,
+   not at entry, so the curve never pretends a future exit result was already
+   known when the position opened.                                          */
 export function DayCurve({ trades, onPick }) {
   const [hover, setHover] = useState(null);
 
   const marks = useMemo(() => {
     const withTime = (trades || [])
-      .map((t) => ({ t, at: tradeTime(t) }))
+      .map((t) => ({ t, at: tradeTime(t, 'exit') }))
       .filter((x) => x.at != null)
       .sort((a, b) => a.at - b.at);
     let cum = 0;
@@ -149,7 +158,7 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
   // how far the day came off its own high water mark
   const { peak, given } = useMemo(() => {
     const withTime = (trades || [])
-      .map((t) => ({ at: tradeTime(t), p: Number(t.net_pnl) || 0 }))
+      .map((t) => ({ at: tradeTime(t, 'exit'), p: Number(t.net_pnl) || 0 }))
       .filter((x) => x.at != null)
       .sort((x, y) => x.at - y.at);
     let cum = 0; let hi = 0;
@@ -234,18 +243,18 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
             </>,
         },
         {
-          label: 'Given back',
+          label: 'Realized giveback',
           value: given > 0 ? money(-given) : '$0',
           amber: given > 0,
           read: peak > 0
-            ? `From a session high of ${money(peak)}`
-            : 'The session never went green',
+            ? `From a realized P&L peak of ${money(peak)}`
+            : 'Realized P&L never went green',
         },
         {
-          label: 'Rule breaks',
+          label: 'Review flags',
           value: String(breaks),
           amber: breaks > 0,
-          read: breaks ? 'Flagged in the review below' : 'Nothing flagged',
+          read: breaks ? 'Evidence-backed coaching flags below' : 'No verified coaching flags',
         },
       ]}
     />
@@ -280,6 +289,7 @@ export function Coaching({ summary, loading, onRegenerate }) {
           <p className="v3-h-sub">
             Written against your trades and your diary together, and graded on process
             {summary.ai_provider ? ` · ${summary.ai_provider === 'groq' ? 'Groq' : 'Anthropic'} · ${summary.ai_model || ''}` : ''}
+            {summary.evidence_locked ? ' · Evidence-locked' : ''}
           </p>
         </div>
         <div className="v3-acts">

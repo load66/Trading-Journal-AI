@@ -320,6 +320,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   // What If
   const [whatIfBars, setWhatIfBars]       = useState(null);
   const [whatIfLoading, setWhatIfLoading] = useState(false);
+  const [whatIfWarning, setWhatIfWarning] = useState(null);
 
   // Stats edit
   const [editingStats, setEditingStats]   = useState(false);
@@ -481,12 +482,25 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const stats = computeStats(trade);
 
   useEffect(() => {
+    // A TradeDetail component is reused when navigating the session sidebar.
+    // Clear the previous symbol's bars so What If can never analyze stale data.
+    setWhatIfBars(null);
+    setWhatIfWarning(null);
+  }, [trade.id, trade.ticker, trade.date]);
+
+  useEffect(() => {
     if (whatIfBars !== null) return;
     if (!stats.isClosed) { setWhatIfBars([]); return; }
     setWhatIfLoading(true);
     chartApi.get(trade.ticker, trade.date, '1Min')
-      .then(r => setWhatIfBars(r.data.bars || []))
-      .catch(() => setWhatIfBars([]))
+      .then(r => {
+        setWhatIfBars(Array.isArray(r.data?.bars) ? r.data.bars : []);
+        setWhatIfWarning(r.data?.warning || null);
+      })
+      .catch((e) => {
+        setWhatIfBars([]);
+        setWhatIfWarning(e.response?.data?.detail || 'Failed to load Alpaca market data.');
+      })
       .finally(() => setWhatIfLoading(false));
   }, [whatIfBars, trade.ticker, trade.date, stats.isClosed]);
 
@@ -998,7 +1012,9 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 ) : whatIfLoading ? (
                   <div className="text-muted" role="status" style={{ fontSize: 14 }}>Loading 1-min bar data…</div>
                 ) : whatIfBars !== null && whatIfBars.length === 0 ? (
-                  <div className="text-muted" style={{ fontSize: 14 }}>Chart data unavailable. Alpaca market data is required for this feature.</div>
+                  <div className="text-muted" style={{ fontSize: 14 }}>
+                    {whatIfWarning || 'No Alpaca market bars were returned for this symbol and date.'}
+                  </div>
                 ) : whatIfBars !== null && (() => {
                   const isStock  = !trade.instrument_type || trade.instrument_type === 'STOCK';
                   const scenarios = computeWhatIf(whatIfBars, stats, trade);

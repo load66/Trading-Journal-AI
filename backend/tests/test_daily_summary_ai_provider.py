@@ -91,7 +91,11 @@ def test_daily_summary_prefers_groq(monkeypatch):
 
     assert result["ai_provider"] == "groq"
     assert result["ai_model"] == "openai/gpt-oss-120b"
-    assert result["overall_grade"] == "B"
+    assert result["overall_grade"] == "N/A"
+    assert result["trade_grades"][0]["grade"] == "N/A"
+    assert result["mental_game"].startswith("Insufficient evidence")
+    assert result["evidence_locked"] is True
+    assert result["evidence_version"] == 2
     assert seen["payload"]["model"] == "openai/gpt-oss-120b"
     assert seen["payload"]["response_format"] == {"type": "json_object"}
     assert seen["headers"]["Authorization"] == "Bearer gsk-test"
@@ -110,7 +114,8 @@ def test_daily_summary_falls_back_to_anthropic(monkeypatch):
 
     result = daily_summary.generate_daily_summary(context())
     assert result["ai_provider"] == "anthropic"
-    assert result["overall_grade"] == "B"
+    assert result["overall_grade"] == "N/A"
+    assert result["trade_grades"][0]["grade"] == "N/A"
 
 
 def test_daily_summary_requires_one_provider(monkeypatch):
