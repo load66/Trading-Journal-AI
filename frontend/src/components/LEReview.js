@@ -278,14 +278,14 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
         />
         <EvidenceRow label="Market data feed" value={feedLabel(ev.market_data_feed?.underlying)} />
         <EvidenceRow
-          label="Evidence quality"
-          value={ev.evidence_quality ? `${ev.evidence_quality.level} · ${ev.evidence_quality.completeness_pct}% complete` : 'Unknown'}
+          label="Verified evidence coverage"
+          value={ev.evidence_quality ? `${ev.evidence_quality.level} · ${ev.evidence_quality.completeness_pct}% verified inputs` : 'Unknown'}
         />
       </div>
 
       {ev.evidence_quality?.reason && (
         <div className="text-muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-          Evidence quality: {ev.evidence_quality.reason}
+          Evidence integrity: {ev.evidence_quality.reason}
         </div>
       )}
 
