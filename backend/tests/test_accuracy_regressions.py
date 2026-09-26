@@ -141,7 +141,7 @@ def test_avg_trade_pl_percent_reuses_canonical_trade_percent(monkeypatch, tmp_pa
     assert main._avg_trade_pl_percent(trades) == 7.5
 
 
-def test_kpis_strategy_breakdown_respects_date_range(monkeypatch, tmp_path):
+def test_kpis_context_breakdowns_respect_date_range_and_keep_setup_separate(monkeypatch, tmp_path):
     main = fresh_main(monkeypatch, tmp_path)
     main.init_db()
     conn = main.get_db()
@@ -152,10 +152,10 @@ def test_kpis_strategy_breakdown_respects_date_range(monkeypatch, tmp_path):
             ("Test", "day_trading", "schwab"),
         )
         rows = [
-            ("old", "2026-08-20", "OLD_SETUP", 50.0),
-            ("new", "2026-09-20", "BREAKOUT", 100.0),
+            ("old", "2026-08-20", "OLD_SETUP", "Old Strategy", 50.0),
+            ("new", "2026-09-20", "BREAKOUT", "Momentum", 100.0),
         ]
-        for group, date, setup, pnl in rows:
+        for group, date, setup, strategy, pnl in rows:
             conn.execute(
                 """INSERT INTO trades
                    (account_id, trade_group, date, ticker, instrument_type, side,
@@ -165,6 +165,11 @@ def test_kpis_strategy_breakdown_respects_date_range(monkeypatch, tmp_path):
                     account_id, group, date, "SPY", "OPTION", "LONG",
                     pnl, pnl, 0.0, "[]", "imported", setup,
                 ),
+            )
+            conn.execute(
+                """INSERT INTO trade_analysis (trade_group, ticker, date, strategy)
+                   VALUES (?,?,?,?)""",
+                (group, "SPY", date, strategy),
             )
         conn.commit()
 
@@ -176,8 +181,10 @@ def test_kpis_strategy_breakdown_respects_date_range(monkeypatch, tmp_path):
         )
 
         assert result["total_trades"] == 1
-        assert [row["strategy"] for row in result["by_strategy"]] == ["BREAKOUT"]
+        assert [row["strategy"] for row in result["by_strategy"]] == ["Momentum"]
+        assert [row["setup"] for row in result["by_setup"]] == ["BREAKOUT"]
         assert result["by_strategy"][0]["count"] == 1
+        assert result["by_setup"][0]["count"] == 1
     finally:
         conn.close()
 
