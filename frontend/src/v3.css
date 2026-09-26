@@ -2114,6 +2114,13 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   text-transform: uppercase;
   letter-spacing: .08em;
 }
+.v3-smoking-period > strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+}
 .v3-smoking-period > b {
   display: block;
   margin: 3px 0 2px;
