@@ -1,4 +1,4 @@
-import { authConfigured, signInWithPassword, getAccessToken, clearSession, requestPasswordReset, consumePasswordRecoveryCallback, updatePassword } from './auth';
+import { authConfigured, signInWithPassword, getAccessToken, clearSession, requestPasswordReset, consumePasswordRecoveryCallback, updatePassword, restoreSession } from './auth';
 
 describe('web authentication client', () => {
   const originalEnv = process.env;
@@ -106,6 +106,75 @@ describe('web authentication client', () => {
         body: JSON.stringify({ password: 'new-password-123' }),
       }),
     );
+  });
+
+
+  test('restores a valid persisted session without refreshing it', async () => {
+    process.env.REACT_APP_SUPABASE_URL = 'https://project.supabase.co';
+    process.env.REACT_APP_SUPABASE_PUBLISHABLE_KEY = 'public-anon-key';
+    localStorage.setItem('trading-journal-auth', JSON.stringify({
+      access_token: 'still-valid',
+      refresh_token: 'refresh-valid',
+      expires_at: Math.floor(Date.now() / 1000) + 1800,
+    }));
+
+    const session = await restoreSession();
+
+    expect(session.access_token).toBe('still-valid');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test('refreshes a persisted session before access token expiry', async () => {
+    process.env.REACT_APP_SUPABASE_URL = 'https://project.supabase.co';
+    process.env.REACT_APP_SUPABASE_PUBLISHABLE_KEY = 'public-anon-key';
+    localStorage.setItem('trading-journal-auth', JSON.stringify({
+      access_token: 'expiring',
+      refresh_token: 'refresh-old',
+      expires_at: Math.floor(Date.now() / 1000) + 120,
+    }));
+    fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        access_token: 'fresh-access',
+        refresh_token: 'fresh-refresh',
+        expires_in: 3600,
+      }),
+    });
+
+    const session = await restoreSession();
+
+    expect(session.access_token).toBe('fresh-access');
+    expect(fetch).toHaveBeenCalledWith(
+      'https://project.supabase.co/auth/v1/token?grant_type=refresh_token',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ refresh_token: 'refresh-old' }),
+      }),
+    );
+  });
+
+  test('serializes concurrent refresh attempts so one refresh token is not reused', async () => {
+    process.env.REACT_APP_SUPABASE_URL = 'https://project.supabase.co';
+    process.env.REACT_APP_SUPABASE_PUBLISHABLE_KEY = 'public-anon-key';
+    localStorage.setItem('trading-journal-auth', JSON.stringify({
+      access_token: 'expiring',
+      refresh_token: 'refresh-old',
+      expires_at: Math.floor(Date.now() / 1000) + 60,
+    }));
+    fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        access_token: 'fresh-access',
+        refresh_token: 'fresh-refresh',
+        expires_in: 3600,
+      }),
+    });
+
+    const [one, two] = await Promise.all([getAccessToken(), getAccessToken()]);
+
+    expect(one).toBe('fresh-access');
+    expect(two).toBe('fresh-access');
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   test('clearSession removes browser authentication state', async () => {

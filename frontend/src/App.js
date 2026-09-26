@@ -24,7 +24,9 @@ import {
   consumePasswordRecoveryCallback,
   getSession,
   requestPasswordReset,
+  restoreSession,
   signInWithPassword,
+  startSessionAutoRefresh,
   updatePassword,
 } from './auth';
 
@@ -193,7 +195,22 @@ export default function App() {
 
     const sync = () => setSession(getSession());
     window.addEventListener(AUTH_CHANGED_EVENT, sync);
-    return () => window.removeEventListener(AUTH_CHANGED_EVENT, sync);
+
+    if (!recoverySession) {
+      restoreSession().then((restored) => {
+        if (restored) setSession(restored);
+      });
+    }
+
+    const stopAutoRefresh = startSessionAutoRefresh({
+      onSession: setSession,
+      onSignedOut: () => setSession(null),
+    });
+
+    return () => {
+      stopAutoRefresh();
+      window.removeEventListener(AUTH_CHANGED_EVENT, sync);
+    };
   }, [required]);
 
   if (!required) return <JournalApp />;
