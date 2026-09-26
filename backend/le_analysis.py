@@ -1,4 +1,4 @@
-from __future__ import annotations
+"""Evidence-first LE trade review engine.\n\nDeterministic market evidence is computed before any Groq interpretation.\n"""\n\nfrom __future__ import annotations
 
 import asyncio
 import json
