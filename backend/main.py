@@ -153,7 +153,7 @@ GOAL_DEFAULTS = {
     "day_win_rate": 75.0,
     "expectancy": 50.0,
     "avg_win_loss_ratio": 1.5,
-    "exit_efficiency": 50.0,
+    "exit_efficiency": 60.0,
     # Skill-development baselines used by the dashboard. Avg R is
     # higher-is-better; loss containment is the maximum acceptable ratio
     # between the worst red day and the average red day.
@@ -169,7 +169,7 @@ class GoalsBody(BaseModel):
     day_win_rate: float = 75.0
     expectancy: float = 50.0
     avg_win_loss_ratio: float = 1.5
-    exit_efficiency: float = 50.0
+    exit_efficiency: float = 60.0
     avg_r: float = 0.5
     loss_containment: float = 2.0
 
