@@ -89,7 +89,7 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
                 return (
                   <div
                     key={di}
-                    className={`cal-day${data ? ' has-data' : ''}`}
+                    className={`cal-day${data ? ' has-data' : ''}${size === 'full' ? ' cal-day-full' : ''}`}
                     onClick={open}
                     role={data ? 'button' : undefined}
                     tabIndex={data ? 0 : undefined}
@@ -126,16 +126,16 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
                         </div>
 
                         {data && (
-                          <div style={{ marginTop: 'auto', minWidth: 0 }}>
-                            <div className={`num ${tone === 'flat' ? '' : tone}`} style={{
+                          <div className="cal-day-result" style={{ marginTop: 'auto', minWidth: 0 }}>
+                            <div className={`cal-day-pnl num ${tone === 'flat' ? '' : tone}`} style={{
                               fontSize: S.pnl, fontWeight: 600, lineHeight: 1.1, letterSpacing: '-0.01em',
                               fontFamily: 'var(--font-display)',
                               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                             }}>{signedK(pnl)}</div>
-                            <div style={{ fontSize: S.meta, color: 'var(--text-secondary)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <div className="cal-day-meta" style={{ fontSize: S.meta, color: 'var(--text-secondary)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               <span className="num">{data.trade_count}</span> trade{data.trade_count !== 1 ? 's' : ''}
-                              {size === 'mini' ? ' · ' : <br />}
-                              <span className="num">{data.win_rate}%</span> win
+                              {size === 'mini' ? ' · ' : <br className="cal-win-break" />}
+                              <span className="cal-win-rate"><span className="num">{data.win_rate}%</span> win</span>
                             </div>
                           </div>
                         )}
@@ -150,12 +150,12 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
       </div>
 
       {/* ── Week-summary cards (same width as one day column) ── */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ height: S.headH, display: 'flex', alignItems: 'center', fontSize: 13, color: 'var(--text-secondary)', paddingLeft: 4 }}>Week</div>
+      <div className="cal-week-column" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="cal-week-head" style={{ height: S.headH, display: 'flex', alignItems: 'center', fontSize: 13, color: 'var(--text-secondary)', paddingLeft: 4 }}>Week</div>
         {weeks.map((week, wi) => {
           const { pnl, days } = weekStats(week);
           return (
-            <div key={wi} style={{
+            <div key={wi} className="cal-week-card" style={{
               height: S.rowH,
               borderRadius: 'var(--radius-md)',
               display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4,
@@ -163,15 +163,15 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
               background: 'var(--surface-inset)',
               minWidth: 0,
             }}>
-              <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Week {wi + 1}</div>
+              <div className="cal-week-label" style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Week {wi + 1}</div>
               {days === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>No sessions</div>
               ) : (
                 <>
-                  <div className={`num ${toneClass(pnl)}`} style={{ fontSize: S.wkPnl, fontWeight: 600, fontFamily: 'var(--font-display)', whiteSpace: 'nowrap' }}>
+                  <div className={`cal-week-pnl num ${toneClass(pnl)}`} style={{ fontSize: S.wkPnl, fontWeight: 600, fontFamily: 'var(--font-display)', whiteSpace: 'nowrap' }}>
                     {signedK(pnl)}
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  <div className="cal-week-meta" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                     <span className="num">{days}</span> day{days !== 1 ? 's' : ''}
                   </div>
                 </>
