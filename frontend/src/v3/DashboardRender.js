@@ -398,7 +398,6 @@ export default function DashboardRender(p) {
   // saved change never appeared on the card.
   const g = goals || {};
   const gWin = g.win_rate ?? 65;
-  const gDay = g.day_win_rate ?? 75;
   const gPf = g.profit_factor ?? 1.5;
   const gRatio = g.avg_win_loss_ratio ?? 1.5;
   const gExp = g.expectancy ?? 50;
@@ -406,16 +405,10 @@ export default function DashboardRender(p) {
 
   const measures = [
     {
-      label: 'Trade win rate', value: `${(k.win_rate || 0).toFixed(1)}%`,
-      fill: cap((k.win_rate || 0) / 100), goal: `${gWin}%`, goalPct: cap(gWin / 100) * 100,
-      met: (k.win_rate || 0) >= gWin,
-      read: `${(k.winning_trades || 0).toLocaleString()} won, ${(k.losing_trades || 0).toLocaleString()} lost`,
-    },
-    {
-      label: 'Day win rate', value: `${(k.day_win_rate || 0).toFixed(1)}%`,
-      fill: cap((k.day_win_rate || 0) / 100), goal: `${gDay}%`, goalPct: cap(gDay / 100) * 100,
-      met: (k.day_win_rate || 0) >= gDay,
-      read: `${k.positive_days || 0} green days, ${(k.trading_days || 0) - (k.positive_days || 0)} red`,
+      label: 'Expectancy', value: money2(k.expectancy || 0),
+      fill: cap((k.expectancy || 0) / gExp), goal: `$${gExp}`, goalPct: 100,
+      met: (k.expectancy || 0) >= gExp,
+      read: 'Average net value of each completed trade',
     },
     {
       label: 'Profit factor',
@@ -425,14 +418,18 @@ export default function DashboardRender(p) {
       read: `$${Number(k.profit_factor || 0).toFixed(2)} won for every $1.00 lost`,
     },
     {
+      label: 'Trade win rate', value: `${(k.win_rate || 0).toFixed(1)}%`,
+      fill: cap((k.win_rate || 0) / 100), goal: `${gWin}%`, goalPct: cap(gWin / 100) * 100,
+      met: (k.win_rate || 0) >= gWin,
+      read: `${(k.winning_trades || 0).toLocaleString()} won, ${(k.losing_trades || 0).toLocaleString()} lost`,
+    },
+    {
       label: 'Payoff ratio', value: ratio == null ? '—' : ratio.toFixed(2),
       fill: cap((ratio || 0) / gRatio), goal: Number(gRatio).toFixed(2), goalPct: 100,
       met: ratio != null && ratio >= gRatio,
       read: (
-        <>Your average win is <b>${Math.round(awin).toLocaleString()}</b>. Your average loss is{' '}
-          <b>${Math.round(aloss).toLocaleString()}</b>.
-          {ratio != null && ratio < 1 ? ' You win often and small, lose rarely and big.' : ''}
-        </>
+        <>Average win <b>$${Math.round(awin).toLocaleString()}</b> · average loss{' '}
+          <b>$${Math.round(aloss).toLocaleString()}</b></>
       ),
     },
     {
@@ -442,13 +439,13 @@ export default function DashboardRender(p) {
       met: avgPlPct != null && avgPlPct > 0,
       read: avgPlPct == null
         ? 'Not enough completed trades with entry cost'
-        : 'Average net return per completed trade, using entry premium/notional',
+        : 'Average net return per trade on entry premium/notional',
     },
     {
-      label: 'Expectancy', value: money2(k.expectancy || 0),
-      fill: cap((k.expectancy || 0) / gExp), goal: `$${gExp}`, goalPct: 100,
-      met: (k.expectancy || 0) >= gExp,
-      read: 'What the next trade is worth, on average',
+      label: 'Max drawdown',
+      value: money2(k.max_drawdown || 0),
+      tone: Number(k.max_drawdown || 0) < 0 ? 'neg' : undefined,
+      read: 'Largest realized peak-to-trough drop in this range',
     },
   ];
 
