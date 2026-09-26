@@ -93,10 +93,21 @@ export function toTs(isoUtcStr) {
 // Daily/weekly bars are whole calendar dates and do not need an intraday ET projection.
 const toDayTs = (isoUtcStr) => Math.floor(new Date(isoUtcStr).getTime() / 1000);
 
-export function execToTs(dateStr, timeStr, bucketMin = 5) {
-  const instant = zonedWallTimeToInstant(dateStr, timeStr, BROKER_EXECUTION_TIME_ZONE);
-  if (!instant) return null;
+function executionInstant(fill, fallbackDate) {
+  const canonical = String(fill?.timestamp_utc || '').trim();
+  if (canonical) {
+    const instant = new Date(canonical);
+    if (!Number.isNaN(instant.getTime())) return instant;
+  }
 
+  const dateStr = fill?.date || fallbackDate;
+  const timeStr = fill?.time;
+  const sourceZone = fill?.source_timezone || BROKER_EXECUTION_TIME_ZONE;
+  return zonedWallTimeToInstant(dateStr, timeStr, sourceZone);
+}
+
+function projectedExecutionTs(instant, bucketMin = 5) {
+  if (!instant) return null;
   const p = partsInZone(instant, MARKET_TIME_ZONE);
   const totalMin = Math.floor((Number(p.hour) * 60 + Number(p.minute)) / bucketMin) * bucketMin;
   const hour = Math.floor(totalMin / 60);
@@ -108,11 +119,25 @@ export function execToTs(dateStr, timeStr, bucketMin = 5) {
   ) / 1000);
 }
 
-export function executionTimeLabelET(dateStr, timeStr) {
-  const instant = zonedWallTimeToInstant(dateStr, timeStr, BROKER_EXECUTION_TIME_ZONE);
+// Legacy helper retained for stored executions that predate canonical timestamp provenance.
+export function execToTs(dateStr, timeStr, bucketMin = 5) {
+  return projectedExecutionTs(
+    zonedWallTimeToInstant(dateStr, timeStr, BROKER_EXECUTION_TIME_ZONE),
+    bucketMin,
+  );
+}
+
+export function executionTimeLabelET(dateOrFill, timeStr = null) {
+  const fill = typeof dateOrFill === 'object'
+    ? dateOrFill
+    : { date: dateOrFill, time: timeStr };
+  const instant = executionInstant(fill, fill.date);
   if (!instant) return null;
   const p = partsInZone(instant, MARKET_TIME_ZONE);
-  return `${p.hour}:${p.minute} ET`;
+  const seconds = String(p.second || '00');
+  return fill.timestamp_precision === 'second'
+    ? `${p.hour}:${p.minute}:${seconds} ET`
+    : `${p.hour}:${p.minute} ET`;
 }
 
 function formatFillDetail(fill) {
@@ -126,9 +151,9 @@ export function buildExecutionMarkerGroups(executions, fallbackDate, bucketMin =
 
   for (const fill of executions || []) {
     if (!fill?.time) continue;
-    const executionDate = fill.date || fallbackDate;
-    const ts = execToTs(executionDate, fill.time, bucketMin);
-    const minuteLabel = executionTimeLabelET(executionDate, fill.time);
+    const instant = executionInstant(fill, fallbackDate);
+    const ts = projectedExecutionTs(instant, bucketMin);
+    const minuteLabel = executionTimeLabelET(fill);
     if (!ts || !minuteLabel) continue;
 
     const isBuy = String(fill.action || '').toUpperCase() === 'BOT';
