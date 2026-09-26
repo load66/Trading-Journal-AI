@@ -424,17 +424,23 @@ def aggregate_executions(fills: list[dict]) -> dict:
         gross_pnl = sum(f.get('amount', 0.0) for f in fills)
         net_pnl = gross_pnl - commissions
 
-    # Serialize executions (drop 'amount' internal field, keep display fields)
+    # Serialize executions. Preserve broker identity/provenance when available
+    # so later re-imports can match the same fill even if timestamp precision differs.
     execs = []
     for f in fills:
-        execs.append({
+        item = {
             'date': f.get('iso_date', f.get('date', '')),
             'time': f.get('time', ''),
             'action': f.get('action', ''),
             'qty': f.get('qty', 0),
             'price': f.get('price', 0.0),
             'commission': f.get('commission', 0.0),
-        })
+        }
+        if f.get('source_ref'):
+            item['source_ref'] = str(f.get('source_ref'))
+        if f.get('timestamp_precision'):
+            item['timestamp_precision'] = f.get('timestamp_precision')
+        execs.append(item)
 
     return {
         'side': side,
