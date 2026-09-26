@@ -1579,6 +1579,14 @@ async def calculate_excursions(
             )
             computed += 1
 
+    if computed:
+        if account_id is None:
+            conn.execute("DELETE FROM daily_summaries WHERE summary_date=?", (date,))
+        else:
+            conn.execute(
+                "DELETE FROM daily_summaries WHERE summary_date=? AND account_id=?",
+                (date, account_id),
+            )
     conn.commit()
     return {
         "date": date,
