@@ -189,7 +189,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       .then(r => { if (current()) setOpenPositions(r.data); })
       .catch(() => { if (current()) setOpenPositions([]); });
 
-    const recentParams = { limit: 5 };
+    const recentParams = { limit: 10, closed_only: true, sort_by: 'closed_at_desc' };
     if (accountId != null) recentParams.account_id = accountId;
     tradesApi.list(recentParams)
       .then(r => { if (current()) setRecentTrades(r.data); })
