@@ -32,6 +32,7 @@ from ai_analysis import (
     build_brain_context,
     generate_brain_response,
     generate_weekly_summary,
+    generate_performance_diagnosis,
 )
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
@@ -1678,6 +1679,32 @@ def get_smoking_gun_report(
         "date_to": date_to,
     }
     return report
+
+
+@app.get("/api/smoking-gun-diagnosis")
+def get_smoking_gun_diagnosis(
+    account_id: int | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    source = get_smoking_gun_report(
+        account_id=account_id, date_from=date_from, date_to=date_to, conn=conn
+    )
+    if not source.get("has_data"):
+        return {"has_data": False, "diagnosis": None}
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return {
+            "has_data": True,
+            "unavailable": True,
+            "diagnosis": None,
+            "message": "AI diagnosis is not configured for this deployment.",
+        }
+    try:
+        diagnosis = generate_performance_diagnosis(source)
+        return {"has_data": True, "diagnosis": diagnosis}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/reports")
