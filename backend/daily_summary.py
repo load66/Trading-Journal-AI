@@ -1,8 +1,17 @@
 import json
 import re
-from ai_analysis import get_client, response_text
 
-MODEL = "claude-opus-5"
+import httpx
+
+from ai_analysis import (
+    GROQ_API_URL,
+    GROQ_MODEL,
+    MODEL,
+    _strip_json_fence,
+    _valid_api_key,
+    get_client,
+    response_text,
+)
 
 DAILY_SUMMARY_PROMPT = """You are a professional trading coach producing an end-of-day performance review for a day trader.
 
@@ -131,10 +140,49 @@ def build_daily_context(conn, date: str, account_id) -> dict:
     }
 
 
-def generate_daily_summary(context: dict) -> dict:
-    """Call Claude to generate a structured daily summary."""
-    client = get_client()
+def _groq_daily_summary(user_content: str, api_key: str) -> dict:
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": DAILY_SUMMARY_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "max_completion_tokens": 4096,
+        "reasoning_effort": "medium",
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1,
+    }
+    response = httpx.post(
+        GROQ_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=90.0,
+    )
+    response.raise_for_status()
+    body = response.json()
+    try:
+        raw = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("Groq returned an unexpected response shape.") from exc
+    return json.loads(_strip_json_fence(raw))
 
+
+def _anthropic_daily_summary(user_content: str) -> dict:
+    client = get_client()
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        system=DAILY_SUMMARY_PROMPT,
+        messages=[{"role": "user", "content": user_content}],
+    )
+    return json.loads(_strip_json_fence(response_text(response)))
+
+
+def generate_daily_summary(context: dict) -> dict:
+    """Generate a structured daily summary with Groq first, Anthropic fallback."""
     date = context["date"]
     trades = context["trades"]
     kpis = context["day_kpis"]
@@ -187,19 +235,37 @@ Trades:
 
 Generate the daily coaching summary JSON."""
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=4096,
-        system=DAILY_SUMMARY_PROMPT,
-        messages=[{"role": "user", "content": user_content}],
-    )
+    groq_key = _valid_api_key("GROQ_API_KEY")
+    anthropic_key = _valid_api_key("ANTHROPIC_API_KEY", "your_anthropic_api_key_here")
+    errors = []
 
-    raw = response_text(response)
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
+    if groq_key:
+        try:
+            result = _groq_daily_summary(user_content, groq_key)
+            result["ai_provider"] = "groq"
+            result["ai_model"] = GROQ_MODEL
+        except Exception as exc:
+            errors.append(f"Groq: {exc}")
+            if not anthropic_key:
+                raise RuntimeError("Groq daily coaching failed. " + errors[-1]) from exc
+            result = None
+    else:
+        result = None
 
-    result = json.loads(raw)
+    if result is None and anthropic_key:
+        try:
+            result = _anthropic_daily_summary(user_content)
+            result["ai_provider"] = "anthropic"
+            result["ai_model"] = MODEL
+        except Exception as exc:
+            errors.append(f"Anthropic: {exc}")
+            raise RuntimeError("Daily coaching AI failed. " + " | ".join(errors)) from exc
+
+    if result is None:
+        raise ValueError(
+            "Daily coaching AI is not configured. Add GROQ_API_KEY to the server "
+            "environment, or ANTHROPIC_API_KEY as an optional fallback."
+        )
     result.setdefault("narrative", "")
     result.setdefault("strengths", [])
     result.setdefault("mistakes", [])
