@@ -132,28 +132,22 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
       </button>
     );
   }
-  /** MFE / MAE / exit efficiency — how much of the move was there, and how much was taken. */
-  function Excursion({ trade }) {
-    const { mfe_pct: mfe, mae_pct: mae, exit_efficiency: eff } = trade;
-    if (mfe == null && mae == null) {
+  /** Display-only net P/L percentage from the API. */
+  function PLPercent({ trade }) {
+    const value = trade.pl_pct;
+    if (value == null || !Number.isFinite(Number(value))) {
       return <span className="text-faint" style={{ fontSize: 13 }}>—</span>;
     }
-    // Green when most of the available move was captured, red when little was.
-    const effCls = eff == null ? 'text-muted'
-      : eff >= 60 ? 'pos' : eff >= 35 ? 'caution' : 'neg';
-    const title = [
-      `MFE  ${mfe >= 0 ? '+' : ''}${Number(mfe).toFixed(2)}%: best unrealised gain while open (the opportunity)`,
-      `MAE  ${Number(mae).toFixed(2)}%: worst unrealised loss while open (the heat taken)`,
-      eff != null ? `Exit efficiency ${Number(eff).toFixed(0)}%: share of the available move you captured` : null,
-    ].filter(Boolean).join('\n');
+    const n = Number(value);
+    const cls = n > 0 ? 'pos' : n < 0 ? 'neg' : 'text-muted';
+    const title = trade.instrument_type === 'OPTION'
+      ? 'Net P/L ÷ entry option premium (100× contract multiplier). This is not margin return.'
+      : trade.instrument_type === 'FUTURE'
+        ? 'Net P/L ÷ entry futures notional using the contract multiplier.'
+        : 'Net P/L ÷ entry stock notional.';
     return (
-      <span title={title} className="num" style={{ display: 'inline-flex', gap: 6, alignItems: 'baseline', fontSize: 13 }}>
-        <span className="pos">{mfe >= 0 ? '+' : ''}{Number(mfe).toFixed(1)}%</span>
-        <span className="text-faint">/</span>
-        <span className="neg">{Number(mae).toFixed(1)}%</span>
-        {eff != null && (
-          <span className={effCls} style={{ fontWeight: 700 }}>{Number(eff).toFixed(0)}%</span>
-        )}
+      <span className={`num ${cls}`} title={title} style={{ fontSize: 13, fontWeight: 700 }}>
+        {n > 0 ? '+' : ''}{n.toFixed(1)}%
       </span>
     );
   }
@@ -244,7 +238,7 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
         <td onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
           <SetupEditor trade={trade} />
         </td>
-        <td><Excursion trade={trade} /></td>
+        <td><PLPercent trade={trade} /></td>
         <td className={`num ${trade.r_multiple > 0 ? 'pos' : trade.r_multiple < 0 ? 'neg' : 'text-muted'}`}>
           {trade.r_multiple != null ? `${trade.r_multiple > 0 ? '+' : ''}${Number(trade.r_multiple).toFixed(2)}R` : '—'}
         </td>

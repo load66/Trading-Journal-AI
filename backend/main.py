@@ -557,6 +557,50 @@ def _is_open_position(trade: dict) -> bool:
     return entry_qty > 0 and entry_qty != exit_qty
 
 
+def _trade_pl_percent(trade: dict) -> float | None:
+    """Net P/L percentage on entry notional/premium for display purposes only.
+
+    This does not modify P&L, MFE/MAE, exit efficiency, R-multiples, or any
+    stored trade math. Options use the standard 100x contract multiplier.
+    Futures use the existing parser multiplier map when the root is known.
+    Short trades are measured against entry proceeds/notional, not margin.
+    """
+    raw = trade.get("executions") or []
+    if isinstance(raw, str):
+        try:
+            execs = json.loads(raw)
+        except Exception:
+            return None
+    else:
+        execs = raw if isinstance(raw, list) else []
+
+    side = str(trade.get("side") or "").upper()
+    entry_action = "BOT" if side == "LONG" else "SOLD"
+    entries = [e for e in execs if str(e.get("action") or "").upper() == entry_action]
+    qty = sum(float(e.get("qty") or 0) for e in entries)
+    if qty <= 0:
+        return None
+    weighted = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries)
+    avg_entry = weighted / qty if qty else None
+    if not avg_entry:
+        return None
+
+    instrument = str(trade.get("instrument_type") or "STOCK").upper()
+    multiplier = 1.0
+    if instrument == "OPTION":
+        multiplier = 100.0
+    elif instrument == "FUTURE":
+        ticker = str(trade.get("ticker") or "").upper()
+        root = next((r for r in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True) if ticker.startswith(r)), None)
+        if root:
+            multiplier = float(FUTURES_MULTIPLIERS[root])
+
+    entry_notional = abs(avg_entry * qty * multiplier)
+    if entry_notional <= 0:
+        return None
+    return round(float(trade.get("net_pnl") or 0) / entry_notional * 100, 2)
+
+
 @app.get("/api/trades")
 def list_trades(
     account_id: int | None = Query(None),
@@ -607,6 +651,7 @@ def list_trades(
             d['executions'] = []
         if open_only and not _is_open_position(d):
             continue
+        d["pl_pct"] = _trade_pl_percent(d)
         result.append(d)
 
     if limit is not None and open_only:

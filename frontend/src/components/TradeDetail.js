@@ -39,8 +39,12 @@ function computeStats(trade) {
   const avgEntry = avgPrice(entryFills);
   const avgExit  = avgPrice(exitFills);
   const totalQty = entryFills.reduce((s, f) => s + (f.qty || 0), 0);
-  const adjustedCost = avgEntry ? avgEntry * totalQty : null;
-  const netRoi = adjustedCost ? (trade.net_pnl / adjustedCost * 100) : null;
+  const instrument = (trade.instrument_type || 'STOCK').toUpperCase();
+  const multiplier = instrument === 'OPTION' ? 100 : 1;
+  const adjustedCost = avgEntry ? avgEntry * totalQty * multiplier : null;
+  const plPercent = trade.pl_pct != null
+    ? Number(trade.pl_pct)
+    : adjustedCost ? (trade.net_pnl / adjustedCost * 100) : null;
 
   const sortedTimes = [...execs].map(e => e.time).filter(Boolean).sort();
   const openTime  = sortedTimes[0];
@@ -62,7 +66,7 @@ function computeStats(trade) {
   const isClosed = exitFills.length > 0;
   const isWin = (trade.net_pnl || 0) > 0;
 
-  return { avgEntry, avgExit, totalQty, adjustedCost, netRoi, openTime, closeTime, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
+  return { avgEntry, avgExit, totalQty, adjustedCost, plPercent, openTime, closeTime, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
 }
 
 // ── Stat row helper ────────────────────────────────────────────────────────────
@@ -658,8 +662,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           value={<MoneyValue value={pnl} />}
           tone={pnl >= 0 ? 'pos' : 'neg'}
           foot={<>
-            {stats.netRoi != null && <>ROI <span className={`num ${stats.netRoi >= 0 ? 'pos' : 'neg'}`}>{stats.netRoi >= 0 ? '+' : ''}{stats.netRoi.toFixed(2)}%</span></>}
-            {stats.netRoi != null && trade.gross_pnl != null && ' · '}
+            {stats.plPercent != null && <>ROI <span className={`num ${stats.plPercent >= 0 ? 'pos' : 'neg'}`}>{stats.plPercent >= 0 ? '+' : ''}{stats.plPercent.toFixed(2)}%</span></>}
+            {stats.plPercent != null && trade.gross_pnl != null && ' · '}
             {trade.gross_pnl != null && <>Gross <span className="num">{fmtSigned$(trade.gross_pnl)}</span></>}
           </>}
         />
@@ -754,7 +758,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 <StatRow label="Side" value={trade.side} />
                 <StatRow label="Stocks traded" value={stats.totalQty || '—'} />
                 <StatRow label="Commissions & Fees" value={trade.commissions ? fmt$(trade.commissions) : '—'} />
-                <StatRow label="Net ROI" value={stats.netRoi != null ? `${stats.netRoi >= 0 ? '+' : ''}${stats.netRoi.toFixed(2)}%` : '—'} valueColor={stats.netRoi != null ? (stats.netRoi >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
+                <StatRow label="P/L %" value={stats.plPercent != null ? `${stats.plPercent >= 0 ? '+' : ''}${stats.plPercent.toFixed(2)}%` : '—'} valueColor={stats.plPercent != null ? (stats.plPercent >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
                 <StatRow label="Gross P&L" value={trade.gross_pnl != null ? fmt$(trade.gross_pnl) : '—'} valueColor={trade.gross_pnl >= 0 ? 'var(--green)' : 'var(--red)'} />
                 <StatRow label="Adjusted Cost" value={stats.adjustedCost ? fmt$(stats.adjustedCost) : '—'} />
                 <StatRow label="Average Entry" value={stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : '—'} />
