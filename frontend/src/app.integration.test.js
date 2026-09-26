@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, smokingGunLibraryApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -33,6 +33,25 @@ jest.mock('./api', () => {
   const ACCOUNTS = [
     { id: 1, name: 'Day Trading', type: 'day_trading', color: '#6366f1', broker: 'Schwab' },
     { id: 2, name: 'Swing', type: 'swing', color: '#6366f1', broker: 'Schwab' },
+  ];
+  const SMOKING_GUN_REPORTS = [
+    {
+      id: 22, account_id: 1, title: 'September Smoking Gun',
+      date_from: '2026-09-01', date_to: '2026-09-30',
+      generated_at: '2026-09-26 12:00:00', trade_count: 191,
+      net_pnl: 4340.34, primary_edge: 'Patience over speed',
+      primary_leak: 'Averaging down', report_version: '1',
+      filters: { tickers: ['SPY', 'QQQ'] }, is_stale: true,
+      stale_reason: 'source-data-changed', status: 'complete',
+    },
+    {
+      id: 21, account_id: 1, title: 'August Smoking Gun',
+      date_from: '2026-08-01', date_to: '2026-08-31',
+      generated_at: '2026-09-01 08:00:00', trade_count: 75,
+      net_pnl: 1586.28, primary_edge: 'Patient holds',
+      primary_leak: 'Micro-scalping', report_version: '1',
+      filters: {}, is_stale: false, stale_reason: null, status: 'complete',
+    },
   ];
   const LIBRARY = {
     strategies: [
@@ -80,6 +99,14 @@ jest.mock('./api', () => {
     syncApi: withDefault({}),
     goalsApi: withDefault({ get: fn(() => ok({ win_rate: 65 })), put: fn(() => ok({ win_rate: 65 })) }),
     reportsApi: withDefault({ get: fn(() => Promise.reject(new Error('no reports in tests'))) }),
+    smokingGunApi: withDefault({ get: fn(() => ok({ has_data: false })), diagnose: fn(() => ok({ diagnosis: null })) }),
+    smokingGunLibraryApi: withDefault({
+      list: fn(() => ok(SMOKING_GUN_REPORTS)),
+      get: fn(() => ok({})),
+      remove: fn(() => ok({})),
+      downloadHtml: fn(() => ok(new Blob(['html'], { type: 'text/html' }))),
+      downloadLedger: fn(() => ok(new Blob(['csv'], { type: 'text/csv' }))),
+    }),
     edgeReportApi: withDefault({}),
     weeklySummaryApi: withDefault({}),
     yearlyKpisApi: withDefault({ get: fn(() => ok({ months: [] })) }),
@@ -173,6 +200,64 @@ test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key naviga
   expect(overview).toHaveAttribute('aria-selected', 'true');
   fireEvent.keyDown(overview, { key: 'ArrowRight' });
   expect(within(tablist).getByRole('tab', { name: 'Setups & Strategy' })).toHaveAttribute('aria-selected', 'true');
+});
+
+
+async function openSmokingGun() {
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Reports' }));
+  const reportTabs = await screen.findByRole('tablist');
+  fireEvent.click(within(reportTabs).getByRole('tab', { name: 'Smoking Gun' }));
+  return screen.findByRole('tablist', { name: 'Smoking Gun views' });
+}
+
+test('Smoking Gun has Live Analytics and Report Library submodes with live as default', async () => {
+  await renderApp();
+  const subnav = await openSmokingGun();
+  expect(within(subnav).getAllByRole('tab').map(t => t.textContent.trim()))
+    .toEqual(['Live Analytics', 'Report Library']);
+  expect(within(subnav).getByRole('tab', { name: 'Live Analytics' }))
+    .toHaveAttribute('aria-selected', 'true');
+});
+
+test('Smoking Gun report library preserves API order and marks stale snapshots', async () => {
+  await renderApp();
+  const subnav = await openSmokingGun();
+  fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
+
+  await screen.findByText('September Smoking Gun');
+  const cards = screen.getAllByRole('article', { name: /Smoking Gun report:/ });
+  expect(within(cards[0]).getByText('September Smoking Gun')).toBeInTheDocument();
+  expect(within(cards[1]).getByText('August Smoking Gun')).toBeInTheDocument();
+  expect(within(cards[0]).getByText('SOURCE CHANGED')).toBeInTheDocument();
+  expect(within(cards[1]).getByText('CURRENT')).toBeInTheDocument();
+  expect(within(cards[0]).getByText(/SPY, QQQ/)).toBeInTheDocument();
+});
+
+test('Smoking Gun library has a stable empty and error state', async () => {
+  smokingGunLibraryApi.list.mockResolvedValueOnce({ data: [] });
+  await renderApp();
+  let subnav = await openSmokingGun();
+  fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
+  expect(await screen.findByText('No saved Smoking Gun reports yet. Generate one from ChatGPT to build your audit history.')).toBeInTheDocument();
+
+  smokingGunLibraryApi.list.mockRejectedValueOnce(new Error('library offline'));
+  fireEvent.click(within(subnav).getByRole('tab', { name: 'Live Analytics' }));
+  fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
+  expect(await screen.findByText(/library offline/i)).toBeInTheDocument();
+  expect(screen.getByRole('tablist', { name: 'Smoking Gun views' })).toBeInTheDocument();
+});
+
+test('Smoking Gun library requires explicit delete confirmation', async () => {
+  await renderApp();
+  const subnav = await openSmokingGun();
+  fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
+  await screen.findByText('September Smoking Gun');
+
+  const card = screen.getByRole('article', { name: 'Smoking Gun report: September Smoking Gun' });
+  fireEvent.click(within(card).getByRole('button', { name: 'Delete Report' }));
+  expect(within(card).getByText(/Delete this saved snapshot/i)).toBeInTheDocument();
+  expect(within(card).getByRole('button', { name: 'Confirm delete' })).toBeInTheDocument();
+  expect(smokingGunLibraryApi.remove).not.toHaveBeenCalled();
 });
 
 test('Trade View opens Trade Details with all five tabs, back and previous/next', async () => {
