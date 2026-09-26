@@ -9,13 +9,13 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v2_VWAP_SIGN"
+LE_RULESET_VERSION = "LE_2026_09_v3_SIP_HISTORY"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
+ALPACA_FALLBACK_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
 
 ALLOWED_STRATEGIES = (
     "LE L-Entry — Level Retest",
@@ -506,52 +506,96 @@ def analyze_context(
     }
 
 
-async def _fetch_alpaca_1m(symbol: str, trade_day: date) -> tuple[list[dict], str]:
-    key = (os.getenv("APCA_API_KEY_ID") or "").strip()
-    secret = (os.getenv("APCA_API_SECRET_KEY") or "").strip()
-    if not key or not secret or key == "your_alpaca_api_key_here":
-        raise RuntimeError("Alpaca market data is not configured.")
+def _historical_feed_order() -> list[str]:
+    """Prefer consolidated historical data, then degrade explicitly."""
+    order = ["sip", "delayed_sip", ALPACA_FALLBACK_FEED, "iex"]
+    unique: list[str] = []
+    for feed in order:
+        feed = (feed or "").strip().lower()
+        if feed and feed not in unique:
+            unique.append(feed)
+    return unique
 
-    start_day = trade_day - timedelta(days=8)
+
+def _history_window(entry_dt: datetime) -> tuple[datetime, datetime]:
+    """Fetch only through the execution timestamp to avoid unnecessary recent-data restrictions."""
+    start_day = entry_dt.date() - timedelta(days=8)
     start_dt = datetime.combine(start_day, time(4, 0), tzinfo=ET)
-    end_dt = datetime.combine(trade_day, time(16, 1), tzinfo=ET)
+    return start_dt, entry_dt
+
+
+async def _request_alpaca_bars(
+    symbol: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    feed: str,
+    key: str,
+    secret: str,
+) -> list[dict]:
     url = f"https://data.alpaca.markets/v2/stocks/{symbol}/bars"
     headers = {
         "APCA-API-KEY-ID": key,
         "APCA-API-SECRET-KEY": secret,
     }
+    rows: list[dict] = []
+    page_token = None
 
-    async def request(feed: str) -> list[dict]:
-        rows: list[dict] = []
-        page_token = None
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            while True:
-                params = {
-                    "timeframe": "1Min",
-                    "start": start_dt.isoformat(),
-                    "end": end_dt.isoformat(),
-                    "limit": 10000,
-                    "feed": feed,
-                    "adjustment": "raw",
-                    "sort": "asc",
-                }
-                if page_token:
-                    params["page_token"] = page_token
-                response = await client.get(url, params=params, headers=headers)
-                response.raise_for_status()
-                payload = response.json()
-                rows.extend(payload.get("bars", []))
-                page_token = payload.get("next_page_token")
-                if not page_token or len(rows) >= 30000:
-                    break
-        return rows
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        while True:
+            params = {
+                "timeframe": "1Min",
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+                "limit": 10000,
+                "feed": feed,
+                "adjustment": "raw",
+                "sort": "asc",
+            }
+            if page_token:
+                params["page_token"] = page_token
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+            rows.extend(payload.get("bars", []))
+            page_token = payload.get("next_page_token")
+            if not page_token or len(rows) >= 30000:
+                break
 
-    try:
-        return await request(ALPACA_DATA_FEED), ALPACA_DATA_FEED
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 403 and ALPACA_DATA_FEED != "iex":
-            return await request("iex"), "iex"
-        raise
+    return rows
+
+
+async def _fetch_alpaca_1m(symbol: str, entry_dt: datetime) -> tuple[list[dict], str]:
+    """Fetch SIP-first historical bars; fall back without guessing missing levels."""
+    key = (os.getenv("APCA_API_KEY_ID") or "").strip()
+    secret = (os.getenv("APCA_API_SECRET_KEY") or "").strip()
+    if not key or not secret or key == "your_alpaca_api_key_here":
+        raise RuntimeError("Alpaca market data is not configured.")
+
+    start_dt, end_dt = _history_window(entry_dt)
+    errors: list[str] = []
+
+    for feed in _historical_feed_order():
+        try:
+            rows = await _request_alpaca_bars(
+                symbol=symbol,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                feed=feed,
+                key=key,
+                secret=secret,
+            )
+            if rows:
+                return rows, feed
+            errors.append(f"{feed}: no bars returned")
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in {403, 422}:
+                errors.append(f"{feed}: unavailable ({status})")
+                continue
+            raise
+
+    detail = "; ".join(errors[-4:]) or "no feed returned data"
+    raise RuntimeError(f"Alpaca historical bars unavailable for {symbol}: {detail}")
 
 
 def _le_json_schema() -> dict:
@@ -743,9 +787,9 @@ async def build_le_review(trade: dict) -> dict:
 
     try:
         underlying_result, spy_result, qqq_result = await asyncio.gather(
-            _fetch_alpaca_1m(ticker, when.date()),
-            _fetch_alpaca_1m("SPY", when.date()),
-            _fetch_alpaca_1m("QQQ", when.date()),
+            _fetch_alpaca_1m(ticker, when),
+            _fetch_alpaca_1m("SPY", when),
+            _fetch_alpaca_1m("QQQ", when),
         )
         underlying_bars, underlying_feed = underlying_result
         spy_bars, spy_feed = spy_result
@@ -771,9 +815,14 @@ async def build_le_review(trade: dict) -> dict:
         feeds = {underlying_feed, spy_feed, qqq_feed}
         if "iex" in feeds:
             context["data_warnings"].append(
-                "Alpaca IEX is an exchange-limited feed, not consolidated SIP data. "
-                "PDH/PDL/PMH/PML, VWAP, and benchmark bars can differ from Schwab or TradingView; "
-                "review level-based tags before applying them."
+                "Historical SIP was unavailable for at least one symbol, so LE Review fell back to IEX. "
+                "IEX is exchange-limited; PDH/PDL/PMH/PML, VWAP, and benchmark bars can differ from "
+                "Schwab or TradingView. Refresh Evidence later to retry SIP."
+            )
+        if "delayed_sip" in feeds:
+            context["data_warnings"].append(
+                "At least one symbol is using delayed SIP. Premarket and older bars are consolidated, "
+                "but the newest market context may lag by about 15 minutes. Refresh Evidence later for full SIP."
             )
 
         ev = context["evidence"]
@@ -789,9 +838,9 @@ async def build_le_review(trade: dict) -> dict:
         ]
         present = sum(value is not None for value in required)
         completeness_pct = round(present / len(required) * 100)
-        if completeness_pct >= 90 and "iex" not in feeds and not context["data_warnings"]:
+        if completeness_pct >= 90 and feeds == {"sip"} and not context["data_warnings"]:
             quality = "High"
-            quality_reason = "Core LE evidence is complete and based on consolidated market data."
+            quality_reason = "Core LE evidence is complete and based on consolidated SIP market data."
         elif completeness_pct >= 75:
             quality = "Moderate"
             quality_reason = (
@@ -800,7 +849,7 @@ async def build_le_review(trade: dict) -> dict:
         else:
             quality = "Low"
             quality_reason = "Material LE evidence is missing; classifications should be treated cautiously."
-        if "iex" in feeds and quality == "High":
+        if any(feed != "sip" for feed in feeds) and quality == "High":
             quality = "Moderate"
         ev["evidence_quality"] = {
             "level": quality,

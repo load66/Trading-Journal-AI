@@ -11,6 +11,14 @@ const confidenceLabel = (value) => {
   return 'Low';
 };
 
+const feedLabel = (feed) => {
+  const value = String(feed || '').toLowerCase();
+  if (value === 'sip') return 'SIP · consolidated';
+  if (value === 'delayed_sip') return 'Delayed SIP · consolidated';
+  if (value === 'iex') return 'IEX · fallback';
+  return feed ? String(feed).toUpperCase() : 'Unknown';
+};
+
 function EvidenceRow({ label, value, tone }) {
   if (value == null || value === '') return null;
   return (
@@ -251,7 +259,7 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
         <EvidenceRow label="SPY vs VWAP" value={benchmark(ev.spy)} />
         <EvidenceRow label="QQQ vs VWAP" value={benchmark(ev.qqq)} />
         <EvidenceRow label="Market Sign" value={marketSignLabel} tone={marketSignTone} />
-        <EvidenceRow label="Market data feed" value={ev.market_data_feed?.underlying?.toUpperCase()} />
+        <EvidenceRow label="Market data feed" value={feedLabel(ev.market_data_feed?.underlying)} />
         <EvidenceRow
           label="Evidence quality"
           value={ev.evidence_quality ? `${ev.evidence_quality.level} · ${ev.evidence_quality.completeness_pct}% complete` : 'Unknown'}
