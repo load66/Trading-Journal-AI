@@ -9,8 +9,6 @@ sys.path.insert(0, str(BACKEND))
 
 
 def load_with(overrides):
-    for name in ("runtime_config",):
-        sys.modules.pop(name, None)
     from runtime_config import load_runtime_config
     env = {
         "APP_ENV": "local",
