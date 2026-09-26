@@ -6,6 +6,7 @@ from typing import Callable
 import jwt
 from jwt import PyJWKClient
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from runtime_config import RuntimeConfig, load_runtime_config
@@ -80,7 +81,7 @@ class SingleUserAuthMiddleware(BaseHTTPMiddleware):
             )
 
         try:
-            claims = self.verifier(token.strip(), config)
+            claims = await run_in_threadpool(self.verifier, token.strip(), config)
         except AuthenticationError:
             return JSONResponse(
                 status_code=401,
