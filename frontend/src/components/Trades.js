@@ -198,7 +198,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                 {sortTh('side', 'Side')}
                 {sortTh('net_pnl', 'Net P&L', 'num')}
                 <th>Setup / Strategy</th>
-                <th title="MFE / MAE / exit efficiency: best gain reached, worst loss reached, and the share of the move you captured">MFE / MAE / Exit</th>
+                <th title="Net P/L divided by entry premium/notional. Display only; MFE/MAE/Exit analytics remain unchanged.">P/L %</th>
                 {sortTh('r_multiple', 'R', 'num')}
                 <th><span className="sr-only">Expand</span></th>
               </tr>
