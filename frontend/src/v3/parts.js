@@ -306,6 +306,74 @@ export function DailyPnlBars({ days, height = 190, onPick }) {
   );
 }
 
+/* ── time-of-day edge ───────────────────────────────────────────────────── */
+
+export function TimeOfDayBars({ rows, timezone = 'CT' }) {
+  const [hover, setHover] = useState(null);
+  const data = rows || [];
+  const peak = useMemo(
+    () => Math.max(1, ...data.map((d) => Math.abs(Number(d.net_pnl) || 0))),
+    [data],
+  );
+  const best = useMemo(() => {
+    if (!data.length) return null;
+    return data.reduce((a, b) => Number(a.net_pnl || 0) >= Number(b.net_pnl || 0) ? a : b);
+  }, [data]);
+  const worst = useMemo(() => {
+    if (!data.length) return null;
+    return data.reduce((a, b) => Number(a.net_pnl || 0) <= Number(b.net_pnl || 0) ? a : b);
+  }, [data]);
+
+  if (!data.length) return <div className="v3-empty">No entry-time data in this range.</div>;
+
+  return (
+    <div className="v3-tod-wrap">
+      <div className="v3-tod-bars" role="img" aria-label={`Net P and L by 30-minute entry window, ${timezone}`}>
+        <div className="v3-tod-zero" />
+        {data.map((d, i) => {
+          const pnl = Number(d.net_pnl) || 0;
+          const pct = Math.max(3, (Math.abs(pnl) / peak) * 42);
+          const isBest = best && d.start_minute === best.start_minute;
+          const isWorst = worst && d.start_minute === worst.start_minute;
+          return (
+            <button
+              key={d.start_minute ?? i}
+              type="button"
+              className={`v3-tod-cell ${pnl >= 0 ? 'up' : 'down'}${isBest ? ' best' : ''}${isWorst ? ' worst' : ''}`}
+              onPointerEnter={() => setHover(i)}
+              onPointerLeave={() => setHover(null)}
+              onFocus={() => setHover(i)}
+              onBlur={() => setHover(null)}
+              aria-label={`${d.label}: ${money(pnl)}, ${d.count} trades, ${Number(d.win_rate || 0).toFixed(0)}% win rate`}
+            >
+              <span className="v3-tod-flag">{isBest ? 'BEST' : isWorst ? 'WORST' : ''}</span>
+              <span className="v3-tod-barzone">
+                <i style={{ '--h': `${pct}%` }} />
+              </span>
+              <span className={`v3-tod-pnl ${tone(pnl)}`}>{moneyK(pnl)}</span>
+              <span className="v3-tod-label">{String(d.label || '').replace(/ (AM|PM)/g, '')}</span>
+            </button>
+          );
+        })}
+      </div>
+      {hover != null && data[hover] && (
+        <div className="v3-tod-detail" aria-live="polite">
+          <div>
+            <span className="v3-lab">{data[hover].label} {timezone}</span>
+            <b className={tone(data[hover].net_pnl)}>{money(data[hover].net_pnl)}</b>
+          </div>
+          <dl>
+            <div><dt>Trades</dt><dd>{data[hover].count}</dd></div>
+            <div><dt>Win rate</dt><dd>{Number(data[hover].win_rate || 0).toFixed(1)}%</dd></div>
+            <div><dt>Expectancy</dt><dd className={tone(data[hover].expectancy)}>{money(data[hover].expectancy)}</dd></div>
+            <div><dt>Avg P/L %</dt><dd>{data[hover].avg_pl_pct == null ? '—' : `${Number(data[hover].avg_pl_pct) > 0 ? '+' : ''}${Number(data[hover].avg_pl_pct).toFixed(1)}%`}</dd></div>
+          </dl>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── the session strip ──────────────────────────────────────────────────────
    Every trading day as one bar. Bars are anchored to the midline absolutely:
    gains grow up from it, losses grow down. An earlier version used flex
