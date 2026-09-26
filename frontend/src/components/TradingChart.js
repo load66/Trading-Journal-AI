@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createChart, ColorType, CrosshairMode, LineStyle } from 'lightweight-charts';
 import { chartApi, tradesApi } from '../api';
+import { executionToChartTs } from '../tradeTime';
 
 // lightweight-charts paints to canvas and cannot resolve CSS var(), so colours
 // are read from the design tokens at render time. Fallbacks are the token values.
@@ -34,9 +35,10 @@ function chartTheme() {
 // lightweight-charts always renders its axis and crosshair labels using UTC getters,
 // with no timezone option. Alpaca's bars come back as true UTC ("...T14:07:00Z" for
 // 10:07 ET), so feeding them straight in shows UTC hours on the axis while execution
-// times are already stored as ET wall-clock. Fix: shift bar timestamps by the market's
-// UTC offset so the "UTC" the library reads back out is actually ET. Hardcoded to EDT
-// (UTC-4) for now, matching the rest of this file — no winter DST handling yet.
+// execution times are stored in Schwab broker Central time. Bars are shifted by the market's
+// UTC offset so the "UTC" the library reads back out is actually ET. Execution markers
+// are normalized CT→ET with DST awareness in tradeTime.js. Bars still use the requested
+// trade date's current intraday convention here.
 const ET_UTC_OFFSET_SEC = 4 * 3600;
 
 const toTs = (isoUtcStr) => Math.floor(new Date(isoUtcStr).getTime() / 1000) - ET_UTC_OFFSET_SEC;
@@ -44,19 +46,6 @@ const toTs = (isoUtcStr) => Math.floor(new Date(isoUtcStr).getTime() / 1000) - E
 // Daily/weekly bars are stamped at session open, already whole calendar days —
 // no ET/UTC shift needed there, just a straight epoch conversion.
 const toDayTs = (isoUtcStr) => Math.floor(new Date(isoUtcStr).getTime() / 1000);
-
-const execToTs = (dateStr, timeStr, bucketMin = 5) => {
-  if (!timeStr) return null;
-  const [h, m] = timeStr.slice(0, 5).split(':').map(Number);
-  const totalMin = Math.floor((h * 60 + m) / bucketMin) * bucketMin;
-  const rh = Math.floor(totalMin / 60);
-  const rm = totalMin % 60;
-  // Already ET wall-clock — parse as literal UTC so it lands in the same shifted
-  // timeline as toTs() above, instead of applying the offset a second time.
-  return Math.floor(
-    new Date(`${dateStr}T${String(rh).padStart(2, '0')}:${String(rm).padStart(2, '0')}:00Z`).getTime() / 1000
-  );
-};
 
 const avgPrice = (fills) => {
   const qty = fills.reduce((s, f) => s + (f.qty || 0), 0);
@@ -376,7 +365,7 @@ export default function TradingChart({
       const markers = executions
         .filter(f => f.time)
         .map(f => {
-          const ts = execToTs(date, f.time, bucketMin);
+          const ts = executionToChartTs(f.date || date, f.time, bucketMin);
           if (!ts) return null;
           const isBuy = f.action === 'BOT';
           return {
