@@ -310,7 +310,7 @@ export function DailyPnlBars({ days, height = 190, onPick }) {
 
 export function TimeOfDayBars({ rows, timezone = 'CT' }) {
   const [hover, setHover] = useState(null);
-  const data = rows || [];
+  const data = useMemo(() => rows || [], [rows]);
   const peak = useMemo(
     () => Math.max(1, ...data.map((d) => Math.abs(Number(d.net_pnl) || 0))),
     [data],
