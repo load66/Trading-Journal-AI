@@ -1083,3 +1083,23 @@ button.month-card:active { transform: translateY(1px); }
   color: #cbd5e1;
   cursor: pointer;
 }
+
+.login-notice {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(34, 197, 94, .12);
+  color: #86efac;
+  font-size: 13px;
+}
+.login-card .login-link {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  color: #a5b4fc;
+  border: 1px solid transparent;
+  font-weight: 600;
+}
+.login-card .login-link:hover {
+  color: #c7d2fe;
+  background: rgba(99, 102, 241, .08);
+}
