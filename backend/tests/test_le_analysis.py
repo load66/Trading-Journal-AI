@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from le_analysis import analyze_context, market_direction, _le_json_schema
+from le_analysis import analyze_context, entry_datetime, market_direction, _le_json_schema
 
 
 ET = ZoneInfo("America/New_York")
@@ -29,7 +29,7 @@ def minute_run(day, start_h, start_m, minutes, price, high=None, low=None):
     return rows
 
 
-def base_trade(option_type="CALL", entry="09:47:04", pnl=100.0):
+def base_trade(option_type="CALL", entry="08:47:04", pnl=100.0):
     return {
         "ticker": "TEST",
         "date": "2026-09-25",
@@ -47,7 +47,7 @@ def base_trade(option_type="CALL", entry="09:47:04", pnl=100.0):
             },
             {
                 "date": "2026-09-25",
-                "time": "10:00:00",
+                "time": "09:00:00",
                 "action": "SOLD",
                 "qty": 1,
                 "price": 1.1,
@@ -78,6 +78,22 @@ def tag_names(review):
 def test_option_direction_uses_contract_type_not_long_ownership():
     assert market_direction(base_trade("CALL")) == "bullish"
     assert market_direction(base_trade("PUT")) == "bearish"
+
+
+def test_execution_time_is_converted_from_central_to_eastern():
+    dt = entry_datetime(base_trade("CALL", entry="08:47:04"))
+    assert dt is not None
+    assert dt.hour == 9
+    assert dt.minute == 47
+    assert dt.tzinfo == ET
+
+
+def test_entry_snapshot_uses_only_completed_one_minute_bar():
+    bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    # 08:47:04 CT == 09:47:04 ET. Add a 09:47 ET bar with an impossible future close.
+    bars.append(bar(datetime(2026, 9, 25, 9, 47, tzinfo=ET), 102.0, 150.0, 90.0, 149.0))
+    review = analyze_context(base_trade("CALL", entry="08:47:04"), bars, bars, bars)
+    assert review["evidence"]["underlying_price_last_completed_1m"] == 102.0
 
 
 def test_outside_day_requires_both_directional_levels_before_entry():
@@ -117,7 +133,7 @@ def test_chop_and_no_level_break_are_proven_without_ai():
 
 def test_first_ten_minutes_is_a_deterministic_violation_tag():
     bars = market_bars(current=102.0)
-    review = analyze_context(base_trade("CALL", entry="09:35:00"), bars, bars, bars)
+    review = analyze_context(base_trade("CALL", entry="08:35:00"), bars, bars, bars)
     assert ("mistake", "Entered First 10m") in tag_names(review)
 
 
