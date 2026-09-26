@@ -293,10 +293,86 @@ summary:focus-visible {
   .app-nav-item { min-height: 42px; }
 }
 @media (max-width: 720px) {
-  .app-header-inner { padding: var(--space-2) var(--space-4) 0; column-gap: var(--space-3); }
-  .app-brand img { height: 38px; }
-  .app-nav { gap: 0; }
-  .app-nav-item { padding: 0 10px; font-size: 14px; }
+  :root { --sticky-offset: 104px; }
+
+  .app-header {
+    box-shadow: 0 1px 0 var(--edge-shadow), 0 8px 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .app-header-inner {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "brand actions" "nav nav";
+    min-height: 0;
+    padding:
+      8px max(12px, env(safe-area-inset-right))
+      0 max(12px, env(safe-area-inset-left));
+    column-gap: 8px;
+    row-gap: 5px;
+  }
+
+  .app-brand { padding: 2px; }
+  .app-brand img { height: 34px; }
+
+  .app-actions {
+    min-width: 0;
+    gap: 4px;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+  .app-actions > .btn {
+    flex: 0 0 auto;
+    min-width: 38px;
+    min-height: 36px;
+    padding: 0 9px;
+    justify-content: center;
+  }
+  .app-actions .action-label { display: none; }
+  .app-actions .mobile-add-trade { min-width: 40px; }
+
+  .acct { min-width: 0; }
+  .acct-trigger {
+    min-height: 36px;
+    max-width: min(132px, 34vw);
+    padding: 0 9px;
+    gap: 6px;
+    font-size: 13px;
+  }
+  .acct-menu {
+    position: fixed;
+    top: 58px;
+    right: 12px;
+    width: min(320px, calc(100vw - 24px));
+    max-height: calc(100dvh - 82px);
+    overflow-y: auto;
+  }
+
+  .app-nav {
+    gap: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    border-top: 1px solid var(--divider-soft);
+    margin: 0 -12px;
+    padding: 1px 12px 0;
+  }
+  .app-nav::-webkit-scrollbar { display: none; }
+  .app-nav-item {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 0 12px;
+    gap: 6px;
+    font-size: 13px;
+    scroll-snap-align: start;
+  }
+  .app-nav-item.active::after {
+    left: 10px;
+    right: 10px;
+    height: 2px;
+  }
 }
 
 .app-main {
@@ -304,7 +380,14 @@ summary:focus-visible {
   max-width: 1920px;
   margin: 0 auto;
 }
-@media (max-width: 720px) { .app-main { padding: var(--space-4) var(--space-4) 96px; } }
+@media (max-width: 720px) {
+  .app-main {
+    padding:
+      12px max(12px, env(safe-area-inset-right))
+      calc(80px + env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
+}
 
 /* ---- Account selector (header) ---- */
 .acct { position: relative; }

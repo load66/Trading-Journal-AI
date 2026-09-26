@@ -90,9 +90,6 @@ function JournalApp({ onSignOut }) {
 
   return (
     <div className="app-shell">
-      {onSignOut && (
-        <button className="auth-signout" type="button" onClick={onSignOut}>Sign out</button>
-      )}
       <AppHeader
         page={page}
         onNavigate={navigate}
@@ -103,6 +100,7 @@ function JournalApp({ onSignOut }) {
         onAccountCreated={loadAccounts}
         brainOpen={brainOpen}
         onToggleBrain={() => setBrainOpen(v => !v)}
+        onSignOut={onSignOut}
       />
 
       <main className="app-main" id="main">
