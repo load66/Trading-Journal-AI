@@ -15,13 +15,17 @@ import Reports from './components/Reports';
 import Help from './components/Help';
 import Settings from './components/Settings';
 import Login from './components/Login';
+import PasswordReset from './components/PasswordReset';
 import {
   AUTH_CHANGED_EVENT,
   authConfigured,
   authRequired,
   clearSession,
+  consumePasswordRecoveryCallback,
   getSession,
+  requestPasswordReset,
   signInWithPassword,
+  updatePassword,
 } from './auth';
 
 function JournalApp({ onSignOut }) {
@@ -176,9 +180,17 @@ function JournalApp({ onSignOut }) {
 export default function App() {
   const required = authRequired();
   const [session, setSession] = useState(() => getSession());
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   useEffect(() => {
     if (!required) return undefined;
+
+    const recoverySession = consumePasswordRecoveryCallback();
+    if (recoverySession) {
+      setSession(recoverySession);
+      setPasswordRecovery(true);
+    }
+
     const sync = () => setSession(getSession());
     window.addEventListener(AUTH_CHANGED_EVENT, sync);
     return () => window.removeEventListener(AUTH_CHANGED_EVENT, sync);
@@ -195,11 +207,33 @@ export default function App() {
       </main>
     );
   }
+  if (passwordRecovery && session?.access_token) {
+    return (
+      <PasswordReset
+        onUpdatePassword={async (password) => {
+          await updatePassword(password);
+          setPasswordRecovery(false);
+          setSession(getSession());
+        }}
+        onCancel={() => {
+          clearSession();
+          setSession(null);
+          setPasswordRecovery(false);
+        }}
+      />
+    );
+  }
+
   if (!session?.access_token) {
-    return <Login onSignIn={async (email, password) => {
-      const next = await signInWithPassword(email, password);
-      setSession(next);
-    }} />;
+    return (
+      <Login
+        onSignIn={async (email, password) => {
+          const next = await signInWithPassword(email, password);
+          setSession(next);
+        }}
+        onResetPassword={requestPasswordReset}
+      />
+    );
   }
 
   return <JournalApp onSignOut={() => {

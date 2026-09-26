@@ -26,14 +26,17 @@ function saveSession(session) {
   return stored;
 }
 
-async function authRequest(path, body) {
+async function authRequest(path, body, { method = 'POST', accessToken = '' } = {}) {
   if (!authConfigured()) throw new Error('Authentication is not configured');
+  const headers = {
+    apikey: publishableKey(),
+    'Content-Type': 'application/json',
+  };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
   const response = await fetch(`${supabaseUrl()}/auth/v1/${path}`, {
-    method: 'POST',
-    headers: {
-      apikey: publishableKey(),
-      'Content-Type': 'application/json',
-    },
+    method,
+    headers,
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({}));
@@ -46,6 +49,49 @@ async function authRequest(path, body) {
 export async function signInWithPassword(email, password) {
   const session = await authRequest('token?grant_type=password', { email, password });
   return saveSession(session);
+}
+
+export function getPasswordRecoveryRedirectUrl() {
+  const publicPath = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+  return `${window.location.origin}${publicPath}/`;
+}
+
+export async function requestPasswordReset(email) {
+  const redirectTo = getPasswordRecoveryRedirectUrl();
+  await authRequest(`recover?redirect_to=${encodeURIComponent(redirectTo)}`, { email });
+}
+
+export function consumePasswordRecoveryCallback() {
+  const hash = window.location.hash || '';
+  if (!hash.startsWith('#')) return null;
+
+  const params = new URLSearchParams(hash.slice(1));
+  if (params.get('type') !== 'recovery') return null;
+
+  const accessToken = params.get('access_token');
+  const refreshToken = params.get('refresh_token');
+  if (!accessToken || !refreshToken) return null;
+
+  const session = saveSession({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    token_type: params.get('token_type') || 'bearer',
+    expires_in: Number(params.get('expires_in') || 3600),
+  });
+
+  const cleanUrl = `${window.location.pathname}${window.location.search}`;
+  window.history.replaceState({}, document.title, cleanUrl);
+  return session;
+}
+
+export async function updatePassword(password) {
+  const session = readSession();
+  if (!session?.access_token) throw new Error('Password recovery session has expired');
+  await authRequest('user', { password }, {
+    method: 'PUT',
+    accessToken: session.access_token,
+  });
+  return session;
 }
 
 async function refreshSession(session) {
