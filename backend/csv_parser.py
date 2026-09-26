@@ -1566,12 +1566,14 @@ def parse_generic_csv(content, account_id, conn=None):
 
 BROKER_PARSERS = {
     'thinkorswim': parse_thinkorswim_csv,
+    'schwab_transactions': parse_schwab_transactions_csv,
     'ibkr': parse_ibkr_csv,
     'generic': parse_generic_csv,
 }
 
 BROKER_LABELS = {
-    'thinkorswim': 'Thinkorswim',
+    'thinkorswim': 'Thinkorswim account statement',
+    'schwab_transactions': 'Schwab transaction history',
     'ibkr': 'Interactive Brokers',
     'generic': 'the generic template',
 }
@@ -1587,6 +1589,18 @@ def detect_broker(content: str) -> str | None:
     if 'DataDiscriminator' in content and re.search(r'^[\w /&-]+,(Header|Data),', head, re.MULTILINE):
         return 'ibkr'
     upper = head.upper()
+    first_csv = next(
+        (row for row in csv.reader(io.StringIO(head)) if any(x.strip() for x in row)),
+        [],
+    )
+    normalized_header = {
+        re.sub(r'[^A-Z0-9]+', ' ', x.strip().upper()).strip()
+        for x in first_csv
+    }
+    if {'DATE', 'DESCRIPTION', 'AMOUNT'}.issubset(normalized_header) and (
+        'REF NUM' in normalized_header or 'REF' in normalized_header
+    ):
+        return 'schwab_transactions'
     if ('CASH BALANCE' in upper or 'ACCOUNT STATEMENT' in upper
             or 'ACCOUNT TRADE HISTORY' in upper or 'FUTURES STATEMENTS' in upper):
         return 'thinkorswim'
@@ -1611,8 +1625,8 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> t
         if not detected:
             raise ValueError(
                 "Could not recognise this CSV. Pick the broker from the dropdown, "
-                "export an account statement from Thinkorswim or an Activity "
-                "Statement from Interactive Brokers, or copy your fills into the "
+                "export a Thinkorswim account statement, Schwab transaction-history CSV, "
+                "or IBKR Activity Statement, or copy your fills into the "
                 "generic template (Import page, 'Broker not listed?')."
             )
         key = detected
