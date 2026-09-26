@@ -168,6 +168,7 @@ jest.mock('./api', () => {
       addExecution: fn(() => ok({})),
       getAnalysis: fn(() => ok(null)),
       getLeReview: fn(() => ok({ available: false, reason: 'No LE review in tests', data_warnings: [] })),
+      getLeLevels: fn(() => ok({ available: true, levels: {}, feed: 'sip', warnings: [] })),
       getAnalysisOptions: fn(() => ok({ strategies: [], idea_sources: [] })),
       listCustomSetups: fn(() => ok([])),
     }),
