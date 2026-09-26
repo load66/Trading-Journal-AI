@@ -140,3 +140,50 @@ def test_production_500_response_is_sanitized(monkeypatch, tmp_path):
     assert response.status_code == 500
     assert payload == {"error": "Internal server error"}
     assert "password" not in response.body.decode().lower()
+
+
+def test_cors_preflight_is_not_blocked_by_auth(monkeypatch, tmp_path):
+    main = fresh_main(
+        monkeypatch,
+        tmp_path,
+        AUTH_REQUIRED="true",
+        SUPABASE_URL="https://project.supabase.co",
+        AUTHORIZED_USER_ID="owner-uuid",
+        FRONTEND_ORIGINS="https://load66.github.io",
+    )
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(main.app) as client:
+        response = client.options(
+            "/api/accounts",
+            headers={
+                "Origin": "https://load66.github.io",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://load66.github.io"
+
+
+def test_non_preflight_api_request_still_requires_auth(monkeypatch, tmp_path):
+    main = fresh_main(
+        monkeypatch,
+        tmp_path,
+        AUTH_REQUIRED="true",
+        SUPABASE_URL="https://project.supabase.co",
+        AUTHORIZED_USER_ID="owner-uuid",
+        FRONTEND_ORIGINS="https://load66.github.io",
+    )
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/accounts",
+            headers={"Origin": "https://load66.github.io"},
+        )
+
+    assert response.status_code == 401
