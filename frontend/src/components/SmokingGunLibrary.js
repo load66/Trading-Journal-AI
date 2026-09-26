@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { smokingGunLibraryApi } from '../api';
 import { PanelHead } from './ui';
+import SmokingGunSavedReport from './SmokingGunSavedReport';
 
 const fmt$ = (value) => {
   if (value == null || Number.isNaN(Number(value))) return '—';
@@ -36,8 +37,10 @@ const downloadBlob = (blob, filename) => {
   window.URL.revokeObjectURL(url);
 };
 
-export default function SmokingGunLibrary({ accountId, onOpen }) {
+export default function SmokingGunLibrary({ accountId }) {
   const [reports, setReports] = useState([]);
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [confirmId, setConfirmId] = useState(null);
@@ -62,6 +65,19 @@ export default function SmokingGunLibrary({ accountId, onOpen }) {
   }, [accountId]);
 
   useEffect(() => load(), [load]);
+
+  const handleOpen = async (reportId) => {
+    try {
+      setDetailLoading(true);
+      setError('');
+      const response = await smokingGunLibraryApi.get(reportId);
+      setSelectedReport(response.data);
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || 'Could not open saved report.');
+    } finally {
+      setDetailLoading(false);
+    }
+  };
 
   const handleDownload = async (report, kind) => {
     try {
@@ -94,6 +110,21 @@ export default function SmokingGunLibrary({ accountId, onOpen }) {
       setBusyId(null);
     }
   };
+
+  if (detailLoading) {
+    return <div className="skeleton" style={{ height: 420 }} aria-label="Loading saved Smoking Gun report" />;
+  }
+
+  if (selectedReport) {
+    return (
+      <SmokingGunSavedReport
+        report={selectedReport}
+        onBack={() => setSelectedReport(null)}
+        onDownloadHtml={() => handleDownload(selectedReport, 'html')}
+        onDownloadLedger={() => handleDownload(selectedReport, 'csv')}
+      />
+    );
+  }
 
   return (
     <section className="card" aria-label="Smoking Gun Report Library">
@@ -148,7 +179,7 @@ export default function SmokingGunLibrary({ accountId, onOpen }) {
               </div>
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
-                <button type="button" className="btn btn-primary" onClick={() => onOpen?.(report.id)}>
+                <button type="button" className="btn btn-primary" onClick={() => handleOpen(report.id)}>
                   Open Report
                 </button>
                 <button
