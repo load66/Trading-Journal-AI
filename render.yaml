@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: trading-journal-ai-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: AUTH_REQUIRED
+        value: "true"
+      - key: DATABASE_MODE
+        value: turso
+      - key: STORAGE_MODE
+        value: supabase
+      - key: FRONTEND_ORIGINS
+        value: https://load66.github.io
+      - key: SUPABASE_URL
+        sync: false
+      - key: AUTHORIZED_USER_ID
+        sync: false
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: diary
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APCA_API_KEY_ID
+        sync: false
+      - key: APCA_API_SECRET_KEY
+        sync: false
