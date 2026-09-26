@@ -295,3 +295,36 @@ def test_runtime_request_sql_has_no_sqlite_only_constructs():
     assert '.lastrowid' not in source
     assert 'INSERT OR REPLACE' not in source
     assert "datetime('now')" not in source
+    assert "strftime('%Y', date)" not in source
+    assert 'except sqlite3.IntegrityError' not in source
+
+
+def test_year_filter_clause_is_portable_for_iso_text_dates():
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.execute('CREATE TABLE trades (date TEXT NOT NULL)')
+    conn.executemany(
+        'INSERT INTO trades(date) VALUES (?)',
+        [('2025-12-31',), ('2026-01-02',), ('2026-09-26',)],
+    )
+
+    rows = conn.execute(
+        f"SELECT date FROM trades WHERE {database.year_filter_clause('date')}",
+        ('2026',),
+    ).fetchall()
+
+    assert [row['date'] for row in rows] == ['2026-01-02', '2026-09-26']
+
+
+def test_integrity_error_detection_supports_sqlite_and_psycopg(monkeypatch):
+    assert database.is_integrity_error(sqlite3.IntegrityError('duplicate')) is True
+
+    class FakePostgresIntegrityError(Exception):
+        pass
+
+    class FakePsycopg:
+        IntegrityError = FakePostgresIntegrityError
+
+    monkeypatch.setitem(sys.modules, 'psycopg', FakePsycopg)
+    assert database.is_integrity_error(FakePostgresIntegrityError('duplicate')) is True
+    assert database.is_integrity_error(ValueError('other')) is False
