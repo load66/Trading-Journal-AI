@@ -47,6 +47,15 @@ def test_qcom_trim_sequence_and_runner_are_preserved():
     assert len(execs) == 10
     assert sum(e["qty"] for e in execs if e["action"] == "BOT") == 10
     assert sum(e["qty"] for e in execs if e["action"] == "SOLD") == 10
+    # Schwab's file is reverse chronological. When two fills share the same
+    # minute + Ref Num, source-row order must be reversed for chronological display.
+    assert execs[6]["time"] == "10:03:00"
+    assert execs[6]["price"] == 1.23
+    assert execs[7]["time"] == "10:03:00"
+    assert execs[7]["price"] == 1.24
+    assert execs[6]["source_ref"] == execs[7]["source_ref"] == "1008066079018"
+    assert execs[6]["source_row"] > execs[7]["source_row"]
+
     assert execs[-1]["price"] == 2.11
     assert execs[-1]["source_ref"] == "1008066079460"
     assert execs[-1]["timestamp_precision"] == "minute"

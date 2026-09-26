@@ -438,6 +438,8 @@ def aggregate_executions(fills: list[dict]) -> dict:
         }
         if f.get('source_ref'):
             item['source_ref'] = str(f.get('source_ref'))
+        if f.get('source_row') is not None:
+            item['source_row'] = int(f.get('source_row'))
         if f.get('timestamp_precision'):
             item['timestamp_precision'] = f.get('timestamp_precision')
         execs.append(item)
@@ -597,6 +599,7 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
             'commission': abs(misc_fees) + abs(commissions),
             'raw_description': desc,
             'source_ref': source_ref,
+            'source_row': line_no,
             'timestamp_precision': 'minute',
         })
         executions.append(parsed)
@@ -756,11 +759,20 @@ def _make_group_meta(date_str: str, ticker: str, instr: str, fills: list[dict]) 
 
 
 def _source_sequence(ex: dict):
-    """Broker sequence used only to order fills that share the same minute."""
+    """Broker sequence used only to order fills that share the same minute.
+
+    Schwab transaction-history exports are reverse chronological. Ref Num is
+    normally monotonic and gives the correct chronological order when seconds
+    are unavailable. When Schwab reuses the same Ref Num for multiple fills in
+    the same minute, the later CSV row is the earlier chronological fill, so
+    source_row is reversed only as the final tie-breaker.
+    """
     raw = str(ex.get('source_ref') or '').strip()
+    source_row = ex.get('source_row')
+    reverse_row = -int(source_row) if source_row is not None else 0
     if raw.isdigit():
-        return (0, int(raw))
-    return (1, raw)
+        return (0, int(raw), reverse_row)
+    return (1, raw, reverse_row)
 
 
 def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
