@@ -17,7 +17,7 @@ This revision replaces the previously selected Turso production database with **
 2. Hosted users must authenticate with the pre-created Supabase email/password account.
 3. FastAPI rejects missing, invalid, expired, wrong-project, or wrong-user access tokens.
 4. Local development continues to use SQLite with no cloud credentials unless hosted mode is explicitly enabled.
-5. Hosted trading data persists in Supabase Postgres and survives Render restarts/spin-downs.
+5. Hosted trading data persists in Supabase Postgres and survives Railway restarts/redeploys.
 6. Diary images persist in the private Supabase `diary` bucket.
 7. Trading tables are not exposed for browser CRUD; FastAPI remains the application data boundary.
 8. Supabase, Anthropic, Alpaca, and database credentials never enter the browser bundle or Git repository.
@@ -37,7 +37,7 @@ GitHub repository
                                   | Supabase email/password session
                                   | Authorization: Bearer <access token>
                                   v
-                              Render Free
+                              Railway
                               FastAPI API
                                /       \
                               /         \
@@ -103,7 +103,7 @@ Hosted configuration uses one server-side connection string:
 
 - `DATABASE_URL`
 
-For Render/free hosting, use the **Supavisor session-mode connection string** when the runtime network is IPv4-only. Supabase currently recommends session mode for persistent IPv4 application backends. Direct connections remain suitable where IPv6 is available.
+For Railway hosting, use the **Supavisor session-mode connection string** when the runtime network is IPv4-only. Supabase currently recommends session mode for persistent IPv4 application backends. Direct connections remain suitable where IPv6 is available.
 
 The backend must never silently fall back to local SQLite when `DATABASE_MODE=postgres`.
 
@@ -170,21 +170,25 @@ The Supabase secret key is backend-only.
 
 Files are retrieved through authenticated FastAPI routes. The bucket stays private.
 
-### Render backend
+### Railway backend
 
-Render runs stateless FastAPI.
+Railway runs the stateless FastAPI backend in **US East (Virginia / IAD)**, geographically aligned with the Supabase project.
 
-The Blueprint must:
+The Railway service:
 
-- set `APP_ENV=production`;
-- set `AUTH_REQUIRED=true`;
-- set `DATABASE_MODE=postgres`;
-- set `STORAGE_MODE=supabase`;
-- request `DATABASE_URL` instead of Turso variables;
-- keep all secret values outside source control;
-- deploy only after CI checks pass.
+- deploys from `feature/web-deployment-v1` until PR #1 is merged, then follows `main`;
+- uses `/backend` as the service root;
+- starts with `uvicorn main:app --host 0.0.0.0 --port $PORT`;
+- checks `/health`;
+- uses restart-on-failure with bounded retries;
+- keeps application sleeping disabled for reliability;
+- sets `APP_ENV=production`, `AUTH_REQUIRED=true`, `DATABASE_MODE=postgres`, and `STORAGE_MODE=supabase`;
+- stores `DATABASE_URL` and `SUPABASE_SECRET_KEY` only as Railway environment secrets;
+- deploys the backend independently from the GitHub Pages frontend.
 
-The backend must not depend on Render's filesystem for durable database or diary data.
+The backend does not depend on Railway's filesystem for durable database or diary data. Supabase owns all durable production state.
+
+Railway was selected over the previous Render proposal because it provides a direct ChatGPT integration for deployments, configuration, logs, domains, and troubleshooting while remaining fully compatible with the Supabase architecture.
 
 ## Production schema migration strategy
 
@@ -198,7 +202,7 @@ Implementation sequence:
 4. enable RLS and revoke browser-role table access;
 5. run Supabase security/performance advisors;
 6. run test queries through the Supabase connector;
-7. only then configure Render to use the Postgres connection string.
+7. only then configure Railway to use the Postgres connection string.
 
 Existing local SQLite files are not automatically uploaded. A separate import/migration utility can be added later if historical local journal data needs to be transferred.
 
@@ -265,8 +269,8 @@ Already provisioned in Supabase:
 
 Still needed after code/schema work:
 
-1. obtain/configure the server-side Supabase Postgres connection string in Render;
-2. configure remaining Render secrets;
+1. configure the server-side Supabase Postgres connection string in Railway;
+2. configure remaining Railway secrets;
 3. add GitHub Pages public variables;
 4. merge PR only after full verification;
 5. verify the live site and persistence.

@@ -6,7 +6,7 @@
 
 **Architecture:** Local development stays on SQLite. Hosted FastAPI uses a server-side psycopg connection to Supabase Postgres with `journal` as a private application schema. A focused DB-API compatibility layer preserves the application's existing qmark-parameter SQL and mapping-row expectations, while production schema DDL is owned by a versioned Supabase migration rather than being created ad hoc at runtime.
 
-**Tech Stack:** Python 3, FastAPI, sqlite3, psycopg 3, Supabase Postgres/Supavisor, Supabase MCP, pytest, GitHub Actions, Render.
+**Tech Stack:** Python 3, FastAPI, sqlite3, psycopg 3, Supabase Postgres/Supavisor, Supabase MCP, pytest, GitHub Actions, Railway.
 
 **Spec:** `docs/superpowers/specs/2026-09-26-web-deployment-v1-design.md`
 
@@ -14,7 +14,7 @@
 
 - Local development must continue to work with `DATABASE_MODE=sqlite` and no cloud database credentials.
 - Hosted mode uses `DATABASE_MODE=postgres` and one server-side `DATABASE_URL`; it must never fall back to local SQLite.
-- Render should use Supavisor **session mode** when an IPv4-compatible persistent backend connection is required.
+- Railway should use Supavisor **session mode** when an IPv4-compatible persistent backend connection is required.
 - No database password or connection string may enter the React bundle or Git repository.
 - FastAPI remains the only application CRUD boundary; browser roles do not receive direct trading-table CRUD access.
 - All application tables in Supabase live in the private `journal` schema, have RLS enabled as defense in depth, and are not exposed through permissive browser policies.
@@ -178,10 +178,10 @@
   - In one SQL transaction: insert a temporary account/trade using the production schema, select it back, then roll back.
   - Confirm the rows are absent after rollback.
 
-### Task 4: Replace Turso deployment configuration with Supabase Postgres
+### Task 4: Replace obsolete provider configuration with Railway + Supabase Postgres
 
 **Files:**
-- Modify: `render.yaml`
+- Delete: `render.yaml`
 - Modify: `.env.example`
 - Modify: `docs/deployment.md`
 - Modify: `README.md`
@@ -192,7 +192,7 @@
 - Produces: one hosted DB secret, `DATABASE_URL`, and current deployment documentation.
 - Consumes: existing Supabase Auth/Storage values and Task 3's migrated schema.
 
-- [ ] **Step 1: Update Render Blueprint**
+- [ ] **Step 1: Update Railway service configuration**
   - Set `DATABASE_MODE=postgres`.
   - Replace Turso variables with one secret `DATABASE_URL`.
   - Preserve `AUTH_REQUIRED=true`, `STORAGE_MODE=supabase`, CORS origin, and existing backend-only secrets.
@@ -205,8 +205,8 @@
 - [ ] **Step 3: Rewrite deployment runbook**
   - Remove the Turso provisioning step entirely.
   - Document Supabase Postgres session-pooler connection for an IPv4 persistent backend.
-  - Explicitly say the database password/URL is a Render secret and must never be placed in a `REACT_APP_*` variable.
-  - Preserve the existing Auth, private Storage, Render, and GitHub Pages steps.
+  - Explicitly say the database password/URL is a Railway secret and must never be placed in a `REACT_APP_*` variable.
+  - Preserve the existing Auth, private Storage, Railway, and GitHub Pages steps.
 
 - [ ] **Step 4: Update PR #1 description**
   - State that production persistence is Supabase Postgres, not Turso.
@@ -253,5 +253,5 @@
 - [ ] **Step 7: Fresh CI evidence**
   - Push final fixes and require current-head backend + frontend CI to pass before marking the PR ready.
 
-- [ ] **Step 8: Do not merge yet if Render/GitHub variables are not provisioned**
+- [ ] **Step 8: Do not merge yet if Railway/GitHub variables are not provisioned**
   - Keep PR draft until `DATABASE_URL` and other deployment secrets/public variables are ready so a main-branch Pages deployment cannot publish a broken hosted app.

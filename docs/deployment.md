@@ -5,7 +5,7 @@ This runbook provisions the private, free-first hosted version of Trading Journa
 ## Architecture
 
 - GitHub Pages: React frontend
-- Render Free: stateless FastAPI API
+- Railway: stateless FastAPI API (US East)
 - Supabase Auth: single-user email/password login
 - Supabase Postgres: durable trading database in the private `journal` schema
 - Supabase Storage: private diary files
@@ -25,13 +25,13 @@ The hosted app uses one Supabase project for authentication, Postgres, and priva
 7. Record:
    - project URL -> `SUPABASE_URL`
    - browser publishable key -> GitHub variable `REACT_APP_SUPABASE_PUBLISHABLE_KEY`
-   - secret key -> Render secret `SUPABASE_SECRET_KEY`
+   - secret key -> Railway secret `SUPABASE_SECRET_KEY`
 
 The Supabase secret key is server-only. Never place it in GitHub Pages variables or any `REACT_APP_*` value.
 
-### Postgres connection for Render
+### Postgres connection for Railway
 
-The backend connects directly to Postgres with psycopg. Set Render's `DATABASE_URL` to a Supabase Postgres connection string.
+The backend connects directly to Postgres with psycopg. Set Railway's `DATABASE_URL` to a Supabase Postgres connection string.
 
 For a persistent backend that needs IPv4 connectivity, use the **Supavisor session-mode** connection from the Supabase **Connect** panel. Its shape is:
 
@@ -41,11 +41,22 @@ postgresql://postgres.<project-ref>:<database-password>@<session-pooler-host>:54
 
 The exact connection string and database password are secrets. Enter them directly in Render; never paste them into frontend variables or commit them.
 
-## 2. Render
+## 2. Railway
 
-Create/deploy the repository using the root `render.yaml` Blueprint.
+The Railway project is `trading-journal-ai` with service `api`.
 
-Set the secret values requested by the Blueprint:
+Production service configuration:
+
+- repository: `load66/Trading-Journal-AI`
+- service root: `/backend`
+- deployment branch: `feature/web-deployment-v1` until PR #1 is merged
+- region: US East / Virginia (`iad`)
+- start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+- health check: `/health`
+- restart policy: on failure, bounded retries
+- application sleeping: disabled
+
+Required Railway variables:
 
 - `SUPABASE_URL`
 - `AUTHORIZED_USER_ID`
@@ -54,7 +65,7 @@ Set the secret values requested by the Blueprint:
 - `ANTHROPIC_API_KEY` if Brain/AI features are wanted
 - `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` if market charts are wanted
 
-The Blueprint sets production mode, authentication required, Postgres database mode, Supabase storage mode, the private bucket name, and the GitHub Pages CORS origin.
+Railway stores server-only credentials in its environment-variable manager. Never commit them to GitHub or place them in any `REACT_APP_*` variable.
 
 After deploy:
 
@@ -67,7 +78,7 @@ After deploy:
 
 In repository Actions variables, set these public build-time values:
 
-- `REACT_APP_API_URL` = the Render HTTPS service URL
+- `REACT_APP_API_URL` = `https://api-production-00f74.up.railway.app`
 - `REACT_APP_SUPABASE_URL` = the Supabase project URL
 - `REACT_APP_SUPABASE_PUBLISHABLE_KEY` = the Supabase browser publishable key
 
@@ -98,12 +109,12 @@ Before considering the hosted journal ready:
 - the owner can sign in and load accounts;
 - refresh preserves the session;
 - Sign out returns to login;
-- a trade created online remains after a Render restart/spin-down;
-- a diary image remains available after a Render restart/spin-down;
+- a trade created online remains after a Railway restart/redeploy;
+- a diary image remains available after a Railway restart/redeploy;
 - Supabase `journal` tables retain RLS and no direct `anon`/`authenticated` grants;
 - localhost still works with cloud variables absent;
 - no real credentials exist in tracked repository files.
 
 ## Upgrade path
 
-The frontend/API contracts do not depend on the free hosting tier. Render can be upgraded to always-on compute without changing the application. Supabase can be upgraded independently without changing the FastAPI API contract.
+The frontend/API contracts do not depend on the free hosting tier. Railway and Supabase can be scaled independently without changing the frontend/API contract. Railway remains stateless; Supabase remains the durable system of record.
