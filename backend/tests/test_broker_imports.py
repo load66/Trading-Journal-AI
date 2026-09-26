@@ -19,6 +19,15 @@ from csv_parser import detect_broker, parse_broker_csv  # noqa: E402
 SCRIPTS = BACKEND.parent / "scripts"
 
 
+SCHWAB_SAMPLE = """Date,Type,Description,Ref Num,Misc Fees,Commissions,Amount,Balance
+9/25/26 10:01 AM,TRD,SOLD -1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @2.00 CBOE,1003,-0.01,-0.50,$200.00,$1000.00
+9/25/26 10:00 AM,TRD,SOLD -1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @1.50 CBOE,1002,-0.01,-0.50,$150.00,$800.00
+9/25/26 10:00 AM,TRD,BOT +1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @1.00 CBOE,1001,-0.01,-0.50,($100.00),$650.00
+9/25/26 10:00 AM,TRD,BOT +1 QCOM 100 (Weeklys) 25 SEP 26 170 CALL @1.00 CBOE,1001,-0.01,-0.50,($100.00),$750.00
+9/25/26 9:59 AM,CDB,Tfr TEST,999,0.00,0.00,$1.00,$850.00
+"""
+
+
 def read(name):
     return (SCRIPTS / name).read_text(encoding="utf-8-sig")
 
@@ -41,9 +50,17 @@ def ibkr():
     return by_group(trades)
 
 
+@pytest.fixture(scope="module")
+def schwab():
+    trades, skipped = parse_broker_csv(SCHWAB_SAMPLE, "auto", account_id=1)
+    assert skipped == 0
+    return by_group(trades)
+
+
 def test_each_sample_is_detected_as_its_broker():
     assert detect_broker(read("sample_import.csv")) == "thinkorswim"
     assert detect_broker(read("sample_import_ibkr.csv")) == "ibkr"
+    assert detect_broker(SCHWAB_SAMPLE) == "schwab"
 
 
 def test_thinkorswim_scale_in_long(tos):
@@ -91,3 +108,22 @@ def test_ibkr_open_positions_report_no_realized_pnl(ibkr):
     t = ibkr["2026-04-30_NFLX_STOCK_2"]
     assert (t["net_pnl"], t["gross_pnl"]) == (0.0, 0.0)
     assert len(json.loads(t["executions"])) == 1
+
+
+def test_schwab_same_minute_split_fills_keep_true_order_and_multiplicity(schwab):
+    # File is newest-first and only minute precision. Ref numbers establish that
+    # both BOT fills happened before the 10:00 SOLD trim. Both identical BOT rows
+    # are legitimate fills and must survive as separate executions.
+    t = schwab["9/25/26_QCOM_OPTION_2026-09-25_170_CALL_1"]
+    executions = json.loads(t["executions"])
+    assert t["side"] == "LONG"
+    assert [(e["action"], e["qty"], e["price"]) for e in executions] == [
+        ("BOT", 1, 1.0),
+        ("BOT", 1, 1.0),
+        ("SOLD", 1, 1.5),
+        ("SOLD", 1, 2.0),
+    ]
+    assert [e["time"] for e in executions] == [
+        "10:00:00", "10:00:00", "10:00:00", "10:01:00"
+    ]
+    assert (t["gross_pnl"], t["commissions"], t["net_pnl"]) == (150.0, 2.04, 147.96)
