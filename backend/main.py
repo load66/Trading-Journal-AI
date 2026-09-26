@@ -449,11 +449,120 @@ def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None
             conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=?", (target, g))
 
 
+def _execution_dates_from_trade(trade: dict) -> set[str]:
+    try:
+        execs = json.loads(trade.get('executions') or '[]')
+    except Exception:
+        return set()
+    return {str(e.get('date') or '') for e in execs if e.get('date')}
+
+
+def _prepare_authoritative_reconcile(conn, account_id: int, incoming_trades: list[dict]) -> dict:
+    """Validate and stage a safe authoritative rebuild for dates in a broker file.
+
+    Only untouched imported rows may be replaced automatically. Manual/edited
+    rows are protected. Existing notes/tags/setups are preserved only when the
+    reconstructed trade_group remains stable; otherwise reconciliation stops
+    rather than silently detaching journal evidence from a different trade.
+    """
+    covered_dates = set()
+    for trade in incoming_trades:
+        covered_dates.update(_execution_dates_from_trade(trade))
+    if not covered_dates:
+        raise ValueError("The uploaded file did not contain dated executions to reconcile.")
+
+    rows = conn.execute(
+        """SELECT trade_group, source, executions, setup, setup_grade, setup_notes,
+                  setup_features, setup_source
+           FROM trades WHERE account_id=?""",
+        (account_id,),
+    ).fetchall()
+
+    replace_groups = []
+    overlays = {}
+    protected = []
+    partial = []
+
+    for row in rows:
+        d = dict(row)
+        try:
+            execs = json.loads(d.get('executions') or '[]')
+        except Exception:
+            execs = []
+        dates = {str(e.get('date') or '') for e in execs if e.get('date')}
+        if not (dates & covered_dates):
+            continue
+
+        source = str(d.get('source') or 'imported').lower()
+        if source != 'imported':
+            protected.append(d['trade_group'])
+            continue
+        if dates - covered_dates:
+            partial.append(d['trade_group'])
+            continue
+
+        replace_groups.append(d['trade_group'])
+        overlays[d['trade_group']] = {
+            'setup': d.get('setup'),
+            'setup_grade': d.get('setup_grade'),
+            'setup_notes': d.get('setup_notes'),
+            'setup_features': d.get('setup_features'),
+            'setup_source': d.get('setup_source'),
+        }
+
+    if protected:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Authoritative reconcile stopped because manually edited trades overlap "
+                "the uploaded dates: " + ", ".join(protected[:8])
+            ),
+        )
+    if partial:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Authoritative reconcile stopped because some stored positions cross "
+                "outside the uploaded date coverage: " + ", ".join(partial[:8])
+            ),
+        )
+
+    incoming_groups = {t['trade_group'] for t in incoming_trades}
+    disappearing = [g for g in replace_groups if g not in incoming_groups]
+    annotated = []
+    for group in disappearing:
+        has_analysis = conn.execute(
+            "SELECT 1 FROM trade_analysis WHERE trade_group=? LIMIT 1", (group,)
+        ).fetchone()
+        has_tags = conn.execute(
+            "SELECT 1 FROM trade_tags WHERE trade_group=? LIMIT 1", (group,)
+        ).fetchone()
+        overlay = overlays.get(group) or {}
+        has_setup = any(overlay.get(k) is not None for k in ('setup','setup_grade','setup_notes','setup_features'))
+        if has_analysis or has_tags or has_setup:
+            annotated.append(group)
+    if annotated:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Authoritative reconcile would change trade grouping for journaled trades. "
+                "Nothing was changed. Review these groups first: " + ", ".join(annotated[:8])
+            ),
+        )
+
+    return {
+        'covered_dates': covered_dates,
+        'replace_groups': replace_groups,
+        'overlays': overlays,
+    }
+
+
 @app.post("/api/import-csv")
 async def import_csv(
     account_id: int = Form(...),
     file: UploadFile = File(...),
-    broker: str = Form('auto'),   # 'thinkorswim' | 'ibkr' | 'auto' (sniff the file)
+    broker: str = Form('auto'),   # 'thinkorswim' | 'schwab_transactions' | 'ibkr' | 'auto'
+    reconcile: bool = Form(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     if not file.filename.lower().endswith('.csv'):
@@ -469,13 +578,35 @@ async def import_csv(
     except UnicodeDecodeError:
         content = raw.decode('latin-1')
 
-    trades, skipped = parse_broker_csv(content, broker, account_id, conn)
+    # Reconcile mode parses the file independently of existing rows so the
+    # broker export is authoritative for its covered dates. Normal mode keeps
+    # the incremental/idempotent import path.
+    trades, skipped = parse_broker_csv(
+        content, broker, account_id, None if reconcile else conn
+    )
 
     imported = 0
     errors = []
+    reconcile_state = None
 
     try:
-        _replace_regrouped_trades(conn, account_id, trades)
+        if reconcile:
+            reconcile_state = _prepare_authoritative_reconcile(conn, account_id, trades)
+            for group in reconcile_state['replace_groups']:
+                conn.execute(
+                    "DELETE FROM trades WHERE trade_group=? AND account_id=?",
+                    (group, account_id),
+                )
+            # Cached coaching must never survive a broker-truth rebuild.
+            for day in reconcile_state['covered_dates']:
+                conn.execute(
+                    "DELETE FROM daily_summaries WHERE summary_date=? AND account_id=?",
+                    (day, account_id),
+                )
+            skipped = 0
+        else:
+            _replace_regrouped_trades(conn, account_id, trades)
+
         for trade in trades:
             try:
                 conn.execute("""
@@ -500,6 +631,20 @@ async def import_csv(
                     trade['option_strike'], trade['option_type'], trade['source'],
                 ))
                 imported += 1
+                if reconcile_state:
+                    overlay = reconcile_state['overlays'].get(trade['trade_group'])
+                    if overlay and any(v is not None for v in overlay.values()):
+                        conn.execute(
+                            """UPDATE trades
+                               SET setup=?, setup_grade=?, setup_notes=?,
+                                   setup_features=?, setup_source=?
+                               WHERE trade_group=? AND account_id=?""",
+                            (
+                                overlay.get('setup'), overlay.get('setup_grade'),
+                                overlay.get('setup_notes'), overlay.get('setup_features'),
+                                overlay.get('setup_source'), trade['trade_group'], account_id,
+                            ),
+                        )
             except Exception as e:
                 errors.append({"trade_group": trade.get('trade_group'), "error": str(e)})
 
@@ -508,12 +653,19 @@ async def import_csv(
         conn.rollback()
         raise
 
+    reconciled = len(reconcile_state['replace_groups']) if reconcile_state else 0
     return {
         "imported": imported,
         "skipped": skipped,
+        "reconciled": reconciled,
+        "reconcile": reconcile,
         "errors": errors,
-        "message": (f"Imported {imported} trade group(s). "
-                    f"Skipped {skipped} duplicate execution(s)."),
+        "message": (
+            f"Reconciled {reconciled} existing imported trade group(s) and rebuilt "
+            f"{imported} authoritative trade group(s) from the broker file."
+            if reconcile else
+            f"Imported {imported} trade group(s). Skipped {skipped} duplicate execution(s)."
+        ),
     }
 
 
