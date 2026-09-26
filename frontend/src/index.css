@@ -1002,3 +1002,89 @@ button.month-card:active { transform: translateY(1px); }
     scroll-behavior: auto !important;
   }
 }
+
+
+/* ============================================================
+   Private hosted authentication
+   ============================================================ */
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background:
+    radial-gradient(circle at 50% 20%, rgba(116, 143, 245, 0.10), transparent 34rem),
+    var(--surface-page);
+}
+
+.auth-card {
+  width: min(100%, 420px);
+  padding: 30px;
+  background: var(--surface-panel);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+
+.auth-kicker {
+  margin-bottom: var(--space-2);
+  color: var(--accent-line);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.auth-card h1 {
+  margin-bottom: var(--space-2);
+  font-size: 26px;
+}
+
+.auth-copy,
+.auth-footnote {
+  color: var(--text-secondary);
+  font-size: var(--fs-small);
+}
+
+.auth-form {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+}
+
+.auth-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--fs-small);
+  font-weight: 600;
+}
+
+.auth-form input {
+  width: 100%;
+  min-height: 42px;
+}
+
+.auth-submit {
+  width: 100%;
+  min-height: 42px;
+  justify-content: center;
+}
+
+.auth-footnote {
+  margin-top: var(--space-5);
+  text-align: center;
+}
+
+.auth-session-control {
+  position: fixed;
+  z-index: 240;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  padding: 4px;
+  background: color-mix(in srgb, var(--surface-panel) 92%, transparent);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dropdown);
+  backdrop-filter: blur(8px);
+}
