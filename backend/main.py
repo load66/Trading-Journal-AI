@@ -33,11 +33,14 @@ from ai_analysis import (
     generate_brain_response,
     generate_weekly_summary,
     generate_performance_diagnosis,
+    performance_ai_is_configured,
 )
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
+from excursion_analysis import calculate_trade_excursion
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 from smoking_gun_routes import router as smoking_gun_router
+from le_analysis import build_le_levels, build_le_review
 
 load_dotenv()
 
@@ -556,6 +559,50 @@ def _is_open_position(trade: dict) -> bool:
     return entry_qty > 0 and entry_qty != exit_qty
 
 
+def _trade_pl_percent(trade: dict) -> float | None:
+    """Net P/L percentage on entry notional/premium for display purposes only.
+
+    This does not modify P&L, MFE/MAE, exit efficiency, R-multiples, or any
+    stored trade math. Options use the standard 100x contract multiplier.
+    Futures use the existing parser multiplier map when the root is known.
+    Short trades are measured against entry proceeds/notional, not margin.
+    """
+    raw = trade.get("executions") or []
+    if isinstance(raw, str):
+        try:
+            execs = json.loads(raw)
+        except Exception:
+            return None
+    else:
+        execs = raw if isinstance(raw, list) else []
+
+    side = str(trade.get("side") or "").upper()
+    entry_action = "BOT" if side == "LONG" else "SOLD"
+    entries = [e for e in execs if str(e.get("action") or "").upper() == entry_action]
+    qty = sum(float(e.get("qty") or 0) for e in entries)
+    if qty <= 0:
+        return None
+    weighted = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries)
+    avg_entry = weighted / qty if qty else None
+    if not avg_entry:
+        return None
+
+    instrument = str(trade.get("instrument_type") or "STOCK").upper()
+    multiplier = 1.0
+    if instrument == "OPTION":
+        multiplier = 100.0
+    elif instrument == "FUTURE":
+        ticker = str(trade.get("ticker") or "").upper()
+        root = next((r for r in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True) if ticker.startswith(r)), None)
+        if root:
+            multiplier = float(FUTURES_MULTIPLIERS[root])
+
+    entry_notional = abs(avg_entry * qty * multiplier)
+    if entry_notional <= 0:
+        return None
+    return round(float(trade.get("net_pnl") or 0) / entry_notional * 100, 2)
+
+
 @app.get("/api/trades")
 def list_trades(
     account_id: int | None = Query(None),
@@ -606,6 +653,7 @@ def list_trades(
             d['executions'] = []
         if open_only and not _is_open_position(d):
             continue
+        d["pl_pct"] = _trade_pl_percent(d)
         result.append(d)
 
     if limit is not None and open_only:
@@ -829,6 +877,54 @@ def get_trade_analysis(trade_group: str, conn: sqlite3.Connection = Depends(get_
     }
 
 
+@app.get("/api/trades/{trade_group:path}/le-review")
+async def get_trade_le_review(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Read-only LE evidence review.
+
+    This endpoint never writes strategy/tags automatically. It combines deterministic
+    market-data evidence with a conservative Groq suggestion when Groq is configured.
+    """
+    row = conn.execute(
+        "SELECT * FROM trades WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    trade = row_to_dict(row)
+    try:
+        trade["executions"] = json.loads(trade.get("executions") or "[]")
+    except Exception:
+        trade["executions"] = []
+
+    return await build_le_review(trade)
+
+
+@app.get("/api/trades/{trade_group:path}/le-levels")
+async def get_trade_le_levels(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Deterministic LE reference levels for chart overlays; never invokes Groq."""
+    row = conn.execute(
+        "SELECT * FROM trades WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    trade = row_to_dict(row)
+    try:
+        trade["executions"] = json.loads(trade.get("executions") or "[]")
+    except Exception:
+        trade["executions"] = []
+
+    return await build_le_levels(trade)
+
+
 class AnalysisUpdate(BaseModel):
     strategy: str | None = None
     idea_source: str | None = None
@@ -926,9 +1022,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     MAE is reported separately for winners and losers because the gap between
     them is what calibrates the stop.
     """
-    sql = ("SELECT net_pnl, mfe_pct, mae_pct, exit_efficiency FROM trades "
-           "WHERE instrument_type='STOCK' AND mfe_pct IS NOT NULL "
-           "AND net_pnl IS NOT NULL AND net_pnl <> 0")
+    sql = ("SELECT instrument_type, net_pnl, mfe_pct, mae_pct, exit_efficiency FROM trades "
+           "WHERE mfe_pct IS NOT NULL AND net_pnl IS NOT NULL AND net_pnl <> 0")
     params = []
     if account_id is not None:
         sql += " AND account_id = ?"; params.append(account_id)
@@ -961,7 +1056,27 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         "avg_mae_win": avg([r['mae_pct'] for r in wins]),
         "avg_mae_loss": avg([r['mae_pct'] for r in losses]),
         "excursion_n": len(rows),
+        "excursion_stock_n": sum(1 for r in rows if r["instrument_type"] == "STOCK"),
+        "excursion_option_n": sum(1 for r in rows if r["instrument_type"] == "OPTION"),
+        "excursion_future_n": sum(1 for r in rows if r["instrument_type"] == "FUTURE"),
+        "excursion_note": (
+            "Stocks use actual fill prices with Alpaca 1-minute highs/lows. "
+            "Options use the underlying ticker's directional 1-minute path; "
+            "futures use the configured ETF proxy."
+        ),
     }
+
+
+def _net_profit_factor(trades):
+    """Profit factor on realized after-commission P&L.
+
+    The journal's primary performance metrics are net metrics. Gross profit
+    factor may still be exposed separately, but must never be labeled simply
+    "Profit Factor" because that makes fees disappear from the risk picture.
+    """
+    win_pnl = sum((t.get("net_pnl") or 0) for t in trades if (t.get("net_pnl") or 0) > 0)
+    loss_pnl = abs(sum((t.get("net_pnl") or 0) for t in trades if (t.get("net_pnl") or 0) < 0))
+    return round(win_pnl / loss_pnl, 2) if loss_pnl else None
 
 
 @app.get("/api/kpis")
@@ -999,9 +1114,10 @@ def get_kpis(
     avg_win = round(sum(t['net_pnl'] for t in winners) / len(winners), 2) if winners else 0
     avg_loss = round(sum(t['net_pnl'] for t in losers) / len(losers), 2) if losers else 0
 
+    profit_factor = _net_profit_factor(trades)
     gross_wins = sum(t.get('gross_pnl') or 0 for t in winners)
     gross_losses = abs(sum(t.get('gross_pnl') or 0 for t in losers))
-    profit_factor = round(gross_wins / gross_losses, 2) if gross_losses else None
+    gross_profit_factor = round(gross_wins / gross_losses, 2) if gross_losses else None
 
     # Expectancy = win_rate * avg_win + loss_rate * avg_loss (avg_loss is negative)
     if total_trades > 0:
@@ -1104,6 +1220,7 @@ def get_kpis(
         "avg_win": avg_win,
         "avg_loss": avg_loss,
         "profit_factor": profit_factor,
+        "gross_profit_factor": gross_profit_factor,
         "trading_days": trading_days,
         "positive_days": positive_days,
         "day_win_rate": day_win_rate,
@@ -1329,8 +1446,11 @@ async def _fetch_alpaca_bars(client, url, base_params, headers, max_bars=5000):
             params["page_token"] = page_token
         resp = await client.get(url, params=params, headers=headers)
         resp.raise_for_status()
-        data = resp.json()
-        bars.extend(data.get("bars", []))
+        data = resp.json() or {}
+        page_bars = data.get("bars") or []
+        if not isinstance(page_bars, list):
+            raise ValueError("Alpaca returned an invalid bars payload.")
+        bars.extend(page_bars)
         page_token = data.get("next_page_token")
         if not page_token or len(bars) >= max_bars:
             break
@@ -1423,6 +1543,17 @@ async def get_chart(
                 "vw": bar.get("vw"),
             })
 
+        if not bars:
+            return {
+                "ticker": alpaca_ticker,
+                "original_ticker": ticker,
+                "date": date,
+                "bars": [],
+                "warning": (
+                    f"No Alpaca {tf} bars were returned for {alpaca_ticker} on "
+                    f"{date} using the {params.get('feed', ALPACA_DATA_FEED)} feed."
+                ),
+            }
         return {"ticker": alpaca_ticker, "original_ticker": ticker, "date": date, "bars": bars}
 
     except httpx.HTTPStatusError as e:
@@ -1436,6 +1567,105 @@ async def get_chart(
             "ticker": ticker, "date": date, "bars": [],
             "warning": f"Chart unavailable: {str(e)}"
         }
+
+
+
+@app.post("/api/excursions/calculate")
+async def calculate_excursions(
+    date: str = Query(...),
+    account_id: int | None = Query(None),
+    force: bool = Query(False),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Calculate and persist missing MAE/MFE/exit-efficiency for one trading day.
+
+    This is intentionally lazy: Day Review calls it automatically. Once a trade
+    has excursion metrics they are reused by every report, avoiding repeated
+    Alpaca requests.
+    """
+    if not ALPACA_KEY or ALPACA_KEY == "your_alpaca_api_key_here":
+        return {
+            "date": date, "computed": 0, "skipped": 0, "unavailable": True,
+            "message": "Alpaca market data is not configured.",
+        }
+
+    sql = """
+        SELECT id, account_id, trade_group, date, ticker, instrument_type, side,
+               net_pnl, executions, option_type, mfe_pct, mae_pct, exit_efficiency
+        FROM trades
+        WHERE date = ?
+    """
+    params = [date]
+    if account_id is not None:
+        sql += " AND account_id = ?"
+        params.append(account_id)
+    if not force:
+        # A zero-MFE trade legitimately has no exit-efficiency denominator, so
+        # completeness is based on the excursion pair rather than efficiency.
+        sql += " AND (mfe_pct IS NULL OR mae_pct IS NULL)"
+    sql += " ORDER BY id"
+
+    rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    if not rows:
+        return {"date": date, "computed": 0, "skipped": 0, "already_complete": True}
+
+    by_ticker = {}
+    for t in rows:
+        by_ticker.setdefault(t["ticker"], []).append(t)
+
+    computed = 0
+    skipped = []
+    for ticker, ticker_trades in by_ticker.items():
+        chart = await get_chart(ticker, date, "1Min", 1)
+        bars = chart.get("bars") or []
+        if not bars:
+            warning = chart.get("warning") or "No Alpaca bars returned."
+            for t in ticker_trades:
+                skipped.append({
+                    "trade_group": t["trade_group"],
+                    "ticker": ticker,
+                    "reason": warning,
+                })
+            continue
+
+        for t in ticker_trades:
+            metric = calculate_trade_excursion(t, bars)
+            if not metric.get("available"):
+                skipped.append({
+                    "trade_group": t["trade_group"],
+                    "ticker": ticker,
+                    "reason": metric.get("reason") or "Insufficient market data.",
+                })
+                continue
+            conn.execute(
+                "UPDATE trades SET mfe_pct=?, mae_pct=?, exit_efficiency=? WHERE id=?",
+                (
+                    metric["mfe_pct"],
+                    metric["mae_pct"],
+                    metric["exit_efficiency"],
+                    t["id"],
+                ),
+            )
+            computed += 1
+
+    if computed:
+        if account_id is None:
+            conn.execute("DELETE FROM daily_summaries WHERE summary_date=?", (date,))
+        else:
+            conn.execute(
+                "DELETE FROM daily_summaries WHERE summary_date=? AND account_id=?",
+                (date, account_id),
+            )
+    conn.commit()
+    return {
+        "date": date,
+        "computed": computed,
+        "skipped": len(skipped),
+        "details": skipped[:25],
+        "method": "Alpaca 1-minute market path",
+        "option_basis": "underlying directional move",
+        "stock_basis": "actual fill price",
+    }
 
 
 # ── Calendar ───────────────────────────────────────────────────────────────────
@@ -1537,9 +1767,9 @@ def get_yearly_kpis(
         net_pnl       = sum(t["net_pnl"] for t in trades)
         avg_win        = sum(t["net_pnl"] for t in winners) / len(winners) if winners else 0
         avg_loss       = sum(t["net_pnl"] for t in losers)  / len(losers)  if losers  else 0
-        gross_wins     = sum(t["gross_pnl"] for t in winners)
-        gross_losses   = abs(sum(t["gross_pnl"] for t in losers))
-        profit_factor  = gross_wins / gross_losses if gross_losses else None
+        net_wins       = sum(t["net_pnl"] for t in winners)
+        net_losses      = abs(sum(t["net_pnl"] for t in losers))
+        profit_factor  = net_wins / net_losses if net_losses else None
         win_rate       = len(winners) / total * 100 if total else 0
         trading_days   = len(set(t["date"] for t in trades))
         positive_days  = len({t["date"] for t in trades if t["net_pnl"] > 0})
@@ -1695,16 +1925,19 @@ def get_smoking_gun_diagnosis(
     )
     if not source.get("has_data"):
         return {"has_data": False, "diagnosis": None}
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not performance_ai_is_configured():
         return {
             "has_data": True,
             "unavailable": True,
             "diagnosis": None,
-            "message": "AI diagnosis is not configured for this deployment.",
+            "message": (
+                "AI diagnosis is not configured. Add GROQ_API_KEY to the server "
+                "environment, or ANTHROPIC_API_KEY as an optional fallback."
+            ),
         }
     try:
-        diagnosis = generate_performance_diagnosis(source)
-        return {"has_data": True, "diagnosis": diagnosis}
+        result = generate_performance_diagnosis(source)
+        return {"has_data": True, **result}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -2244,10 +2477,15 @@ def get_daily_summary(
         if row:
             try:
                 content = json.loads(row['ai_content'])
-                content['date'] = date
-                content['cached'] = True
-                content['generated_at'] = row['generated_at']
-                return content
+                # Version 3 adds deterministic strengths/behavior flags and
+                # evidence badges. Older cached summaries are regenerated so
+                # the UI never mixes the previous free-form lists with the new
+                # evidence model.
+                if int(content.get('evidence_version') or 0) >= 3:
+                    content['date'] = date
+                    content['cached'] = True
+                    content['generated_at'] = row['generated_at']
+                    return content
             except Exception:
                 pass
 
@@ -2257,13 +2495,18 @@ def get_daily_summary(
             return {"date": date, "cached": False, "no_trades": True, "narrative": "No trades recorded for this date."}
         summary = generate_daily_summary(context)
     except Exception as e:
-        # Without an API key this is the expected path, not a server fault.
-        if not os.getenv("ANTHROPIC_API_KEY"):
+        # Missing AI configuration is a normal unavailable state. If a provider
+        # is configured but the request fails, surface the real server error
+        # instead of incorrectly asking for an Anthropic key.
+        if not performance_ai_is_configured():
             return {
                 "date": date,
                 "cached": False,
                 "unavailable": True,
-                "narrative": "Add ANTHROPIC_API_KEY to backend/.env to generate a review for this day.",
+                "narrative": (
+                    "AI coaching is not configured. Add GROQ_API_KEY to the server "
+                    "environment, or ANTHROPIC_API_KEY as an optional fallback."
+                ),
             }
         raise HTTPException(status_code=500, detail=str(e))
 

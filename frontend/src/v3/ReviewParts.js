@@ -6,24 +6,33 @@ import { Measures, Tabs, Grade, money, money2, tone } from './parts';
 const OPEN = 9.5;
 const CLOSE = 16;
 
-export function tradeTime(t) {
-  const execs = t.executions || [];
-  const raw = execs.length ? (execs[0].time || execs[0].datetime || '') : (t.open_time || t.time || '');
+export function tradeTime(t, which = 'entry') {
+  let execs = t.executions || [];
+  if (!Array.isArray(execs)) {
+    try { execs = JSON.parse(execs || '[]'); } catch { execs = []; }
+  }
+  const times = execs
+    .map((e) => e.time || e.datetime || '')
+    .filter(Boolean)
+    .sort();
+  const raw = times.length
+    ? (which === 'exit' ? times[times.length - 1] : times[0])
+    : (which === 'exit' ? (t.close_time || t.time || '') : (t.open_time || t.time || ''));
   const m = String(raw).match(/(\d{1,2}):(\d{2})/);
   if (!m) return null;
   return Number(m[1]) + Number(m[2]) / 60;
 }
 
 /* ── the day, as one picture ────────────────────────────────────────────────
-   The session's running P&L from the open to the close, with every trade
-   marked on the curve at the time it was entered. Replaces having a separate
-   equity line and a separate timeline showing the same session twice.      */
+   Realized session P&L. A trade's final P&L is booked at its last execution,
+   not at entry, so the curve never pretends a future exit result was already
+   known when the position opened.                                          */
 export function DayCurve({ trades, onPick }) {
   const [hover, setHover] = useState(null);
 
   const marks = useMemo(() => {
     const withTime = (trades || [])
-      .map((t) => ({ t, at: tradeTime(t) }))
+      .map((t) => ({ t, at: tradeTime(t, 'exit') }))
       .filter((x) => x.at != null)
       .sort((a, b) => a.at - b.at);
     let cum = 0;
@@ -149,7 +158,7 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
   // how far the day came off its own high water mark
   const { peak, given } = useMemo(() => {
     const withTime = (trades || [])
-      .map((t) => ({ at: tradeTime(t), p: Number(t.net_pnl) || 0 }))
+      .map((t) => ({ at: tradeTime(t, 'exit'), p: Number(t.net_pnl) || 0 }))
       .filter((x) => x.at != null)
       .sort((x, y) => x.at - y.at);
     let cum = 0; let hi = 0;
@@ -157,7 +166,7 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
     return { peak: hi, given: Math.max(0, hi - cum) };
   }, [trades]);
 
-  const breaks = (summary?.mistakes || []).length;
+  const breaks = (summary?.behavior_flags || []).length;
   const wins = (trades || []).filter((t) => (t.net_pnl || 0) > 0).length;
   const losses = (trades || []).filter((t) => (t.net_pnl || 0) < 0).length;
 
@@ -166,6 +175,13 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
   const noLosers = pf == null && wins > 0;
   const eff = k.exit_efficiency == null ? null : Number(k.exit_efficiency);
   const allEff = a && a.exit_efficiency != null ? Number(a.exit_efficiency) : null;
+  const optionExcursions = Number(k.excursion_option_n || 0);
+  const stockExcursions = Number(k.excursion_stock_n || 0);
+  const effLabel = optionExcursions > 0 && stockExcursions === 0
+    ? 'Underlying exit efficiency'
+    : optionExcursions > 0
+      ? 'Directional exit efficiency'
+      : 'Exit efficiency';
   const perTrade = n ? net / n : null;
   const allExp = a && a.expectancy != null ? Number(a.expectancy) : null;
 
@@ -222,34 +238,46 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
           </>,
         },
         {
-          label: 'Exit efficiency',
+          label: effLabel,
           value: eff == null ? '—' : `${eff.toFixed(0)}%`,
           amber: eff != null && allEff != null && eff < allEff,
           read: eff == null
-            ? 'No excursion data for these trades'
+            ? 'Insufficient 1-minute market data for these trades'
             : <>
-              Share of the move you kept.{' '}
+              Directional move captured while the trade was open.{' '}
+              {optionExcursions > 0 ? 'Options use the underlying ticker. ' : ''}
               {allEff != null ? <>All-time {allEff.toFixed(0)}%</> : null}
               {allEff != null ? <Delta day={eff} all={allEff} digits={0} unit="pp" /> : null}
             </>,
         },
         {
-          label: 'Given back',
+          label: 'Realized giveback',
           value: given > 0 ? money(-given) : '$0',
           amber: given > 0,
           read: peak > 0
-            ? `From a session high of ${money(peak)}`
-            : 'The session never went green',
+            ? `From a realized P&L peak of ${money(peak)}`
+            : 'Realized P&L never went green',
         },
         {
-          label: 'Rule breaks',
+          label: 'Review flags',
           value: String(breaks),
           amber: breaks > 0,
-          read: breaks ? 'Flagged in the review below' : 'Nothing flagged',
+          read: breaks ? 'Evidence-backed coaching flags below' : 'No verified coaching flags',
         },
       ]}
     />
   );
+}
+
+function EvidenceBadge({ level }) {
+  if (!level) return null;
+  const normalized = String(level).toUpperCase();
+  const cls = normalized === 'VERIFIED'
+    ? 'verified'
+    : normalized === 'RECORDED'
+      ? 'recorded'
+      : 'insufficient';
+  return <span className={`v3-evidence ${cls}`}>{normalized}</span>;
 }
 
 /* ── coaching: the report, with the lists behind tabs ───────────────────── */
@@ -258,26 +286,36 @@ export function Coaching({ summary, loading, onRegenerate }) {
   if (loading) return <div className="v3-empty">Reading the session…</div>;
   if (!summary) return <div className="v3-empty">No review for this day yet.</div>;
 
+  const obs = summary.observations || {};
+  const wrap = (rows, fallbackEvidence = null) => (rows || []).map((r) =>
+    typeof r === 'string' ? { text: r, evidence: fallbackEvidence } : r
+  );
   const lists = {
-    strengths: summary.strengths || [],
-    mistakes: summary.mistakes || [],
-    focus: summary.coaching || [],
-    patterns: summary.patterns || [],
+    strengths: obs.strengths?.length ? obs.strengths : wrap(summary.strengths, summary.evidence_locked ? 'VERIFIED' : null),
+    mistakes: obs.mistakes?.length ? obs.mistakes : wrap(summary.mistakes),
+    focus: obs.focus?.length ? obs.focus : wrap(summary.coaching),
+    patterns: obs.patterns?.length ? obs.patterns : wrap(summary.patterns),
+    recorded: obs.recorded || [],
   };
   const tabs = [
     { id: 'strengths', label: 'Strengths' },
-    { id: 'mistakes', label: 'Mistakes' },
+    { id: 'mistakes', label: 'Flags' },
     { id: 'focus', label: 'Tomorrow’s focus' },
     { id: 'patterns', label: 'Patterns' },
+    ...(lists.recorded.length ? [{ id: 'recorded', label: 'Recorded' }] : []),
   ];
-  const rows = lists[tab];
+  const rows = lists[tab] || [];
 
   return (
     <>
       <div className="v3-sec-head">
         <div>
           <h2 className="v3-h">Coaching</h2>
-          <p className="v3-h-sub">Written against your trades and your diary together, and graded on process</p>
+          <p className="v3-h-sub">
+            Written against your trades and your diary together, and graded on process
+            {summary.ai_provider ? ` · ${summary.ai_provider === 'groq' ? 'Groq' : 'Anthropic'} · ${summary.ai_model || ''}` : ''}
+            {summary.evidence_locked ? ' · Evidence-locked' : ''}
+          </p>
         </div>
         <div className="v3-acts">
           {onRegenerate && (
@@ -288,23 +326,33 @@ export function Coaching({ summary, loading, onRegenerate }) {
 
       <div className="v3-cols">
         {summary.narrative && <p className="v3-narr">{summary.narrative}</p>}
-        {summary.mental_game && <p className="v3-narr v3-narr-quiet">{summary.mental_game}</p>}
+        {summary.mental_game && (
+          <p className="v3-narr v3-narr-quiet">
+            <EvidenceBadge level={obs.mental_game?.evidence || (summary.evidence_locked ? 'INSUFFICIENT DATA' : null)} /> {summary.mental_game}
+          </p>
+        )}
       </div>
 
       <div style={{ marginTop: 22 }}>
         <Tabs tabs={tabs} active={tab} onChange={setTab} label="Review detail" />
         {!rows.length ? (
           <div className="v3-empty">
-            {tab === 'mistakes' ? 'Nothing flagged on this day.' : 'Nothing recorded here.'}
+            {tab === 'mistakes' ? 'No deterministic behavior flags on this day.' : 'Nothing recorded here.'}
           </div>
         ) : tab === 'patterns' ? (
           <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-            {rows.map((p, i) => <span className="v3-chip" key={i} style={{ whiteSpace: 'normal' }}>{p}</span>)}
+            {rows.map((r, i) => (
+              <span className="v3-chip" key={i} style={{ whiteSpace: 'normal' }}>
+                <EvidenceBadge level={r.evidence} /> {r.text}
+              </span>
+            ))}
           </div>
         ) : (
           <ul className="v3-list v3-cols">
             {rows.map((r, i) => (
-              <li key={i} className={tab === 'mistakes' ? 'bad' : tab === 'focus' ? 'next' : 'good'}>{r}</li>
+              <li key={i} className={tab === 'mistakes' ? 'bad' : tab === 'focus' ? 'next' : 'good'}>
+                <EvidenceBadge level={r.evidence} /> {r.text}
+              </li>
             ))}
           </ul>
         )}
@@ -357,7 +405,14 @@ export function DayTrades({ trades, gradeMap, loading, onOpen }) {
                 <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                   {g ? <Grade grade={g.grade} reason={g.one_line} /> : <span className="v3-flat">&mdash;</span>}
                 </td>
-                <td className="r v3-mono v3-hide-s v3-read">
+                <td
+                  className="r v3-mono v3-hide-s v3-read"
+                  title={t.instrument_type === 'OPTION'
+                    ? 'VERIFIED from Alpaca 1-minute underlying price path'
+                    : t.instrument_type === 'FUTURE'
+                      ? 'VERIFIED from Alpaca 1-minute ETF proxy path'
+                      : 'VERIFIED from actual fill price + Alpaca 1-minute highs/lows'}
+                >
                   {t.mfe_pct == null && t.mae_pct == null ? '—' : (
                     <>
                       <span className="v3-pos">{t.mfe_pct == null ? '—' : `+${Number(t.mfe_pct).toFixed(1)}%`}</span>

@@ -36,6 +36,8 @@ export const tradesApi = {
   update: (id, data) => api.put(`/api/trades/${id}`, data),
   delete: (id) => api.delete(`/api/trades/${id}`),
   getAnalysis: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/analysis`),
+  getLeReview: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/le-review`),
+  getLeLevels: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/le-levels`),
   getAnalysisOptions: () => api.get('/api/analysis-options'),
   updateAnalysis: (group, data) => api.patch(`/api/trades/${encodeURIComponent(group)}/analysis`, data),
   addTag: (group, data) => api.post(`/api/trades/${encodeURIComponent(group)}/tags`, data),
@@ -73,6 +75,10 @@ export const chartApi = {
     api.get(`/api/chart/${encodeURIComponent(ticker)}/${date}`, { params: { timeframe, days_back: daysBack } }),
 };
 
+export const excursionApi = {
+  calculate: (params) => api.post('/api/excursions/calculate', null, { params }),
+};
+
 export const insightsApi = {
   get: (params) => api.get('/api/insights', { params }),
 };
@@ -104,6 +110,8 @@ export const smokingGunApi = {
   diagnose: (params) => api.get('/api/smoking-gun-diagnosis', { params }),
 };
 
+// Settings > Library: strategy names, sources and tags. `item` is
+// { kind: 'strategy' | 'source' | 'tag', tag_type?, name, ... }.
 export const smokingGunLibraryApi = {
   list: (params) => api.get('/api/smoking-gun-reports', { params }),
   get: (id) => api.get(`/api/smoking-gun-reports/${id}`),
@@ -112,8 +120,6 @@ export const smokingGunLibraryApi = {
   downloadLedger: (id) => api.get(`/api/smoking-gun-reports/${id}/trade-ledger.csv`, { responseType: 'blob' }),
 };
 
-// Settings > Library: strategy names, sources and tags. `item` is
-// { kind: 'strategy' | 'source' | 'tag', tag_type?, name, ... }.
 export const libraryApi = {
   list: () => api.get('/api/library'),
   create: (item) => api.post('/api/library', item),

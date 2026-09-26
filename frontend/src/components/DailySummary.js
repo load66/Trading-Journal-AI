@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, RotateCcw, Calendar,
   AlertTriangle
 } from 'lucide-react';
-import { tradesApi, kpisApi, diaryApi, dailySummaryApi } from '../api';
+import { tradesApi, kpisApi, diaryApi, dailySummaryApi, excursionApi } from '../api';
 import { PageHeader, PanelHead } from './ui';
 import { DayCurve, DayMeasures, Coaching, DayTrades } from '../v3/ReviewParts';
 import {
@@ -95,16 +95,30 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
       const params = { date_from: d, date_to: d };
       if (accountId != null) params.account_id = accountId;
 
-      const [tradesRes, kpisRes, diaryRes] = await Promise.all([
+      // Enrich missing MFE/MAE/exit-efficiency once, then read the day.
+      // Failure here must never block the journal; the UI will show insufficient
+      // market data instead of inventing excursion metrics.
+      try {
+        const excursionParams = { date: d };
+        if (accountId != null) excursionParams.account_id = accountId;
+        await excursionApi.calculate(excursionParams);
+      } catch (e) {
+        console.warn('Excursion enrichment unavailable', e);
+      }
+
+      const allParams = {};
+      if (accountId != null) allParams.account_id = accountId;
+      const [tradesRes, kpisRes, diaryRes, allKpisRes] = await Promise.all([
         tradesApi.list(params),
         kpisApi.get(params),
         diaryApi.list(accountId != null ? { account_id: accountId } : {}),
+        kpisApi.get(allParams),
       ]);
 
-      // Merge trade_analysis fields if present
       const rawTrades = tradesRes.data || [];
       setTrades(rawTrades);
       setKpis(kpisRes.data || null);
+      allTimeKpisRef.current = allKpisRes.data || null;
 
       const diaryEntries = diaryRes.data || [];
       const dayDiary = diaryEntries.find(e => e.entry_date === d) || null;
@@ -209,7 +223,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
               <div>
                 <h2 className="v3-h">The session</h2>
                 <p className="v3-h-sub">
-                  Running P&amp;L from the open to the close, with every trade marked where you entered it
+                  Realized P&amp;L through the session, booking each trade when its final execution closes it
                 </p>
               </div>
             </div>
@@ -243,7 +257,10 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
           {/* The trades */}
           <section className="card panel-flush">
             <div style={{ padding: '18px 0 12px' }}>
-              <PanelHead title="Trade by trade" sub="Hover a grade for the reason. Click a row to open the trade." />
+              <PanelHead
+                title="Trade by trade"
+                sub="MFE/MAE is automatic from Alpaca 1-minute data. Options use the underlying ticker; stocks use actual fill prices. Hover a grade for its evidence."
+              />
             </div>
             <DayTrades
               trades={trades}

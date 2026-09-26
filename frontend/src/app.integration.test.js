@@ -167,6 +167,7 @@ jest.mock('./api', () => {
       list: fn((params = {}) => ok(params.open_only ? [OPEN_TRADE] : [TRADE, TRADE_2])),
       addExecution: fn(() => ok({})),
       getAnalysis: fn(() => ok(null)),
+      getLeReview: fn(() => ok({ available: false, reason: 'No LE review in tests', data_warnings: [] })),
       getAnalysisOptions: fn(() => ok({ strategies: [], idea_sources: [] })),
       listCustomSetups: fn(() => ok([])),
     }),
@@ -395,7 +396,7 @@ test('Smoking Gun saved report back navigation preserves the loaded library stat
   expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(1);
 });
 
-test('Trade View opens Trade Details with all five tabs, back and previous/next', async () => {
+test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
   await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
@@ -405,12 +406,16 @@ test('Trade View opens Trade Details with all five tabs, back and previous/next'
 
   const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
   const names = within(tablist).getAllByRole('tab').map(t => t.textContent.trim());
-  expect(names).toEqual(['Stats', 'Strategy', 'Tags', 'Executions', 'What If']);
+  expect(names).toEqual(['Stats', 'Strategy', 'Tags', 'LE Review', 'Executions', 'What If']);
   expect(screen.getByRole('button', { name: /Back to trades/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Previous trade/ })).toBeDisabled();
   expect(screen.getByRole('button', { name: /Next trade/ })).toBeEnabled();
   // Trade View stays highlighted while a trade is open.
   expect(within(nav()).getByRole('button', { name: 'Trade View' })).toHaveAttribute('aria-current', 'page');
+
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'LE Review' }));
+  await waitFor(() => expect(tradesApi.getLeReview).toHaveBeenCalled());
+  expect(screen.getByText(/LE review unavailable/)).toBeInTheDocument();
 
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Executions' }));
   expect(screen.getByRole('button', { name: /Add Execution/ })).toBeInTheDocument();
