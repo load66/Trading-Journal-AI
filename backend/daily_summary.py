@@ -341,6 +341,7 @@ Generate the daily coaching summary JSON."""
         result["overall_grade"] = "N/A"
 
     result["evidence_locked"] = True
+    result["evidence_version"] = 2
     result["evidence_note"] = (
         "Missing process or psychological data is treated as unknown, never as a rule violation."
     )
