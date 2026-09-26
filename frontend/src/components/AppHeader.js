@@ -281,7 +281,7 @@ export default function AppHeader({
             type="button"
             className="btn btn-primary mobile-add-trade"
             onClick={onAddTrade}
-            aria-label="Add trade"
+            aria-label="Add Trade"
             title="Add trade"
           >
             <Plus size={16} aria-hidden="true" />
