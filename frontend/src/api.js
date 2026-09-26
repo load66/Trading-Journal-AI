@@ -1,4 +1,5 @@
-import axios from 'axios';\nimport { AUTH_ENABLED, clearSession, getAccessToken } from './auth';
+import axios from 'axios';
+import { AUTH_ENABLED, clearSession, getAccessToken } from './auth';
 
 // Defaults to the local backend. REACT_APP_API_URL can point the frontend at
 // another origin (a second instance, a container, a LAN machine).
