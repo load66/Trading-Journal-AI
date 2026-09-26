@@ -95,3 +95,13 @@ def test_first_ten_minutes_and_ticker_labels():
     ranking = {r["ticker"]: r for r in report["ticker_ranking"]}
     assert ranking["SPY"]["label"] == "EDGE"
     assert ranking["TSLA"]["label"] in {"LEAK", "BLEEDING", "HEMORRHAGE"}
+
+
+def test_negative_opening_window_is_ranked_as_behavior_flaw():
+    rows = [
+        trade("o1", "2026-09-09", "SPY", -200, "09:31:00", "09:36:00"),
+        trade("m1", "2026-09-09", "QQQ", 50, "10:31:00", "10:36:00"),
+    ]
+    report = build_performance_report(rows)
+    names = [r["name"] for r in report["behavior"]["ranked_flaws"]]
+    assert "First 30 minutes" in names
