@@ -34,6 +34,7 @@ from ai_analysis import (
     generate_weekly_summary,
 )
 from daily_summary import build_daily_context, generate_daily_summary
+from performance_report import build_performance_report
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 
 load_dotenv()
@@ -1631,6 +1632,52 @@ def _bucket_stats(rows, key_fn, label_fn=None):
 def _ordered(buckets, order):
     idx = {k: i for i, k in enumerate(order)}
     return sorted(buckets, key=lambda b: idx.get(b['key'], 999))
+
+
+@app.get("/api/smoking-gun-report")
+def get_smoking_gun_report(
+    account_id: int | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Deterministic source-of-truth analytics for the built-in AI report.
+
+    This endpoint deliberately returns calculations only. The AI narrative layer
+    consumes this payload later and must not recalculate P&L, timestamps, sizing,
+    hold times, or behavior impact.
+    """
+    sql = """
+        SELECT id, account_id, trade_group, date, ticker, instrument_type, side,
+               gross_pnl, net_pnl, commissions, executions,
+               option_expiry, option_strike, option_type, source
+        FROM trades
+        WHERE 1=1
+    """
+    params: list = []
+    if account_id is not None:
+        sql += " AND account_id = ?"
+        params.append(account_id)
+    if date_from:
+        sql += " AND date >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date <= ?"
+        params.append(date_to)
+    sql += " ORDER BY date, id"
+
+    trades = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    if not trades:
+        return {"has_data": False, "meta": {"trade_count": 0, "open_position_count": 0}}
+
+    report = build_performance_report(trades)
+    report["has_data"] = True
+    report["filters"] = {
+        "account_id": account_id,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    return report
 
 
 @app.get("/api/reports")
