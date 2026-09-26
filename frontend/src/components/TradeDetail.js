@@ -193,7 +193,7 @@ function TagBadge({ tag, onDelete }) {
 const BROKER_EXECUTION_TIME_ZONE = 'America/Chicago';
 const DISPLAY_TIME_ZONE = 'America/New_York';
 
-function zonedWallTimeToDate(dateStr, timeStr, timeZone = BROKER_EXECUTION_TIME_ZONE) {
+export function zonedWallTimeToDate(dateStr, timeStr, timeZone = BROKER_EXECUTION_TIME_ZONE) {
   if (!dateStr || !timeStr) return null;
   const [year, month, day] = dateStr.split('-').map(Number);
   const [hour, minute, second = 0] = timeStr.split(':').map(Number);
@@ -245,12 +245,12 @@ function etPartsForExecution(dateStr, timeStr) {
   };
 }
 
-function formatExecutionTimeET(dateStr, timeStr) {
+export function formatExecutionTimeET(dateStr, timeStr) {
   const parts = etPartsForExecution(dateStr, timeStr);
   return parts ? `${parts.hhmm} ET` : '—';
 }
 
-function executionTimeETMinutes(dateStr, timeStr) {
+export function executionTimeETMinutes(dateStr, timeStr) {
   const parts = etPartsForExecution(dateStr, timeStr);
   return parts ? parts.hour * 60 + parts.minute : null;
 }
@@ -288,7 +288,7 @@ function getPriceAt(bars, targetETMinutes) {
   return bars[bars.length - 1].c;
 }
 
-function computeWhatIf(bars, stats, trade) {
+export function computeWhatIf(bars, stats, trade) {
   if (!bars.length || !stats.isClosed || !stats.avgExit || !stats.closeTime) return null;
   const exitETMinutes = executionTimeETMinutes(trade.date, stats.closeTime);
   if (exitETMinutes == null) return null;
