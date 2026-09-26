@@ -31,32 +31,82 @@ function chartTheme() {
   };
 }
 
-// lightweight-charts always renders its axis and crosshair labels using UTC getters,
-// with no timezone option. Alpaca's bars come back as true UTC ("...T14:07:00Z" for
-// 10:07 ET), so feeding them straight in shows UTC hours on the axis while execution
-// times are already stored as ET wall-clock. Fix: shift bar timestamps by the market's
-// UTC offset so the "UTC" the library reads back out is actually ET. Hardcoded to EDT
-// (UTC-4) for now, matching the rest of this file — no winter DST handling yet.
-const ET_UTC_OFFSET_SEC = 4 * 3600;
+// lightweight-charts renders labels from UTC-like timestamps. We intentionally
+// project real instants onto an ET wall-clock timeline, but do it with IANA time zones
+// so DST is correct for every trade date.
+export const MARKET_TIME_ZONE = 'America/New_York';
+export const BROKER_EXECUTION_TIME_ZONE = 'America/Chicago';
 
-const toTs = (isoUtcStr) => Math.floor(new Date(isoUtcStr).getTime() / 1000) - ET_UTC_OFFSET_SEC;
+function partsInZone(instant, timeZone) {
+  return Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(instant)
+      .filter(p => p.type !== 'literal')
+      .map(p => [p.type, p.value])
+  );
+}
 
-// Daily/weekly bars are stamped at session open, already whole calendar days —
-// no ET/UTC shift needed there, just a straight epoch conversion.
+export function zonedWallTimeToInstant(dateStr, timeStr, timeZone) {
+  if (!dateStr || !timeStr) return null;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const [hour, minute, second = 0] = timeStr.split(':').map(Number);
+  if (![year, month, day, hour, minute, second].every(Number.isFinite)) return null;
+
+  const desiredWallUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  let utcMs = desiredWallUtcMs;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23',
+  });
+
+  for (let i = 0; i < 2; i += 1) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(utcMs))
+        .filter(p => p.type !== 'literal')
+        .map(p => [p.type, p.value])
+    );
+    const renderedWallUtcMs = Date.UTC(
+      Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+      Number(parts.hour), Number(parts.minute), Number(parts.second)
+    );
+    utcMs += desiredWallUtcMs - renderedWallUtcMs;
+  }
+  return new Date(utcMs);
+}
+
+export function toTs(isoUtcStr) {
+  const instant = new Date(isoUtcStr);
+  if (Number.isNaN(instant.getTime())) return null;
+  const p = partsInZone(instant, MARKET_TIME_ZONE);
+  return Math.floor(Date.UTC(
+    Number(p.year), Number(p.month) - 1, Number(p.day),
+    Number(p.hour), Number(p.minute), Number(p.second)
+  ) / 1000);
+}
+
+// Daily/weekly bars are whole calendar dates and do not need an intraday ET projection.
 const toDayTs = (isoUtcStr) => Math.floor(new Date(isoUtcStr).getTime() / 1000);
 
-const execToTs = (dateStr, timeStr, bucketMin = 5) => {
-  if (!timeStr) return null;
-  const [h, m] = timeStr.slice(0, 5).split(':').map(Number);
-  const totalMin = Math.floor((h * 60 + m) / bucketMin) * bucketMin;
-  const rh = Math.floor(totalMin / 60);
-  const rm = totalMin % 60;
-  // Already ET wall-clock — parse as literal UTC so it lands in the same shifted
-  // timeline as toTs() above, instead of applying the offset a second time.
-  return Math.floor(
-    new Date(`${dateStr}T${String(rh).padStart(2, '0')}:${String(rm).padStart(2, '0')}:00Z`).getTime() / 1000
-  );
-};
+export function execToTs(dateStr, timeStr, bucketMin = 5) {
+  const instant = zonedWallTimeToInstant(dateStr, timeStr, BROKER_EXECUTION_TIME_ZONE);
+  if (!instant) return null;
+
+  const p = partsInZone(instant, MARKET_TIME_ZONE);
+  const totalMin = Math.floor((Number(p.hour) * 60 + Number(p.minute)) / bucketMin) * bucketMin;
+  const hour = Math.floor(totalMin / 60);
+  const minute = totalMin % 60;
+
+  return Math.floor(Date.UTC(
+    Number(p.year), Number(p.month) - 1, Number(p.day),
+    hour, minute, 0
+  ) / 1000);
+}
 
 const avgPrice = (fills) => {
   const qty = fills.reduce((s, f) => s + (f.qty || 0), 0);

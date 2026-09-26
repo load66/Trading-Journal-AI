@@ -9,13 +9,14 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v3_SIP_HISTORY"
+LE_RULESET_VERSION = "LE_2026_09_v4_INTEGRITY"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 ALPACA_FALLBACK_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
+ALPACA_TRADING_BASE_URL = os.getenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
 
 ALLOWED_STRATEGIES = (
     "LE L-Entry — Level Retest",
@@ -279,11 +280,83 @@ def _session_window(entry_dt: datetime) -> str:
     return "outside_primary_window"
 
 
+def _parse_hhmm(value: str | None, fallback: time) -> time:
+    if not value:
+        return fallback
+    raw = str(value).strip()
+    for fmt in ("%H:%M", "%H:%M:%S", "%H%M"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return fallback
+
+
+def _session_record(row: dict | None) -> dict | None:
+    if not row or not row.get("date"):
+        return None
+    try:
+        day = date.fromisoformat(str(row["date"])[:10])
+    except ValueError:
+        return None
+    open_t = _parse_hhmm(row.get("open"), time(9, 30))
+    close_t = _parse_hhmm(row.get("close"), time(16, 0))
+    return {
+        "date": day,
+        "open": datetime.combine(day, open_t, tzinfo=ET),
+        "close": datetime.combine(day, close_t, tzinfo=ET),
+    }
+
+
+def _calendar_context(rows: list[dict], trade_day: date) -> dict:
+    sessions = [s for s in (_session_record(row) for row in rows) if s]
+    sessions.sort(key=lambda s: s["date"])
+    current = next((s for s in sessions if s["date"] == trade_day), None)
+    previous_candidates = [s for s in sessions if s["date"] < trade_day]
+    previous = previous_candidates[-1] if previous_candidates else None
+    return {
+        "verified": current is not None and previous is not None,
+        "current": current,
+        "previous": previous,
+    }
+
+
+def _within(dt: datetime, start_dt: datetime, end_dt: datetime) -> bool:
+    return dt.date() == start_dt.date() and start_dt <= dt < end_dt
+
+
+def _level_status(
+    feed: str | None,
+    calendar_verified: bool,
+    required_window_end: datetime | None,
+) -> str:
+    if not calendar_verified or required_window_end is None:
+        return "PARTIAL"
+    feed = (feed or "").lower()
+    if feed == "sip":
+        return "VERIFIED"
+    if feed == "delayed_sip":
+        if required_window_end <= datetime.now(ET) - timedelta(minutes=15):
+            return "VERIFIED_HISTORICAL"
+        return "DELAYED"
+    if feed == "iex":
+        return "LIMITED"
+    return "PARTIAL"
+
+
+def _status_is_verified(status: str | None) -> bool:
+    return status in {"VERIFIED", "VERIFIED_HISTORICAL"}
+
+
 def analyze_context(
     trade: dict,
     underlying_bars: list[dict],
     spy_bars: list[dict],
     qqq_bars: list[dict],
+    market_calendar: dict | None = None,
+    underlying_feed: str | None = None,
+    spy_feed: str | None = None,
+    qqq_feed: str | None = None,
 ) -> dict:
     entry_dt = entry_datetime(trade)
     if entry_dt is None:
@@ -299,28 +372,59 @@ def analyze_context(
     trade_day = entry_dt.date()
     direction = market_direction(trade)
     dated = [(b, _bar_dt(b)) for b in underlying_bars]
-    prior_rth_dates = sorted(
-        {
-            dt.date()
-            for _, dt in dated
-            if dt.date() < trade_day and _is_rth(dt)
-        }
+
+    calendar_verified = bool((market_calendar or {}).get("verified"))
+    current_session = (market_calendar or {}).get("current")
+    previous_session = (market_calendar or {}).get("previous")
+
+    if previous_session:
+        previous_day = previous_session["date"]
+        previous_open = previous_session["open"]
+        previous_close = previous_session["close"]
+    else:
+        prior_rth_dates = sorted(
+            {
+                dt.date()
+                for _, dt in dated
+                if dt.date() < trade_day and _is_rth(dt)
+            }
+        )
+        previous_day = prior_rth_dates[-1] if prior_rth_dates else None
+        previous_open = (
+            datetime.combine(previous_day, time(9, 30), tzinfo=ET)
+            if previous_day else None
+        )
+        previous_close = (
+            datetime.combine(previous_day, time(16, 0), tzinfo=ET)
+            if previous_day else None
+        )
+
+    current_open = (
+        current_session["open"]
+        if current_session
+        else datetime.combine(trade_day, time(9, 30), tzinfo=ET)
     )
-    previous_day = prior_rth_dates[-1] if prior_rth_dates else None
+    current_close = (
+        current_session["close"]
+        if current_session
+        else datetime.combine(trade_day, time(16, 0), tzinfo=ET)
+    )
 
     previous_rth = [
         b for b, dt in dated
-        if previous_day is not None and dt.date() == previous_day and _is_rth(dt)
+        if previous_open is not None and previous_close is not None
+        and _within(dt, previous_open, previous_close)
     ]
+    premarket_start = datetime.combine(trade_day, time(4, 0), tzinfo=ET)
+    premarket_end = datetime.combine(trade_day, time(9, 30), tzinfo=ET)
     premarket = [
         b for b, dt in dated
-        if dt.date() == trade_day and _is_premarket(dt)
+        if _within(dt, premarket_start, premarket_end)
     ]
     current_to_entry = [
         b for b, dt in dated
         if (
-            dt.date() == trade_day
-            and time(9, 30) <= dt.time() < time(16, 0)
+            current_open <= dt < min(current_close, entry_dt)
             and dt + timedelta(minutes=1) < entry_dt
         )
     ]
@@ -329,6 +433,40 @@ def analyze_context(
     pdl = min((float(b["l"]) for b in previous_rth), default=None)
     pmh = max((float(b["h"]) for b in premarket), default=None)
     pml = min((float(b["l"]) for b in premarket), default=None)
+
+    pd_status = _level_status(underlying_feed, calendar_verified, previous_close)
+    pm_status = _level_status(underlying_feed, calendar_verified, premarket_end)
+    level_meta = {
+        "PDH": {
+            "status": pd_status,
+            "feed": underlying_feed,
+            "session_date": previous_day.isoformat() if previous_day else None,
+            "session_start_et": previous_open.isoformat() if previous_open else None,
+            "session_end_et": previous_close.isoformat() if previous_close else None,
+        },
+        "PDL": {
+            "status": pd_status,
+            "feed": underlying_feed,
+            "session_date": previous_day.isoformat() if previous_day else None,
+            "session_start_et": previous_open.isoformat() if previous_open else None,
+            "session_end_et": previous_close.isoformat() if previous_close else None,
+        },
+        "PMH": {
+            "status": pm_status,
+            "feed": underlying_feed,
+            "session_date": trade_day.isoformat(),
+            "session_start_et": premarket_start.isoformat(),
+            "session_end_et": premarket_end.isoformat(),
+        },
+        "PML": {
+            "status": pm_status,
+            "feed": underlying_feed,
+            "session_date": trade_day.isoformat(),
+            "session_start_et": premarket_start.isoformat(),
+            "session_end_et": premarket_end.isoformat(),
+        },
+    }
+    verified_level = {name: _status_is_verified(meta["status"]) for name, meta in level_meta.items()}
 
     bars_10m = _aggregate_10m(underlying_bars)
     completed_before_entry = [b for b in bars_10m if b["end"] < entry_dt]
@@ -342,10 +480,10 @@ def analyze_context(
     )
 
     break_times = {
-        "PDH": _first_completed_break(bars_10m, trade_day, entry_dt, pdh, "up"),
-        "PDL": _first_completed_break(bars_10m, trade_day, entry_dt, pdl, "down"),
-        "PMH": _first_completed_break(bars_10m, trade_day, entry_dt, pmh, "up"),
-        "PML": _first_completed_break(bars_10m, trade_day, entry_dt, pml, "down"),
+        "PDH": _first_completed_break(bars_10m, trade_day, entry_dt, pdh, "up") if verified_level["PDH"] else None,
+        "PDL": _first_completed_break(bars_10m, trade_day, entry_dt, pdl, "down") if verified_level["PDL"] else None,
+        "PMH": _first_completed_break(bars_10m, trade_day, entry_dt, pmh, "up") if verified_level["PMH"] else None,
+        "PML": _first_completed_break(bars_10m, trade_day, entry_dt, pml, "down") if verified_level["PML"] else None,
     }
     breaks = {key: value is not None for key, value in break_times.items()}
 
@@ -360,6 +498,8 @@ def analyze_context(
 
     inside_premarket_range = (
         underlying_price is not None
+        and verified_level["PML"]
+        and verified_level["PMH"]
         and pml is not None
         and pmh is not None
         and pml <= underlying_price <= pmh
@@ -419,16 +559,23 @@ def analyze_context(
             "Entry occurred during the 9:30–9:40 ET scan-only window.",
         )
 
-    if ema_distance_pct is not None and ema_distance_pct > 1.0:
+    ema_status = _level_status(
+        underlying_feed,
+        True,
+        entry_dt - timedelta(minutes=1),
+    )
+    if _status_is_verified(ema_status) and ema_distance_pct is not None and ema_distance_pct > 1.0:
         add_rule_tag(
             "mistake", "Airgapped from 8 EMA",
             f"Underlying was {ema_distance_pct:.2f}% from the last completed 10-minute 8 EMA at entry.",
         )
 
-    if not directional_breaks:
+    directional_level_names = ("PDH", "PMH") if direction == "bullish" else ("PDL", "PML")
+    can_evaluate_directional_levels = any(verified_level[name] for name in directional_level_names)
+    if can_evaluate_directional_levels and not directional_breaks:
         add_rule_tag(
             "mistake", "No Level Break",
-            "No directional PDH/PMH or PDL/PML completed 10-minute close was confirmed before entry.",
+            "No verified directional PDH/PMH or PDL/PML completed 10-minute close was confirmed before entry.",
         )
 
     if inside_premarket_range:
@@ -442,25 +589,56 @@ def analyze_context(
         add_rule_tag("outcome", "Break-Even", "Realized net P&L was approximately flat.")
 
     data_warnings = []
+    if not calendar_verified:
+        data_warnings.append(
+            "Official market-calendar verification was unavailable; level-dependent auto-tags are disabled unless provenance is verified."
+        )
     if previous_day is None or pdh is None or pdl is None:
         data_warnings.append("Previous regular-session high/low could not be established.")
+    elif not (verified_level["PDH"] and verified_level["PDL"]):
+        data_warnings.append(
+            f"PDH/PDL are {pd_status}; they are not eligible for automatic LE level classification."
+        )
     if pmh is None or pml is None:
         data_warnings.append("Premarket high/low could not be established.")
+    elif not (verified_level["PMH"] and verified_level["PML"]):
+        data_warnings.append(
+            f"PMH/PML are {pm_status}; they are not eligible for automatic LE level classification."
+        )
     if underlying_price is None:
         data_warnings.append("No underlying 1-minute bar was available at or before the entry time.")
     if ema8 is None:
         data_warnings.append("10-minute 8 EMA could not be calculated.")
+    elif not _status_is_verified(ema_status):
+        data_warnings.append(
+            f"10-minute 8 EMA is {ema_status}; EMA-dependent automatic mistake tags are disabled."
+        )
 
     spy = _session_vwap_snapshot(spy_bars, entry_dt)
     qqq = _session_vwap_snapshot(qqq_bars, entry_dt)
-    market_sign = _market_sign_status(direction, spy, qqq)
+    observed_market_sign = _market_sign_status(direction, spy, qqq)
+    spy_status = _level_status(spy_feed, True, entry_dt - timedelta(minutes=1))
+    qqq_status = _level_status(qqq_feed, True, entry_dt - timedelta(minutes=1))
+    market_sign_verified = (
+        _status_is_verified(spy_status)
+        and _status_is_verified(qqq_status)
+        and spy["vwap"] is not None
+        and qqq["vwap"] is not None
+    )
+    market_sign = observed_market_sign if market_sign_verified else "unverified"
+
     if spy["vwap"] is None or qqq["vwap"] is None:
         data_warnings.append("SPY/QQQ VWAP market-confirmation evidence is incomplete.")
+    elif not market_sign_verified:
+        data_warnings.append(
+            f"SPY/QQQ Market Sign is unverified (SPY {spy_status}, QQQ {qqq_status}); "
+            "it cannot create an automatic No Market Sign tag."
+        )
 
-    if market_sign == "failed":
+    if market_sign_verified and market_sign == "failed":
         add_rule_tag(
             "mistake", "No Market Sign",
-            "Both SPY and QQQ were on the wrong side of regular-session VWAP for the trade direction before entry.",
+            "Both verified SPY and QQQ VWAP signals opposed the trade direction before entry.",
         )
 
     evidence = {
@@ -471,6 +649,13 @@ def analyze_context(
         "session_window": _session_window(entry_dt),
         "previous_rth_date": previous_day.isoformat() if previous_day else None,
         "levels": {"PDH": pdh, "PDL": pdl, "PMH": pmh, "PML": pml},
+        "level_meta": level_meta,
+        "market_calendar_verified": calendar_verified,
+        "current_session": {
+            "date": current_session["date"].isoformat() if current_session else trade_day.isoformat(),
+            "open_et": current_open.isoformat(),
+            "close_et": current_close.isoformat(),
+        },
         "level_breaks_before_entry": breaks,
         "level_break_times_et": {
             key: value.isoformat() if value else None for key, value in break_times.items()
@@ -481,12 +666,17 @@ def analyze_context(
         "underlying_price_last_completed_1m": underlying_price,
         "ema8_10m_last_completed": ema8,
         "ema_distance_pct": ema_distance_pct,
+        "ema_integrity_status": ema_status,
         "nearest_broken_level": nearest_broken_level,
         "spy": spy,
         "qqq": qqq,
         "market_sign": {
             "basis": "SPY/QQQ regular-session HLC3 VWAP",
             "status": market_sign,
+            "observed_status": observed_market_sign,
+            "integrity_status": "VERIFIED" if market_sign_verified else "UNVERIFIED",
+            "spy_integrity_status": spy_status,
+            "qqq_integrity_status": qqq_status,
             "rule": (
                 "Bullish: both SPY and QQQ above VWAP = confirmed; both below = failed; otherwise mixed. "
                 "Bearish: both below VWAP = confirmed; both above = failed; otherwise mixed."
@@ -503,6 +693,71 @@ def analyze_context(
         "auto_tags": auto_tags,
         "evidence": evidence,
         "data_warnings": data_warnings,
+    }
+
+
+async def _fetch_market_calendar(entry_dt: datetime) -> dict:
+    """Use Alpaca's official trading calendar for prior session and early-close boundaries."""
+    key = (os.getenv("APCA_API_KEY_ID") or "").strip()
+    secret = (os.getenv("APCA_API_SECRET_KEY") or "").strip()
+    if not key or not secret or key == "your_alpaca_api_key_here":
+        return {
+            "verified": False,
+            "current": None,
+            "previous": None,
+            "source": None,
+            "error": "Alpaca calendar credentials unavailable.",
+        }
+
+    start_day = entry_dt.date() - timedelta(days=14)
+    end_day = entry_dt.date()
+    headers = {
+        "APCA-API-KEY-ID": key,
+        "APCA-API-SECRET-KEY": secret,
+    }
+    params = {
+        "start": start_day.isoformat(),
+        "end": end_day.isoformat(),
+    }
+    bases = []
+    for base in (
+        ALPACA_TRADING_BASE_URL,
+        "https://paper-api.alpaca.markets",
+        "https://api.alpaca.markets",
+    ):
+        base = base.rstrip("/")
+        if base not in bases:
+            bases.append(base)
+
+    errors = []
+    for base in bases:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(f"{base}/v2/calendar", params=params, headers=headers)
+                response.raise_for_status()
+                rows = response.json()
+            if not isinstance(rows, list):
+                errors.append(f"{base}: unexpected calendar response")
+                continue
+            context = _calendar_context(rows, entry_dt.date())
+            context["source"] = base
+            context["error"] = (
+                None
+                if context["verified"]
+                else "Trade day or previous trading session missing from market calendar."
+            )
+            if context["verified"]:
+                return context
+            errors.append(f"{base}: incomplete calendar context")
+        except Exception as exc:
+            errors.append(f"{base}: {exc}")
+
+    return {
+        "verified": False,
+        "current": None,
+        "previous": None,
+        "source": None,
+        "error": "; ".join(errors[-3:]),
     }
 
 
@@ -674,6 +929,9 @@ Strategy rules:
 
 Tag rules:
 - The deterministic rule engine already handles Outside/Inside Day, level breaks, first-10m, airgapped >1%, no-level-break, chop-range, VWAP-based No Market Sign, and break-even. Do not repeat those.
+- Treat PDH/PDL/PMH/PML as usable only when the corresponding level_meta status is VERIFIED or VERIFIED_HISTORICAL.
+- Treat 10-minute 8 EMA evidence as usable only when ema_integrity_status is VERIFIED or VERIFIED_HISTORICAL.
+- Treat Market Sign as usable only when market_sign.integrity_status is VERIFIED. If status is unverified, do not infer confirmation from observed_status.
 - Market Sign is a custom trader rule supplied in objective evidence: bullish requires both SPY and QQQ above regular-session VWAP; bearish requires both below. Mixed is not a failed sign.
 - Suggest A++ Level + EMA only when broken-level and EMA confluence is genuinely supported.
 - Suggest Flag-Line-Sign only when Flag and Line are supported and objective market_sign.status is confirmed.
@@ -791,7 +1049,11 @@ async def build_le_levels(trade: dict) -> dict:
         }
 
     try:
-        underlying_bars, feed = await _fetch_alpaca_1m(ticker, when)
+        underlying_result, market_calendar = await asyncio.gather(
+            _fetch_alpaca_1m(ticker, when),
+            _fetch_market_calendar(when),
+        )
+        underlying_bars, feed = underlying_result
     except Exception as exc:
         return {
             "ruleset_version": LE_RULESET_VERSION,
@@ -802,8 +1064,17 @@ async def build_le_levels(trade: dict) -> dict:
             "warnings": [str(exc)],
         }
 
-    context = analyze_context(trade, underlying_bars, [], [])
-    levels = (context.get("evidence") or {}).get("levels") or {}
+    context = analyze_context(
+        trade,
+        underlying_bars,
+        [],
+        [],
+        market_calendar=market_calendar,
+        underlying_feed=feed,
+    )
+    ev = context.get("evidence") or {}
+    levels = ev.get("levels") or {}
+    level_meta = ev.get("level_meta") or {}
     warnings: list[str] = []
     if levels.get("PDH") is None or levels.get("PDL") is None:
         warnings.append("Previous-day high/low could not be established.")
@@ -818,11 +1089,23 @@ async def build_le_levels(trade: dict) -> dict:
             "Chart levels use delayed SIP; consolidated historical levels are valid, while newest bars may lag."
         )
 
+    verified_levels = {
+        name: value
+        for name, value in levels.items()
+        if value is not None and _status_is_verified((level_meta.get(name) or {}).get("status"))
+    }
+    if not market_calendar.get("verified"):
+        warnings.append(
+            "Official market calendar could not be verified; unverified reference levels are withheld from the chart."
+        )
+
     return {
         "ruleset_version": LE_RULESET_VERSION,
-        "available": any(levels.get(name) is not None for name in ("PDH", "PDL", "PMH", "PML")),
-        "levels": levels,
+        "available": bool(verified_levels),
+        "levels": verified_levels,
+        "level_meta": level_meta,
         "feed": feed,
+        "calendar_verified": bool(market_calendar.get("verified")),
         "warnings": warnings,
     }
 
@@ -847,10 +1130,11 @@ async def build_le_review(trade: dict) -> dict:
         }
 
     try:
-        underlying_result, spy_result, qqq_result = await asyncio.gather(
+        underlying_result, spy_result, qqq_result, market_calendar = await asyncio.gather(
             _fetch_alpaca_1m(ticker, when),
             _fetch_alpaca_1m("SPY", when),
             _fetch_alpaca_1m("QQQ", when),
+            _fetch_market_calendar(when),
         )
         underlying_bars, underlying_feed = underlying_result
         spy_bars, spy_feed = spy_result
@@ -866,7 +1150,16 @@ async def build_le_review(trade: dict) -> dict:
             "ai": None,
         }
 
-    context = analyze_context(trade, underlying_bars, spy_bars, qqq_bars)
+    context = analyze_context(
+        trade,
+        underlying_bars,
+        spy_bars,
+        qqq_bars,
+        market_calendar=market_calendar,
+        underlying_feed=underlying_feed,
+        spy_feed=spy_feed,
+        qqq_feed=qqq_feed,
+    )
     if context.get("available"):
         context["evidence"]["market_data_feed"] = {
             "underlying": underlying_feed,
@@ -887,31 +1180,34 @@ async def build_le_review(trade: dict) -> dict:
             )
 
         ev = context["evidence"]
-        required = [
-            ev.get("levels", {}).get("PDH"),
-            ev.get("levels", {}).get("PDL"),
-            ev.get("levels", {}).get("PMH"),
-            ev.get("levels", {}).get("PML"),
-            ev.get("underlying_price_last_completed_1m"),
-            ev.get("ema8_10m_last_completed"),
-            ev.get("spy", {}).get("vwap"),
-            ev.get("qqq", {}).get("vwap"),
+        level_meta = ev.get("level_meta") or {}
+        verified_flags = [
+            _status_is_verified((level_meta.get(name) or {}).get("status"))
+            for name in ("PDH", "PDL", "PMH", "PML")
         ]
-        present = sum(value is not None for value in required)
-        completeness_pct = round(present / len(required) * 100)
-        if completeness_pct >= 90 and feeds == {"sip"} and not context["data_warnings"]:
+        verified_flags.extend([
+            _status_is_verified(ev.get("ema_integrity_status")),
+            (ev.get("market_sign") or {}).get("integrity_status") == "VERIFIED",
+            ev.get("underlying_price_last_completed_1m") is not None,
+        ])
+        verified_count = sum(bool(flag) for flag in verified_flags)
+        completeness_pct = round(verified_count / len(verified_flags) * 100)
+
+        if completeness_pct == 100 and feeds == {"sip"} and ev.get("market_calendar_verified"):
             quality = "High"
-            quality_reason = "Core LE evidence is complete and based on consolidated SIP market data."
+            quality_reason = (
+                "All core LE evidence is verified from consolidated SIP data with official session boundaries."
+            )
         elif completeness_pct >= 75:
             quality = "Moderate"
             quality_reason = (
-                "Core LE evidence is mostly complete, but feed quality or missing fields limit certainty."
+                "Most core LE evidence is verified, but one or more inputs are limited, delayed, or unavailable."
             )
         else:
             quality = "Low"
-            quality_reason = "Material LE evidence is missing; classifications should be treated cautiously."
-        if any(feed != "sip" for feed in feeds) and quality == "High":
-            quality = "Moderate"
+            quality_reason = (
+                "Material LE evidence is not verified; automatic conclusions are intentionally restricted."
+            )
         ev["evidence_quality"] = {
             "level": quality,
             "completeness_pct": completeness_pct,

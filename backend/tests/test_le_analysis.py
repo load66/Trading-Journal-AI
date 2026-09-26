@@ -2,10 +2,11 @@ import asyncio
 
 import httpx
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from le_analysis import (
+    _calendar_context,
     _fetch_alpaca_1m,
     _historical_feed_order,
     _history_window,
@@ -90,6 +91,35 @@ def tag_names(review):
     return {(t["tag_type"], t["tag_value"]) for t in review["auto_tags"]}
 
 
+def verified_calendar(previous_close=time(16, 0), current_close=time(16, 0)):
+    return {
+        "verified": True,
+        "previous": {
+            "date": datetime(2026, 9, 24, tzinfo=ET).date(),
+            "open": datetime(2026, 9, 24, 9, 30, tzinfo=ET),
+            "close": datetime.combine(datetime(2026, 9, 24).date(), previous_close, tzinfo=ET),
+        },
+        "current": {
+            "date": datetime(2026, 9, 25, tzinfo=ET).date(),
+            "open": datetime(2026, 9, 25, 9, 30, tzinfo=ET),
+            "close": datetime.combine(datetime(2026, 9, 25).date(), current_close, tzinfo=ET),
+        },
+    }
+
+
+def review_context(trade, underlying, spy=None, qqq=None, feed="sip", calendar=None):
+    return analyze_context(
+        trade,
+        underlying,
+        underlying if spy is None else spy,
+        underlying if qqq is None else qqq,
+        market_calendar=calendar or verified_calendar(),
+        underlying_feed=feed,
+        spy_feed=feed,
+        qqq_feed=feed,
+    )
+
+
 def test_historical_feed_order_prefers_consolidated_data(monkeypatch):
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     # The module-level fallback remains IEX, but SIP must still be tried first.
@@ -158,8 +188,12 @@ def test_build_le_levels_returns_same_reference_levels_without_ai(monkeypatch):
     async def fake_fetch(symbol, when):
         return market_bars(pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0), "sip"
 
+    async def fake_calendar(when):
+        return verified_calendar()
+
     import le_analysis
     monkeypatch.setattr(le_analysis, "_fetch_alpaca_1m", fake_fetch)
+    monkeypatch.setattr(le_analysis, "_fetch_market_calendar", fake_calendar)
 
     result = asyncio.run(build_le_levels(base_trade("CALL")))
     assert result["available"] is True
@@ -189,7 +223,7 @@ def test_entry_snapshot_uses_only_completed_one_minute_bar():
     bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
     # 08:47:04 CT == 09:47:04 ET. Add a 09:47 ET bar with an impossible future close.
     bars.append(bar(datetime(2026, 9, 25, 9, 47, tzinfo=ET), 102.0, 150.0, 90.0, 149.0))
-    review = analyze_context(base_trade("CALL", entry="08:47:04"), bars, bars, bars)
+    review = review_context(base_trade("CALL", entry="08:47:04"), bars)
     assert review["evidence"]["underlying_price_last_completed_1m"] == 102.0
 
 
@@ -210,7 +244,7 @@ def test_exact_10m_boundary_is_not_used_as_pre_entry_confirmation():
         lambda i: 99.0 if i < 20 else 102.0,
     )
     trade = base_trade("CALL", entry="09:00:00")  # CT -> 10:00:00 ET
-    review = analyze_context(trade, prev + pre + rth, rth, rth)
+    review = review_context(trade, prev + pre + rth, rth, rth)
     names = tag_names(review)
 
     assert review["evidence"]["level_breaks_before_entry"]["PDH"] is False
@@ -258,7 +292,7 @@ def test_failed_vwap_market_sign_adds_deterministic_mistake_tag():
         (2026, 9, 25), 9, 30, 20,
         lambda i: 102.0 - i * 0.1,
     )
-    review = analyze_context(base_trade("CALL"), underlying, falling, falling)
+    review = review_context(base_trade("CALL"), underlying, falling, falling)
 
     assert review["evidence"]["market_sign"]["status"] == "failed"
     assert ("mistake", "No Market Sign") in tag_names(review)
@@ -274,7 +308,7 @@ def test_mixed_vwap_market_sign_does_not_add_no_market_sign_tag():
         (2026, 9, 25), 9, 30, 20,
         lambda i: 102.0 - i * 0.1,
     )
-    review = analyze_context(base_trade("CALL"), underlying, rising, falling)
+    review = review_context(base_trade("CALL"), underlying, rising, falling)
 
     assert review["evidence"]["market_sign"]["status"] == "mixed"
     assert ("mistake", "No Market Sign") not in tag_names(review)
@@ -282,7 +316,7 @@ def test_mixed_vwap_market_sign_does_not_add_no_market_sign_tag():
 
 def test_outside_day_requires_both_directional_levels_before_entry():
     bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
-    review = analyze_context(base_trade("CALL"), bars, bars, bars)
+    review = review_context(base_trade("CALL"), bars)
     names = tag_names(review)
 
     assert review["evidence"]["outside_day"] is True
@@ -295,7 +329,7 @@ def test_outside_day_requires_both_directional_levels_before_entry():
 
 def test_inside_day_breaks_premarket_level_but_not_previous_day_level():
     bars = market_bars(pdh=105.0, pmh=101.0, current=102.0)
-    review = analyze_context(base_trade("CALL"), bars, bars, bars)
+    review = review_context(base_trade("CALL"), bars)
     names = tag_names(review)
 
     assert review["evidence"]["outside_day"] is False
@@ -307,7 +341,7 @@ def test_inside_day_breaks_premarket_level_but_not_previous_day_level():
 
 def test_chop_and_no_level_break_are_proven_without_ai():
     bars = market_bars(pdh=105.0, pdl=95.0, pmh=101.0, pml=96.0, current=99.0)
-    review = analyze_context(base_trade("CALL"), bars, bars, bars)
+    review = review_context(base_trade("CALL"), bars)
     names = tag_names(review)
 
     assert review["evidence"]["inside_premarket_range_at_entry"] is True
@@ -317,8 +351,65 @@ def test_chop_and_no_level_break_are_proven_without_ai():
 
 def test_first_ten_minutes_is_a_deterministic_violation_tag():
     bars = market_bars(current=102.0)
-    review = analyze_context(base_trade("CALL", entry="08:35:00"), bars, bars, bars)
+    review = review_context(base_trade("CALL", entry="08:35:00"), bars)
     assert ("mistake", "Entered First 10m") in tag_names(review)
+
+
+def test_calendar_context_honors_early_close():
+    rows = [
+        {"date": "2026-09-24", "open": "09:30", "close": "13:00"},
+        {"date": "2026-09-25", "open": "09:30", "close": "16:00"},
+    ]
+    ctx = _calendar_context(rows, datetime(2026, 9, 25, tzinfo=ET).date())
+    assert ctx["verified"] is True
+    assert ctx["previous"]["close"].hour == 13
+
+
+def test_early_close_excludes_post_close_spike_from_pdh():
+    prev = minute_run(
+        (2026, 9, 24), 9, 30, 210, 100.0,
+        high=lambda i: 110.0 if i == 30 else 105.0,
+        low=95.0,
+    )
+    prev.append(bar(datetime(2026, 9, 24, 15, 0, tzinfo=ET), 100, 200, 90, 150))
+    pre = [
+        bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 100, 101, 96, 99),
+        bar(datetime(2026, 9, 25, 9, 29, tzinfo=ET), 99, 100, 97, 99),
+    ]
+    rth = minute_run((2026, 9, 25), 9, 30, 20, 102.0)
+    review = review_context(
+        base_trade("CALL"),
+        prev + pre + rth,
+        calendar=verified_calendar(previous_close=time(13, 0)),
+    )
+    assert review["evidence"]["levels"]["PDH"] == 110.0
+    assert review["evidence"]["level_meta"]["PDH"]["status"] == "VERIFIED"
+
+
+def test_iex_levels_are_limited_and_cannot_drive_auto_tags():
+    bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    review = review_context(base_trade("CALL"), bars, feed="iex")
+    names = tag_names(review)
+
+    assert review["evidence"]["level_meta"]["PDH"]["status"] == "LIMITED"
+    assert review["evidence"]["level_meta"]["PMH"]["status"] == "LIMITED"
+    assert review["evidence"]["outside_day"] is False
+    assert ("setup", "PDH Break") not in names
+    assert ("setup", "PMH Break") not in names
+    assert ("setup", "Outside Day") not in names
+
+
+def test_missing_calendar_disables_level_dependent_auto_tags():
+    bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    review = analyze_context(
+        base_trade("CALL"),
+        bars, bars, bars,
+        market_calendar={"verified": False, "current": None, "previous": None},
+        underlying_feed="sip",
+    )
+    names = tag_names(review)
+    assert ("setup", "Outside Day") not in names
+    assert any("calendar" in warning.lower() for warning in review["data_warnings"])
 
 
 def test_strict_groq_schema_is_closed_and_versioned():
