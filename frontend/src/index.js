@@ -2,13 +2,16 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import './v3.css';
-import App from './App';\nimport AuthGate from './AuthGate';
+import App from './App';
+import AuthGate from './AuthGate';
 import reportWebVitals from './reportWebVitals';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
-    <AuthGate>\n      <App />\n    </AuthGate>
+    <AuthGate>
+      <App />
+    </AuthGate>
   </React.StrictMode>
 );
 
