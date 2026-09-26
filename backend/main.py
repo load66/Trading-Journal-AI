@@ -601,6 +601,20 @@ def _trade_pl_percent(trade: dict) -> float | None:
     return round(float(trade.get("net_pnl") or 0) / entry_notional * 100, 2)
 
 
+def _avg_trade_pl_percent(trades: list[dict]) -> float | None:
+    """Average canonical P/L % across completed trades.
+
+    This is a display KPI only. It reuses _trade_pl_percent so dashboard and
+    trade-level percentages can never drift to different denominators.
+    """
+    values = []
+    for trade in trades:
+        value = _trade_pl_percent(trade)
+        if value is not None:
+            values.append(value)
+    return round(sum(values) / len(values), 2) if values else None
+
+
 @app.get("/api/trades")
 def list_trades(
     account_id: int | None = Query(None),
@@ -1125,6 +1139,8 @@ def get_kpis(
     else:
         expectancy = 0.0
 
+    avg_pl_pct = _avg_trade_pl_percent(trades)
+
     # Daily P&L
     daily: dict[str, float] = {}
     for t in trades:
@@ -1226,6 +1242,7 @@ def get_kpis(
         "by_instrument": by_instrument,
         "by_strategy": by_strategy,
         "expectancy": expectancy,
+        "avg_pl_pct": avg_pl_pct,
         "max_drawdown": round(max_drawdown, 2),
         **_excursion_kpis(conn, account_id, date_from, date_to),
     }
