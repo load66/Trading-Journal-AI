@@ -239,6 +239,73 @@ export function EquityCurve({ days, height = 190, onPick }) {
   );
 }
 
+/* ── daily net P&L bars ──────────────────────────────────────────────────── */
+
+export function DailyPnlBars({ days, height = 190, onPick }) {
+  const [hover, setHover] = useState(null);
+  const box = useRef(null);
+  const rows = useMemo(
+    () => (days || []).map((d) => ({ date: d.date, value: Number(d.net_pnl) || 0 })),
+    [days],
+  );
+  const peak = useMemo(() => Math.max(1, ...rows.map((d) => Math.abs(d.value))), [rows]);
+
+  const move = useCallback((e) => {
+    if (!box.current || !rows.length) return;
+    const r = box.current.getBoundingClientRect();
+    const f = Math.max(0, Math.min(0.999999, (e.clientX - r.left) / r.width));
+    setHover(Math.min(rows.length - 1, Math.floor(f * rows.length)));
+  }, [rows.length]);
+
+  if (!rows.length) return <div className="v3-empty">No sessions in this range.</div>;
+
+  const active = hover == null ? null : rows[hover];
+  const leftPct = hover == null ? 0 : ((hover + 0.5) / rows.length) * 100;
+
+  return (
+    <div
+      className="v3-daily-bars"
+      ref={box}
+      style={{ height }}
+      onPointerMove={move}
+      onPointerLeave={() => setHover(null)}
+      onClick={() => { if (active && onPick) onPick(active.date); }}
+      role="img"
+      aria-label="Daily net P and L bars"
+    >
+      <div className="v3-daily-zero" />
+      <div className="v3-daily-bars-grid">
+        {rows.map((d, i) => {
+          const pct = Math.max(2, (Math.abs(d.value) / peak) * 46);
+          return (
+            <button
+              key={d.date || i}
+              type="button"
+              className={`v3-daily-bar ${d.value >= 0 ? 'up' : 'down'}`}
+              aria-label={`${shortDate(d.date)}: ${money(d.value)}`}
+              onFocus={() => setHover(i)}
+              onBlur={() => setHover(null)}
+              onClick={(e) => { e.stopPropagation(); onPick && onPick(d.date); }}
+            >
+              <i style={{ '--h': `${pct}%` }} />
+            </button>
+          );
+        })}
+      </div>
+      {active && (
+        <div
+          className="v3-tipbox v3-daily-tip"
+          style={{ left: leftPct > 68 ? undefined : `calc(${leftPct}% + 10px)`, right: leftPct > 68 ? `calc(${100 - leftPct}% + 10px)` : undefined, top: 8 }}
+        >
+          <div className="d">{shortDate(active.date)}</div>
+          <div className={`v ${tone(active.value)}`}>{money(active.value)}</div>
+          <div className="r">net for the session</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── the session strip ──────────────────────────────────────────────────────
    Every trading day as one bar. Bars are anchored to the midline absolutely:
    gains grow up from it, losses grow down. An earlier version used flex
@@ -305,7 +372,7 @@ export function SessionStrip({ days, onPick, onHover }) {
 
 /* ── the month grid ─────────────────────────────────────────────────────── */
 
-export function MonthGrid({ year, month, byDay, today, onPick }) {
+export function MonthGrid({ year, month, byDay, today, onPick, showWeek = true }) {
   const dim = new Date(year, month, 0).getDate();
   const firstDow = new Date(year, month - 1, 1).getDay();
   const cells = [];
@@ -321,8 +388,8 @@ export function MonthGrid({ year, month, byDay, today, onPick }) {
   for (let i = 0; i < cells.length; i += 5) rows.push(cells.slice(i, i + 5));
 
   return (
-    <div className="v3-cal">
-      {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Week'].map((d) => (
+    <div className={`v3-cal${showWeek ? '' : ' v3-cal-five'}`}>
+      {(showWeek ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Week'] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']).map((d) => (
         <div className="v3-dow" key={d}>{d}</div>
       ))}
       {rows.map((row, ri) => {
@@ -365,11 +432,13 @@ export function MonthGrid({ year, month, byDay, today, onPick }) {
         return (
           <div style={{ display: 'contents' }} key={`r${ri}`}>
             {cellNodes}
-            <div className="v3-wk">
-              <span className="l">Week {ri + 1}</span>
-              <span className={`v ${wd ? tone(wt) : 'v3-flat'}`}>{wd ? moneyK(wt) : ''}</span>
-              <span className="c">{wd ? `${wd} session${wd === 1 ? '' : 's'}` : 'no sessions'}</span>
-            </div>
+            {showWeek && (
+              <div className="v3-wk">
+                <span className="l">Week {ri + 1}</span>
+                <span className={`v ${wd ? tone(wt) : 'v3-flat'}`}>{wd ? moneyK(wt) : ''}</span>
+                <span className="c">{wd ? `${wd} session${wd === 1 ? '' : 's'}` : 'no sessions'}</span>
+              </div>
+            )}
           </div>
         );
       })}
