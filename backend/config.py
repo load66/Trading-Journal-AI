@@ -33,8 +33,7 @@ class Settings:
     frontend_origins: tuple[str, ...] = ()
     database_mode: str = 'sqlite'
     database_path: str = 'trading_journal.db'
-    turso_database_url: str = ''
-    turso_auth_token: str = ''
+    supabase_db_url: str = ''
     storage_mode: str = 'local'
     upload_dir: str = 'uploads'
     supabase_secret_key: str = ''
@@ -54,18 +53,14 @@ class Settings:
             raise ConfigError('APP_ENV must be development, test, or production')
         if auth_mode not in {'disabled', 'supabase'}:
             raise ConfigError('AUTH_MODE must be disabled or supabase')
-        if database_mode not in {'sqlite', 'turso'}:
-            raise ConfigError('DATABASE_MODE must be sqlite or turso')
+        if database_mode not in {'sqlite', 'postgres'}:
+            raise ConfigError('DATABASE_MODE must be sqlite or postgres')
         if storage_mode not in {'local', 'supabase'}:
             raise ConfigError('STORAGE_MODE must be local or supabase')
 
-        turso_database_url = env.get('TURSO_DATABASE_URL', '').strip()
-        turso_auth_token = env.get('TURSO_AUTH_TOKEN', '').strip()
-        if database_mode == 'turso':
-            if not turso_database_url:
-                raise ConfigError('TURSO_DATABASE_URL is required when DATABASE_MODE=turso')
-            if not turso_auth_token:
-                raise ConfigError('TURSO_AUTH_TOKEN is required when DATABASE_MODE=turso')
+        supabase_db_url = env.get('SUPABASE_DB_URL', '').strip()
+        if database_mode == 'postgres' and not supabase_db_url:
+            raise ConfigError('SUPABASE_DB_URL is required when DATABASE_MODE=postgres')
 
         supabase_url = env.get('SUPABASE_URL', '').strip().rstrip('/')
         allowed_user_id = env.get('ALLOWED_USER_ID', '').strip()
@@ -84,8 +79,7 @@ class Settings:
             frontend_origins=_csv(env.get('FRONTEND_ORIGINS', '')),
             database_mode=database_mode,
             database_path=env.get('DATABASE_PATH', 'trading_journal.db').strip() or 'trading_journal.db',
-            turso_database_url=turso_database_url,
-            turso_auth_token=turso_auth_token,
+            supabase_db_url=supabase_db_url,
             storage_mode=storage_mode,
             upload_dir=env.get('UPLOAD_DIR', 'uploads').strip() or 'uploads',
             supabase_secret_key=(env.get('SUPABASE_SECRET_KEY', '') or env.get('SUPABASE_SERVICE_ROLE_KEY', '')).strip(),
