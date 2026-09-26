@@ -1,4 +1,6 @@
 import os
+import logging
+import tempfile
 import json
 import sqlite3
 import aiofiles
@@ -15,7 +17,10 @@ from dotenv import load_dotenv
 
 import httpx
 
-from database import init_db, get_db, row_to_dict\nfrom runtime_config import load_runtime_config\nfrom auth import SingleUserAuthMiddleware\nfrom storage import get_diary_storage, safe_diary_object_path, content_type_for
+from database import init_db, get_db, row_to_dict
+from runtime_config import load_runtime_config
+from auth import SingleUserAuthMiddleware
+from storage import get_diary_storage, safe_diary_object_path, content_type_for
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
@@ -32,11 +37,14 @@ from library import router as library_router, init_library_tables, apply_aliases
 
 load_dotenv()
 
+logger = logging.getLogger("trading_journal")
+
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    config = load_runtime_config()
     init_db()
     _conn = get_db()
     try:
@@ -49,6 +57,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Trading Journal AI API", lifespan=lifespan)
+
+# Auth is added before CORS so CORS remains the outer middleware and also
+# decorates 401/403 responses for the hosted frontend.
+app.add_middleware(SingleUserAuthMiddleware)
 
 # This runs on your own machine, so any localhost port is accepted: when 3010 is
 # busy the dev server offers 3011, and the app should still work. FRONTEND_ORIGINS
