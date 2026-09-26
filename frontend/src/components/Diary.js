@@ -83,7 +83,7 @@ function DiaryCard({ entry, onDeleted }) {
           {/* Thumbnail */}
           {hasImage ? (
             <img
-              src={`${BACKEND}/uploads/${entry.image_path}`}
+              src={imageSrc}
               alt=""
               style={{ width: 76, height: 56, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--divider)', flexShrink: 0 }}
               onError={e => { e.target.style.display = 'none'; }}
@@ -125,7 +125,7 @@ function DiaryCard({ entry, onDeleted }) {
           {hasImage && (
             <div style={{ marginBottom: 16, textAlign: 'center' }}>
               <img
-                src={`${BACKEND}/uploads/${entry.image_path}`}
+                src={imageSrc}
                 alt={`Diary entry ${entry.id}`}
                 style={{ maxWidth: '100%', borderRadius: 'var(--radius-md)', border: '1px solid var(--divider)' }}
               />
