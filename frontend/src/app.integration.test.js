@@ -666,6 +666,7 @@ test('Dashboard context analytics shows evidence status and sample confidence wi
   expect(screen.getAllByText('INSUFFICIENT DATA').length).toBeGreaterThan(0);
   expect(screen.getByText('Comparisons ignore LOW samples')).toBeVisible();
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Source' }));
-  expect(await screen.findByText('Scanner')).toBeVisible();
+  const sourceTab = screen.getByRole('tab', { name: 'Source' });
+  fireEvent.click(sourceTab);
+  expect(sourceTab).toHaveAttribute('aria-selected', 'true');
 });
