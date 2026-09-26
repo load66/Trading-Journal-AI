@@ -1155,3 +1155,108 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+/* ---------- recorded context edge diagnostics ---------- */
+.v3-edge-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 12px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+.v3-edge-insights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-bottom: 14px;
+  border: 1px solid var(--divider-soft);
+  background: var(--divider-soft);
+}
+.v3-edge-insights article {
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--surface-page);
+  display: grid;
+  gap: 4px;
+}
+.v3-edge-insights article b {
+  margin-top: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.v3-edge-insights article strong {
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1.15;
+  letter-spacing: -.025em;
+  font-variant-numeric: tabular-nums;
+}
+.v3-edge-insights article small {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.v3-edge-table .v3-tick {
+  min-width: 150px;
+}
+.v3-edge-table .v3-tick > span {
+  display: inline-block;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+.v3-edge-table .v3-tick small {
+  margin-left: 7px;
+  color: var(--text-tertiary);
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.v3-edge-low-sample {
+  opacity: .58;
+}
+.v3-edge-low-sample:hover {
+  opacity: .82;
+}
+
+@media (max-width: 760px) {
+  .v3-edge-insights {
+    grid-template-columns: 1fr;
+  }
+  .v3-edge-insights article {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    column-gap: 12px;
+  }
+  .v3-edge-insights article .v3-lab,
+  .v3-edge-insights article b,
+  .v3-edge-insights article small {
+    grid-column: 1;
+  }
+  .v3-edge-insights article strong {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+    align-self: center;
+    text-align: right;
+  }
+  .v3-edge-note {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .v3-edge-table {
+    min-width: 520px;
+  }
+}
