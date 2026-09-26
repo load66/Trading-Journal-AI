@@ -651,7 +651,7 @@ async def import_csv(
         else:
             _replace_regrouped_trades(conn, account_id, trades)
 
-        for trade in trades:
+        for trade in eligible_trades:
             try:
                 conn.execute("""
                     INSERT INTO trades
@@ -1448,7 +1448,8 @@ def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
     are authoritative; the matching manual/AI tag is only a fallback when the
     structured value is absent. Emotion is recorded-only and is never inferred.
     """
-    groups = {str(t.get("trade_group") or "") for t in trades if t.get("trade_group")}
+    eligible_trades = [t for t in trades if t.get("net_pnl") is not None]
+    groups = {str(t.get("trade_group") or "") for t in eligible_trades if t.get("trade_group")}
     analysis_by_group: dict[str, dict] = {}
     if groups:
         for row in conn.execute(
@@ -1484,7 +1485,7 @@ def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
         "setup": ("setup", "setup"),
         "emotion": ("emotional_state", "emotion"),
     }
-    total = len(trades)
+    total = len(eligible_trades)
     min_sample = _edge_min_sample(total)
     result = {}
 
