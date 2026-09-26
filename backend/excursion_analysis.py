@@ -59,6 +59,7 @@ def trade_window(trade: dict) -> dict | None:
     return {
         "entry_dt": _exec_dt(entries[0]),
         "exit_dt": _exec_dt(exits[-1]),
+        "first_entry_price": float(entries[0].get("price") or 0),
         "avg_entry": _weighted_price(entries),
         "avg_exit": _weighted_price(exits),
         "entries": entries,
@@ -126,7 +127,9 @@ def calculate_trade_excursion(trade: dict, bars: list[dict]) -> dict:
     entry_bar = _bar_for_minute(held, entry_dt)
     exit_bar = _bar_for_minute(held, exit_dt)
     if inst == "STOCK":
-        entry_ref = window["avg_entry"]
+        # Anchor excursion to the first actual fill so later scale-ins never
+        # leak future cost-basis information backward into earlier bars.
+        entry_ref = window["first_entry_price"]
         exit_ref = window["avg_exit"]
         basis = "execution_price"
     else:
@@ -174,6 +177,6 @@ def calculate_trade_excursion(trade: dict, bars: list[dict]) -> dict:
             "Options use the underlying ticker's 1-minute path; futures use the configured ETF proxy. "
             "Entry/exit-minute highs and lows can include seconds just outside the exact fill timestamp."
             if inst != "STOCK"
-            else "Stock excursions use actual fill prices with Alpaca 1-minute highs/lows."
+            else "Stock excursions are anchored to the first fill, with realized average exit and Alpaca 1-minute highs/lows."
         ),
     }
