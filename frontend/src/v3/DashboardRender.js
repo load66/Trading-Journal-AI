@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { calendarApi } from '../api';
 import {
-  Measures, BarRow, Tabs, Seg, EquityCurve, SessionStrip, MonthGrid,
+  Measures, BarRow, Tabs, Seg, EquityCurve, DailyPnlBars, SessionStrip, MonthGrid,
   money, money2, moneyK, tone, shortDate, MONTH_NAMES,
 } from './parts';
 
@@ -18,6 +18,7 @@ function MonthPanel({ accountId, onDayClick, latestDate }) {
   const [year, setYear] = useState(seed ? Number(seed[0]) : now.getFullYear());
   const [month, setMonth] = useState(seed ? Number(seed[1]) : now.getMonth() + 1);
   const [byDay, setByDay] = useState({});
+  const [share, setShare] = useState(false);
 
   useEffect(() => {
     const params = { year, month };
@@ -51,10 +52,43 @@ function MonthPanel({ accountId, onDayClick, latestDate }) {
           {all.length} session{all.length === 1 ? '' : 's'} traded
           <b className={tone(total)}>{all.length ? moneyK(total) : ''}</b>
         </div>
+        <button
+          type="button"
+          className={`btn btn-secondary btn-sm v3-share-toggle${share ? ' active' : ''}`}
+          onClick={() => setShare((v) => !v)}
+          aria-pressed={share}
+        >
+          {share ? 'Exit share view' : 'Share view'}
+        </button>
       </div>
-      <div className="v3-scroll">
-        <MonthGrid year={year} month={month} byDay={byDay} today={todayKey} onPick={onDayClick} />
-      </div>
+
+      {share ? (
+        <div className="v3-cal-share-card" aria-label="Screenshot-ready trading calendar">
+          <div className="v3-cal-share-head">
+            <div>
+              <div className="v3-lab">Trading calendar</div>
+              <h2>{MONTH_NAMES[month - 1]} <span>{year}</span></h2>
+            </div>
+            <div className="v3-cal-share-stat">
+              <b className={tone(total)}>{all.length ? money(total) : '$0'}</b>
+              <span>{all.length} session{all.length === 1 ? '' : 's'}</span>
+            </div>
+          </div>
+          <MonthGrid
+            year={year}
+            month={month}
+            byDay={byDay}
+            today={todayKey}
+            onPick={onDayClick}
+            showWeek={false}
+          />
+          <div className="v3-cal-share-foot">Net P&amp;L · broker-recorded sessions</div>
+        </div>
+      ) : (
+        <div className="v3-scroll">
+          <MonthGrid year={year} month={month} byDay={byDay} today={todayKey} onPick={onDayClick} />
+        </div>
+      )}
     </>
   );
 }
@@ -301,12 +335,69 @@ export default function DashboardRender(p) {
   const ratio = aloss > 0 ? awin / aloss : null;
   const avgPlPct = k.avg_pl_pct == null ? null : Number(k.avg_pl_pct);
 
+  const greenDays = days.filter((d) => Number(d.net_pnl || 0) > 0);
+  const redDays = days.filter((d) => Number(d.net_pnl || 0) < 0);
+  const bestDay = days.length
+    ? days.reduce((a, b) => Number(a.net_pnl || 0) >= Number(b.net_pnl || 0) ? a : b)
+    : null;
+  const worstDay = days.length
+    ? days.reduce((a, b) => Number(a.net_pnl || 0) <= Number(b.net_pnl || 0) ? a : b)
+    : null;
+  const avgRedDay = redDays.length
+    ? Math.abs(redDays.reduce((s, d) => s + Number(d.net_pnl || 0), 0) / redDays.length)
+    : 0;
+  const lossOutlierRatio = worstDay && avgRedDay > 0
+    ? Math.abs(Number(worstDay.net_pnl || 0)) / avgRedDay
+    : null;
+
+  const strategyTagged = (k.by_strategy || []).reduce((s, r) => s + Number(r.count || 0), 0);
+  const strategyCoverage = k.total_trades ? strategyTagged / k.total_trades : 0;
+  const rSamples = (edgeReport?.r_multiple_dist || []).reduce((s, r) => s + Number(r.count || 0), 0);
+  const rCoverage = k.total_trades ? rSamples / k.total_trades : 0;
+  const processReady = k.total_trades >= 10 && strategyCoverage >= 0.6 && rCoverage >= 0.6;
+
+  const trainingFocus = [];
+  if (rCoverage < 0.6) {
+    trainingFocus.push({
+      title: 'Record planned risk',
+      body: `${rSamples} of ${k.total_trades || 0} trades have R data. Initial stop/risk is required before a process score is trustworthy.`,
+      evidence: 'INSUFFICIENT DATA',
+    });
+  }
+  if (strategyCoverage < 0.6) {
+    trainingFocus.push({
+      title: 'Tag the setup before review',
+      body: `${strategyTagged} of ${k.total_trades || 0} trades are strategy-tagged. Setup coverage is too low to identify your best repeatable edge.`,
+      evidence: 'RECORDED',
+    });
+  }
+  if (lossOutlierRatio != null && lossOutlierRatio >= 2) {
+    trainingFocus.push({
+      title: 'Reduce outlier losing days',
+      body: `Your worst session was ${lossOutlierRatio.toFixed(1)}× the average red day. Consistency improves fastest by containing the tail loss.`,
+      evidence: 'VERIFIED',
+    });
+  }
+  if (ratio != null && ratio < 1) {
+    trainingFocus.push({
+      title: 'Improve payoff',
+      body: 'Average winners are smaller than average losers. Protect downside or allow high-quality winners more room.',
+      evidence: 'VERIFIED',
+    });
+  }
+  if (!trainingFocus.length) {
+    trainingFocus.push({
+      title: 'Protect the repeatable process',
+      body: 'No major verified gap stands out in this range. Keep size, setups and planned risk consistent.',
+      evidence: 'VERIFIED',
+    });
+  }
+
   // These are the names the goals API actually returns. An earlier version
   // invented *_goal keys, so every goal silently fell back to a default and a
   // saved change never appeared on the card.
   const g = goals || {};
   const gWin = g.win_rate ?? 65;
-  const gDay = g.day_win_rate ?? 75;
   const gPf = g.profit_factor ?? 1.5;
   const gRatio = g.avg_win_loss_ratio ?? 1.5;
   const gExp = g.expectancy ?? 50;
@@ -314,16 +405,10 @@ export default function DashboardRender(p) {
 
   const measures = [
     {
-      label: 'Trade win rate', value: `${(k.win_rate || 0).toFixed(1)}%`,
-      fill: cap((k.win_rate || 0) / 100), goal: `${gWin}%`, goalPct: cap(gWin / 100) * 100,
-      met: (k.win_rate || 0) >= gWin,
-      read: `${(k.winning_trades || 0).toLocaleString()} won, ${(k.losing_trades || 0).toLocaleString()} lost`,
-    },
-    {
-      label: 'Day win rate', value: `${(k.day_win_rate || 0).toFixed(1)}%`,
-      fill: cap((k.day_win_rate || 0) / 100), goal: `${gDay}%`, goalPct: cap(gDay / 100) * 100,
-      met: (k.day_win_rate || 0) >= gDay,
-      read: `${k.positive_days || 0} green days, ${(k.trading_days || 0) - (k.positive_days || 0)} red`,
+      label: 'Expectancy', value: money2(k.expectancy || 0),
+      fill: cap((k.expectancy || 0) / gExp), goal: `$${gExp}`, goalPct: 100,
+      met: (k.expectancy || 0) >= gExp,
+      read: 'Average net value of each completed trade',
     },
     {
       label: 'Profit factor',
@@ -333,14 +418,18 @@ export default function DashboardRender(p) {
       read: `$${Number(k.profit_factor || 0).toFixed(2)} won for every $1.00 lost`,
     },
     {
+      label: 'Trade win rate', value: `${(k.win_rate || 0).toFixed(1)}%`,
+      fill: cap((k.win_rate || 0) / 100), goal: `${gWin}%`, goalPct: cap(gWin / 100) * 100,
+      met: (k.win_rate || 0) >= gWin,
+      read: `${(k.winning_trades || 0).toLocaleString()} won, ${(k.losing_trades || 0).toLocaleString()} lost`,
+    },
+    {
       label: 'Payoff ratio', value: ratio == null ? '—' : ratio.toFixed(2),
       fill: cap((ratio || 0) / gRatio), goal: Number(gRatio).toFixed(2), goalPct: 100,
       met: ratio != null && ratio >= gRatio,
       read: (
-        <>Your average win is <b>${Math.round(awin).toLocaleString()}</b>. Your average loss is{' '}
-          <b>${Math.round(aloss).toLocaleString()}</b>.
-          {ratio != null && ratio < 1 ? ' You win often and small, lose rarely and big.' : ''}
-        </>
+        <>Average win <b>$${Math.round(awin).toLocaleString()}</b> · average loss{' '}
+          <b>$${Math.round(aloss).toLocaleString()}</b></>
       ),
     },
     {
@@ -350,13 +439,13 @@ export default function DashboardRender(p) {
       met: avgPlPct != null && avgPlPct > 0,
       read: avgPlPct == null
         ? 'Not enough completed trades with entry cost'
-        : 'Average net return per completed trade, using entry premium/notional',
+        : 'Average net return per trade on entry premium/notional',
     },
     {
-      label: 'Expectancy', value: money2(k.expectancy || 0),
-      fill: cap((k.expectancy || 0) / gExp), goal: `$${gExp}`, goalPct: 100,
-      met: (k.expectancy || 0) >= gExp,
-      read: 'What the next trade is worth, on average',
+      label: 'Max drawdown',
+      value: money2(k.max_drawdown || 0),
+      tone: Number(k.max_drawdown || 0) < 0 ? 'neg' : undefined,
+      read: 'Largest realized peak-to-trough drop in this range',
     },
   ];
 
@@ -414,15 +503,7 @@ export default function DashboardRender(p) {
           </div>
         </div>
 
-        <EquityCurve days={days} onPick={onDayClick} />
 
-        <div className="v3-strip-wrap">
-          <div className="v3-strip-head">
-            <span className="v3-lab">Every session in this range</span>
-            <span className="v3-lab v3-hide-s">Hover to scrub &middot; click to open the day</span>
-          </div>
-          <SessionStrip days={days} onPick={onDayClick} onHover={setScrub} />
-        </div>
       </div>
 
       {/* 2. the measures line */}
@@ -430,7 +511,116 @@ export default function DashboardRender(p) {
 
       {goalsNode}
 
-      {/* 3. the month takes two thirds; the right third is what is live now */}
+      {/* 3. performance trend — the same verified daily P&L, two useful views */}
+      <section className="v3-band">
+        <div className="v3-sec-head">
+          <div>
+            <h2 className="v3-h">Performance trend</h2>
+            <p className="v3-h-sub">Is the edge compounding, and which sessions are moving the account?</p>
+          </div>
+          <span className="v3-evidence verified">VERIFIED</span>
+        </div>
+        <div className="v3-chart-grid">
+          <div className="v3-chart-panel">
+            <div className="v3-chart-title">
+              <div>
+                <div className="v3-lab">Cumulative net P&amp;L</div>
+                <strong className={tone(net)}>{money2(net)}</strong>
+              </div>
+              <span>after commissions</span>
+            </div>
+            <EquityCurve days={days} height={210} onPick={onDayClick} />
+          </div>
+          <div className="v3-chart-panel">
+            <div className="v3-chart-title">
+              <div>
+                <div className="v3-lab">Daily net P&amp;L</div>
+                <strong>{k.trading_days || 0} sessions</strong>
+              </div>
+              <span>click a bar to review the day</span>
+            </div>
+            <DailyPnlBars days={days} height={210} onPick={onDayClick} />
+          </div>
+        </div>
+        <div className="v3-strip-wrap v3-strip-compact">
+          <div className="v3-strip-head">
+            <span className="v3-lab">Session distribution</span>
+            <span className="v3-lab v3-hide-s">Hover to scrub &middot; click to open the day</span>
+          </div>
+          <SessionStrip days={days} onPick={onDayClick} onHover={setScrub} />
+        </div>
+      </section>
+
+      {/* 4. training system — verified facts first, process score only when evidence exists */}
+      <section className="v3-band">
+        <div className="v3-sec-head">
+          <div>
+            <h2 className="v3-h">Consistency &amp; training</h2>
+            <p className="v3-h-sub">Use repeatability, risk control and process coverage to decide what to practice next.</p>
+          </div>
+        </div>
+        <div className="v3-training-grid">
+          <article className="v3-training-card">
+            <div className="v3-training-head">
+              <span className="v3-lab">Consistency</span>
+              <span className="v3-evidence verified">VERIFIED</span>
+            </div>
+            <div className="v3-training-value">{Number(k.day_win_rate || 0).toFixed(1)}%</div>
+            <p>{greenDays.length} green sessions · {redDays.length} red sessions</p>
+            <dl className="v3-training-stats">
+              <div><dt>Best day</dt><dd className={bestDay ? tone(bestDay.net_pnl) : 'v3-flat'}>{bestDay ? money(bestDay.net_pnl) : '—'}</dd></div>
+              <div><dt>Worst day</dt><dd className={worstDay ? tone(worstDay.net_pnl) : 'v3-flat'}>{worstDay ? money(worstDay.net_pnl) : '—'}</dd></div>
+            </dl>
+          </article>
+
+          <article className="v3-training-card">
+            <div className="v3-training-head">
+              <span className="v3-lab">Risk control</span>
+              <span className="v3-evidence verified">VERIFIED</span>
+            </div>
+            <div className="v3-training-value v3-neg">{money(k.max_drawdown || 0)}</div>
+            <p>Maximum realized drawdown in the selected range</p>
+            <dl className="v3-training-stats">
+              <div><dt>Avg red day</dt><dd>{redDays.length ? money(-avgRedDay) : '—'}</dd></div>
+              <div><dt>Worst / avg red</dt><dd>{lossOutlierRatio == null ? '—' : `${lossOutlierRatio.toFixed(1)}×`}</dd></div>
+            </dl>
+          </article>
+
+          <article className="v3-training-card">
+            <div className="v3-training-head">
+              <span className="v3-lab">Process score</span>
+              <span className={`v3-evidence ${processReady ? 'recorded' : 'insufficient'}`}>
+                {processReady ? 'RECORDED' : 'INSUFFICIENT DATA'}
+              </span>
+            </div>
+            <div className="v3-training-value">{processReady ? 'Ready' : 'N/A'}</div>
+            <p>{processReady ? 'Enough setup and R evidence exists to begin process grading.' : 'The journal will not invent a discipline score without enough planned-risk and setup evidence.'}</p>
+            <dl className="v3-training-stats">
+              <div><dt>Setup coverage</dt><dd>{Math.round(strategyCoverage * 100)}%</dd></div>
+              <div><dt>R-plan coverage</dt><dd>{Math.round(rCoverage * 100)}%</dd></div>
+            </dl>
+          </article>
+
+          <article className="v3-training-card v3-training-focus">
+            <div className="v3-training-head">
+              <span className="v3-lab">Training focus</span>
+            </div>
+            <ol>
+              {trainingFocus.slice(0, 3).map((item, i) => (
+                <li key={i}>
+                  <span className={`v3-evidence ${item.evidence === 'VERIFIED' ? 'verified' : item.evidence === 'RECORDED' ? 'recorded' : 'insufficient'}`}>
+                    {item.evidence}
+                  </span>
+                  <b>{item.title}</b>
+                  <p>{item.body}</p>
+                </li>
+              ))}
+            </ol>
+          </article>
+        </div>
+      </section>
+
+      {/* 5. calendar and live account activity */}
       <section className="v3-band">
         <div className="v3-split">
           <div>
@@ -491,7 +681,7 @@ export default function DashboardRender(p) {
         </div>
       </section>
 
-      {/* 4. the three breakdowns, sharing one space */}
+      {/* 6. edge breakdowns */}
       <section className="v3-band">
         <Patterns edge={edgeReport} byStrategy={k.by_strategy} onViewAll={onViewAllTrades} />
       </section>

@@ -1386,7 +1386,8 @@ def get_kpis(
                    ) as label,
                    t.net_pnl as net_pnl,
                    ta.r_multiple as r_multiple,
-                   t.account_id as account_id
+                   t.account_id as account_id,
+                   t.date as trade_date
             FROM trades t
             LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
             WHERE t.net_pnl IS NOT NULL AND t.net_pnl != 0
@@ -1397,6 +1398,12 @@ def get_kpis(
     if account_id is not None:
         strategy_sql += " AND account_id = ?"
         strat_params.append(account_id)
+    if date_from:
+        strategy_sql += " AND trade_date >= ?"
+        strat_params.append(date_from)
+    if date_to:
+        strategy_sql += " AND trade_date <= ?"
+        strat_params.append(date_to)
     strategy_sql += " GROUP BY label ORDER BY total_pnl DESC"
 
     strat_rows = conn.execute(strategy_sql, strat_params).fetchall()
