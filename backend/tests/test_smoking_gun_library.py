@@ -463,3 +463,27 @@ def test_saved_report_api_rejects_empty_source_population(monkeypatch, tmp_path)
         response = client.post("/api/smoking-gun-reports", json=payload)
 
     assert response.status_code == 400
+
+
+def test_saved_report_export_routes_use_stable_named_paths(monkeypatch, tmp_path):
+    main = _fresh_main_for_api(monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+
+    with TestClient(main.app) as client:
+        _, fingerprint = _seed_api_source(main)
+        created = client.post(
+            "/api/smoking-gun-reports",
+            json=_api_payload(fingerprint),
+        )
+        assert created.status_code == 201
+        report_id = created.json()["id"]
+
+        html = client.get(f"/api/smoking-gun-reports/{report_id}/report.html")
+        ledger = client.get(f"/api/smoking-gun-reports/{report_id}/trade-ledger.csv")
+
+    assert html.status_code == 200
+    assert html.headers["content-type"].startswith("text/html")
+    assert "smoking-gun-2026-09-01-2026-09-30.html" in html.headers["content-disposition"]
+    assert ledger.status_code == 200
+    assert ledger.headers["content-type"].startswith("text/csv")
+    assert "smoking-gun-ledger-2026-09-01-2026-09-30.csv" in ledger.headers["content-disposition"]
