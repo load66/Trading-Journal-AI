@@ -755,6 +755,14 @@ def _make_group_meta(date_str: str, ticker: str, instr: str, fills: list[dict]) 
     }
 
 
+def _source_sequence(ex: dict):
+    """Broker sequence used only to order fills that share the same minute."""
+    raw = str(ex.get('source_ref') or '').strip()
+    if raw.isdigit():
+        return (0, int(raw))
+    return (1, raw)
+
+
 def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
     """
     Group executions into trades based on position open/close cycles.
@@ -766,7 +774,11 @@ def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
     # Sort all fills chronologically so multi-day positions process in order
     executions_sorted = sorted(
         executions,
-        key=lambda ex: (ex.get('iso_date', ex['date']), ex.get('time', ''))
+        key=lambda ex: (
+            ex.get('iso_date', ex['date']),
+            _minute_time(ex.get('time', '')),
+            _source_sequence(ex),
+        ),
     )
 
     # Key by (ticker, instrument_type) — no date — so multi-day trades stay together.
