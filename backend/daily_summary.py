@@ -3,6 +3,8 @@ import re
 
 import httpx
 
+from behavior_rules import detect_daily_flags, deterministic_strengths, recorded_observations
+
 from ai_analysis import (
     GROQ_API_URL,
     GROQ_MODEL,
@@ -25,7 +27,8 @@ Rules:
 - Grades measure PROCESS, never outcome. A profitable trade can be poor process and a losing trade can be good process.
 - If a trade has process_evidence: none, its grade MUST be "N/A" and the reason must say there is insufficient process evidence.
 - If there is no diary or emotional-state evidence for the day, mental_game MUST say "Insufficient evidence" and must not infer psychology from wins/losses.
-- mistakes may contain only evidence-backed process problems from recorded fields. Do not turn missing documentation into a violation.
+- mistakes may contain only evidence-backed process problems from recorded fields OR VERIFIED deterministic behavior_flags supplied by the backend.
+- Deterministic behavior_flags are observations, not motives. Never rename "loss re-entry" as revenge trading unless the trader explicitly recorded that motive.
 - overall_grade must be "N/A" when there is not enough process evidence to grade the day.
 - Be direct and specific, but separate facts from interpretation.
 - Return ONLY valid JSON — no markdown fences, no explanation
@@ -59,6 +62,7 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         SELECT t.id, t.trade_group, t.ticker, t.side, t.instrument_type,
                t.net_pnl, t.gross_pnl, t.commissions, t.executions,
                t.option_type, t.option_strike, t.option_expiry,
+               t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.r_multiple, ta.stop_loss, ta.target_price,
                ta.risk_per_trade, ta.risk_reward, ta.mistakes,
                ta.emotional_state, ta.entry_reason, ta.exit_reason,
@@ -137,12 +141,19 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         except Exception:
             pass
 
+    behavior_flags = detect_daily_flags(trades)
+    verified_strengths = deterministic_strengths(trades, day_kpis)
+    recorded = recorded_observations(trades, diary_summary)
+
     return {
         "date": date,
         "trades": trades,
         "day_kpis": day_kpis,
         "alltime_kpis": alltime_kpis,
         "diary_summary": diary_summary,
+        "behavior_flags": behavior_flags,
+        "verified_strengths": verified_strengths,
+        "recorded_observations": recorded,
     }
 
 
@@ -218,6 +229,9 @@ def generate_daily_summary(context: dict) -> dict:
             f"exit_reason: {t.get('exit_reason') or 'N/A'} | "
             f"mistakes: {t.get('mistakes') or 'none'} | "
             f"emotional_state: {t.get('emotional_state') or 'N/A'} | "
+            f"mfe_pct: {t.get('mfe_pct') if t.get('mfe_pct') is not None else 'N/A'} | "
+            f"mae_pct: {t.get('mae_pct') if t.get('mae_pct') is not None else 'N/A'} | "
+            f"exit_efficiency: {t.get('exit_efficiency') if t.get('exit_efficiency') is not None else 'N/A'} | "
             f"first_entry_time: {first_time or 'N/A'}"
         )
         trade_lines.append(line)
@@ -229,6 +243,16 @@ Diary entry for this date:
   Overall summary: {diary.get('overall_summary') or 'N/A'}
   Patterns: {', '.join(diary.get('patterns_identified', [])) or 'N/A'}
   Improvement areas: {', '.join(diary.get('improvement_areas', [])) or 'N/A'}"""
+
+    behavior_flags = context.get("behavior_flags") or []
+    verified_strengths = context.get("verified_strengths") or []
+    recorded = context.get("recorded_observations") or []
+    flag_section = "\n".join(
+        f"  - {f.get('title')}: {f.get('detail')}" for f in behavior_flags
+    ) or "  None."
+    strength_section = "\n".join(
+        f"  - {o.get('text')}" for o in verified_strengths
+    ) or "  None."
 
     user_content = f"""Date: {date}
 
@@ -244,6 +268,12 @@ Historical averages (all-time):
 
 Trades:
 {chr(10).join(trade_lines) if trade_lines else '  No trades on this date.'}
+
+VERIFIED deterministic strengths:
+{strength_section}
+
+VERIFIED deterministic behavior flags:
+{flag_section}
 {diary_section}
 
 Generate the daily coaching summary JSON."""
@@ -337,12 +367,95 @@ Generate the daily coaching summary JSON."""
         )
 
     if not any_process_evidence and not diary:
-        result["mistakes"] = []
         result["overall_grade"] = "N/A"
 
+    # Deterministic observations take precedence over free-form AI lists.
+    # This keeps the tabs useful without allowing outcome-based hallucinations.
+    behavior_flags = context.get("behavior_flags") or []
+    verified_strengths = context.get("verified_strengths") or []
+    recorded = context.get("recorded_observations") or []
+
+    recorded_mistakes = []
+    for t in trades:
+        if (t.get("mistakes") or "").strip():
+            recorded_mistakes.append({
+                "text": f"{t.get('ticker')}: {str(t.get('mistakes')).strip()}",
+                "evidence": "RECORDED",
+            })
+
+    mistake_obs = recorded_mistakes + [
+        {
+            "text": f"{f.get('title')}: {f.get('detail')}",
+            "evidence": "VERIFIED",
+            "code": f.get("code"),
+            "trade_group": f.get("trade_group"),
+            "observed_pnl": f.get("observed_pnl"),
+        }
+        for f in behavior_flags
+    ]
+
+    focus_map = {
+        "averaging_down": "Mechanical rule: do not add at a worse price than the running average entry.",
+        "rapid_reentry": "Mechanical rule: require at least a 30-second reset before re-entering the same ticker.",
+        "loss_reentry": "Mechanical rule: after a loss on a ticker, require a fresh setup before re-entry.",
+        "size_escalation_after_loss": "Mechanical rule: never increase position size immediately after a losing trade.",
+        "continued_after_3_losses": "Mechanical rule: after three consecutive losses, stop and review before another entry.",
+    }
+    focus_obs = []
+    seen_focus = set()
+    for f in behavior_flags:
+        text = focus_map.get(f.get("code"))
+        if text and text not in seen_focus:
+            seen_focus.add(text)
+            focus_obs.append({"text": text, "evidence": "VERIFIED"})
+
+    pattern_obs = []
+    if trades:
+        first10 = []
+        for t in trades:
+            execs = t.get("executions") or []
+            if execs:
+                raw = str(execs[0].get("time") or "")
+                try:
+                    hh, mm = [int(x) for x in raw[:5].split(":")]
+                    if 9 * 60 + 30 <= hh * 60 + mm < 9 * 60 + 40:
+                        first10.append(t)
+                except Exception:
+                    pass
+        if first10:
+            pnl = sum(float(t.get("net_pnl") or 0) for t in first10)
+            pattern_obs.append({
+                "text": f"First 10 minutes: {len(first10)} trade(s), USD {pnl:,.2f} net.",
+                "evidence": "VERIFIED",
+            })
+
+    has_emotion_evidence = bool(diary) or any(
+        (t.get("emotional_state") or "").strip() for t in trades
+    )
+    mental_evidence = "RECORDED" if has_emotion_evidence else "INSUFFICIENT DATA"
+
+    result["behavior_flags"] = behavior_flags
+    result["observations"] = {
+        "strengths": verified_strengths,
+        "mistakes": mistake_obs,
+        "focus": focus_obs,
+        "patterns": pattern_obs,
+        "recorded": recorded,
+        "mental_game": {
+            "text": result.get("mental_game") or "",
+            "evidence": mental_evidence,
+        },
+    }
+    # Preserve string lists for backwards compatibility with older UI surfaces.
+    result["strengths"] = [x.get("text") for x in verified_strengths]
+    result["mistakes"] = [x.get("text") for x in mistake_obs]
+    result["coaching"] = [x.get("text") for x in focus_obs]
+    result["patterns"] = [x.get("text") for x in pattern_obs]
+
     result["evidence_locked"] = True
-    result["evidence_version"] = 2
+    result["evidence_version"] = 3
     result["evidence_note"] = (
-        "Missing process or psychological data is treated as unknown, never as a rule violation."
+        "VERIFIED = deterministic calculation/detector. RECORDED = trader/diary input. "
+        "INSUFFICIENT DATA = the journal refuses to infer what was not recorded."
     )
     return result
