@@ -168,6 +168,103 @@ function FlawTable({ flaws }) {
   );
 }
 
+function DailyTable({ rows }) {
+  return (
+    <div className="scroll-x">
+      <table style={{ minWidth: 820 }}>
+        <thead><tr><th>Date</th><th className="num">Options</th><th className="num">Shares</th><th className="num">Futures</th><th className="num">Total</th><th className="num">Running</th><th className="num">Trades</th><th>Flag</th></tr></thead>
+        <tbody>{(rows || []).map(r => (
+          <tr key={r.date}>
+            <td>{r.date}</td>
+            <td className={`num ${tone(r.options_pnl)}`}>{signed$(r.options_pnl)}</td>
+            <td className={`num ${tone(r.shares_pnl)}`}>{signed$(r.shares_pnl)}</td>
+            <td className={`num ${tone(r.futures_pnl)}`}>{signed$(r.futures_pnl)}</td>
+            <td className={`num ${tone(r.total_pnl)}`} style={{ fontWeight: 650 }}>{signed$(r.total_pnl)}</td>
+            <td className={`num ${tone(r.running_total)}`}>{signed$(r.running_total)}</td>
+            <td className="num">{r.trade_count}</td>
+            <td>{r.blow_up ? <span className="chip neg">BLOW-UP</span> : ''}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function GenericStatsTable({ rows, first = 'Bucket' }) {
+  if (!rows?.length) return <div className="empty">Not enough data.</div>;
+  return (
+    <div className="scroll-x">
+      <table style={{ minWidth: 560 }}>
+        <thead><tr><th>{first}</th><th className="num">Trades</th><th className="num">P&L</th><th className="num">Win %</th><th className="num">$/trade</th></tr></thead>
+        <tbody>{rows.map(r => (
+          <tr key={r.bucket || r.depth || r.day}>
+            <td style={{ fontWeight: 600 }}>{r.bucket || r.depth || r.day}</td>
+            <td className="num">{r.trade_count ?? 0}</td>
+            <td className={`num ${tone(r.total_pnl)}`}>{signed$(r.total_pnl)}</td>
+            <td className="num">{r.win_rate ?? 0}%</td>
+            <td className={`num ${tone(r.avg_pnl)}`}>{signed$(r.avg_pnl)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function StopBreaches({ model }) {
+  const best = [...(model?.levels || [])].sort((a, b) => b.saved - a.saved)[0];
+  if (!best?.breaches?.length) return <div className="empty">No modeled stop breach days.</div>;
+  return (
+    <div>
+      <div className="text-muted" style={{ fontSize: 12, marginBottom: 8 }}>Highest modeled savings scenario: {fmt$(best.stop)}</div>
+      <div className="scroll-x">
+        <table style={{ minWidth: 620 }}>
+          <thead><tr><th>Date</th><th className="num">Actual</th><th className="num">Modeled</th><th className="num">Excess loss avoided</th></tr></thead>
+          <tbody>{best.breaches.map(r => (
+            <tr key={r.date}><td>{r.date}</td><td className="num neg">{fmt$(r.actual_pnl)}</td><td className={`num ${tone(r.modeled_pnl)}`}>{signed$(r.modeled_pnl)}</td><td className="num pos">{signed$(r.saved)}</td></tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function BehaviorEvidence({ behavior, time }) {
+  const tilt = behavior?.tilt_escalation || {};
+  const chase = behavior?.chasing_fomo || {};
+  const asym = behavior?.winner_loser_asymmetry || {};
+  const avgd = behavior?.averaging_down || {};
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div className="grid-2">
+        <div><b>Re-entry depth after a same-ticker loss</b><GenericStatsTable rows={behavior?.revenge_trading} first="Depth" /></div>
+        <div><b>Overtrading by daily trade count</b>
+          <div className="scroll-x"><table style={{ minWidth: 480 }}><thead><tr><th>Trades/day</th><th className="num">Days</th><th className="num">P&L</th><th className="num">Green-day %</th></tr></thead>
+          <tbody>{(behavior?.overtrading || []).map(r => <tr key={r.bucket}><td>{r.bucket}</td><td className="num">{r.days}</td><td className={`num ${tone(r.total_pnl)}`}>{signed$(r.total_pnl)}</td><td className="num">{r.green_day_rate}%</td></tr>)}</tbody></table></div>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }}>
+        {[
+          ['Rapid re-entry ≤30 sec', `${chase.trade_count || 0} trades · ${signed$(chase.total_pnl)}`],
+          ['First-3 avg size', tilt.first3_avg_size == null ? 'Insufficient evidence' : String(tilt.first3_avg_size)],
+          ['Post-loss avg size', tilt.post_threshold_avg_size == null ? 'Insufficient evidence' : String(tilt.post_threshold_avg_size)],
+          ['Post-loss-threshold P&L', signed$(tilt.post_threshold_pnl)],
+          ['Averaging-down P&L', signed$(avgd.averaged_down?.total_pnl)],
+          ['Clean-entry P&L', signed$(avgd.clean_entries?.total_pnl)],
+          ['Average winner', signed$(asym.avg_win)],
+          ['Average loser', fmt$(-Math.abs(asym.avg_loss || 0))],
+          ['Actual reward/risk', asym.reward_risk == null ? '—' : `${asym.reward_risk}:1`],
+          ['First 10 min', signed$(time?.first_10_minutes?.total_pnl)],
+          ['Rest of day', signed$(time?.rest_of_day?.total_pnl)],
+          ['Last 30 min', signed$(time?.last_30_minutes?.total_pnl)],
+        ].map(([k, v]) => <div key={k} style={{ padding: 12, background: 'var(--surface-inset)', borderRadius: 6 }}><div className="text-muted" style={{ fontSize: 11.5 }}>{k}</div><div className="num" style={{ fontWeight: 650, marginTop: 4 }}>{v}</div></div>)}
+      </div>
+      <div className="notice" style={{ fontSize: 12.5 }}>
+        Premature-exit opportunity cost: {behavior?.premature_exits?.left_on_table == null ? 'Insufficient evidence — requires post-exit market data.' : fmt$(behavior.premature_exits.left_on_table)}
+      </div>
+    </div>
+  );
+}
+
 function ProjectionTable({ data }) {
   const rows = data?.rates || [];
   return (
@@ -217,6 +314,12 @@ function Diagnosis({ diagnosis }) {
           </ul>
         </div>
       </div>
+      {diagnosis.daily_stop && (
+        <Card title="AI stop candidate" sub="Interpretation only — modeled results remain the source of truth.">
+          <div><b>{diagnosis.daily_stop.recommended_candidate == null ? 'No candidate' : fmt$(diagnosis.daily_stop.recommended_candidate)}</b></div>
+          <div className="text-muted" style={{ marginTop: 5 }}>{diagnosis.daily_stop.reason}</div>
+        </Card>
+      )}
       <Card title="Fix — ranked mechanical rules" sub="AI can interpret the evidence, but the dollar impacts come from the deterministic engine.">
         <ol style={{ paddingLeft: 20, display: 'grid', gap: 12 }}>
           {(diagnosis.action_plan || []).map((x, i) => (
@@ -227,6 +330,11 @@ function Diagnosis({ diagnosis }) {
           ))}
         </ol>
       </Card>
+      {!!diagnosis.limitations?.length && (
+        <Card title="Limitations" sub="What this dataset cannot prove.">
+          <ul className="v3-list">{diagnosis.limitations.map((x, i) => <li key={i}>{x}</li>)}</ul>
+        </Card>
+      )}
     </div>
   );
 }
@@ -291,11 +399,16 @@ export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
         <HoldTable rows={data.hold_time} />
       </Card>
 
+      <Card title="2. Daily P&L ledger" sub="Every trading day, separated by instrument, with running total and blow-up flag.">
+        <DailyTable rows={data.daily_pnl} />
+      </Card>
+
       <div className="grid-2">
-        <Card title="2. Daily stop modeling" sub={`Average losing trade: ${fmt$(data.daily_stop_model?.avg_loss)}`}>
+        <Card title="3. Daily stop modeling" sub={`Average losing trade: ${fmt$(data.daily_stop_model?.avg_loss)}`}>
           <StopTable model={data.daily_stop_model} />
+          <div style={{ marginTop: 16 }}><StopBreaches model={data.daily_stop_model} /></div>
         </Card>
-        <Card title="3. Two traders" sub="5+ minute normal-size cohort versus everything outside that discipline definition.">
+        <Card title="4. Two traders" sub="5+ minute normal-size cohort versus everything outside that discipline definition.">
           <div style={{ display: 'grid', gap: 12 }}>
             {[
               ['Disciplined', data.two_traders?.disciplined],
@@ -311,19 +424,19 @@ export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
         </Card>
       </div>
 
-      <Card title="4. Ticker ranking" sub="EDGE / MARGINAL / LEAK / BLEEDING / HEMORRHAGE is generated from actual P&L contribution and win rate.">
+      <Card title="5. Ticker ranking" sub="EDGE / MARGINAL / LEAK / BLEEDING / HEMORRHAGE is generated from actual P&L contribution and win rate.">
         <TickerTable rows={data.ticker_ranking} />
       </Card>
 
-      <Card title="5. Behavioral flaws ranked by dollar impact" sub="Counterfactual impact is the negative P&L attributable to the detected behavior cohort; overlapping behaviors can overlap in dollars.">
+      <Card title="6. Behavioral flaws ranked by dollar impact" sub="Counterfactual impact is the negative P&L attributable to the detected behavior cohort; overlapping behaviors can overlap in dollars.">
         <FlawTable flaws={data.behavior?.ranked_flaws} />
       </Card>
 
       <div className="grid-2">
-        <Card title="6. Time of day" sub="30-minute entry blocks.">
+        <Card title="7. Time of day" sub="30-minute entry blocks.">
           <PnlBarChart rows={data.time_analysis?.half_hour_blocks} />
         </Card>
-        <Card title="7. Position-size cross-check" sub="Median size splits small vs big; long hold is 5+ minutes.">
+        <Card title="8. Position-size cross-check" sub="Median size splits small vs big; long hold is 5+ minutes.">
           <div style={{ display: 'grid', gap: 12 }}>
             {[
               ['Small size + long hold', data.position_size?.cross_reference?.small_size_long_hold],
@@ -339,11 +452,28 @@ export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
         </Card>
       </div>
 
-      <Card title="8. Forward projections" sub={`Proven disciplined-cohort daily edge: ${signed$(data.projections?.proven_daily_edge)}`}>
+      <div className="grid-2">
+        <Card title="9. Option position-size buckets" sub="Contracts per completed options trade.">
+          <GenericStatsTable rows={data.position_size?.options} />
+        </Card>
+        <Card title="10. Share notional buckets" sub="Entry notional per completed stock trade.">
+          <GenericStatsTable rows={data.position_size?.shares_by_notional} />
+        </Card>
+      </div>
+
+      <Card title="11. Behavioral evidence" sub="Revenge depth, overtrading, tilt sizing, FOMO re-entry, averaging down, asymmetry, and session timing.">
+        <BehaviorEvidence behavior={data.behavior} time={data.time_analysis} />
+        <div className="grid-2" style={{ marginTop: 18 }}>
+          <div><b>Day of week</b><GenericStatsTable rows={data.time_analysis?.day_of_week} first="Day" /></div>
+          <div><b>30-minute entry blocks</b><PnlBarChart rows={data.time_analysis?.half_hour_blocks} height={220} /></div>
+        </div>
+      </Card>
+
+      <Card title="12. Forward projections" sub={`Proven disciplined-cohort daily edge: ${signed$(data.projections?.proven_daily_edge)}`}>
         <ProjectionTable data={data.projections} />
       </Card>
 
-      <Card title="9. AI diagnosis" sub="The AI receives the deterministic report as locked evidence and returns interpretation plus mechanical rules.">
+      <Card title="13. AI diagnosis" sub="The AI receives the deterministic report as locked evidence and returns interpretation plus mechanical rules.">
         <button type="button" className="btn btn-primary" disabled={aiLoading} onClick={generateDiagnosis}>
           {aiLoading ? 'Analyzing verified data…' : diagnosis ? 'Refresh AI diagnosis' : 'Generate AI diagnosis'}
         </button>
