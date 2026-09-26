@@ -257,7 +257,10 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
           {/* The trades */}
           <section className="card panel-flush">
             <div style={{ padding: '18px 0 12px' }}>
-              <PanelHead title="Trade by trade" sub="Hover a grade for the reason. Click a row to open the trade." />
+              <PanelHead
+                title="Trade by trade"
+                sub="MFE/MAE is automatic from Alpaca 1-minute data. Options use the underlying ticker; stocks use actual fill prices. Hover a grade for its evidence."
+              />
             </div>
             <DayTrades
               trades={trades}
