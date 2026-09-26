@@ -425,7 +425,7 @@ def analyze_context(
     }
 
 
-async def _fetch_alpaca_1m(symbol: str, trade_day: date) -> list[dict]:
+async def _fetch_alpaca_1m(symbol: str, trade_day: date) -> tuple[list[dict], str]:
     key = (os.getenv("APCA_API_KEY_ID") or "").strip()
     secret = (os.getenv("APCA_API_SECRET_KEY") or "").strip()
     if not key or not secret or key == "your_alpaca_api_key_here":
