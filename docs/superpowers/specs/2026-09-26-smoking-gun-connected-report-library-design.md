@@ -1,7 +1,7 @@
 # Smoking Gun Connected Report Library — Design
 
 **Date:** 2026-09-26  
-**Status:** Approved design, pending implementation plan  
+**Status:** Design approved in chat; written spec pending user review  
 **Repository:** `load66/Trading-Journal-AI`  
 **Working branch:** `feature/smoking-gun-ai-report`
 
@@ -467,8 +467,9 @@ Fields:
 - `source_metrics_json`
 - `diagnosis_json`
 - `action_plan_json`
-- `html_snapshot` or a future file reference
-- `ledger_csv` or a future file reference
+- `export_manifest_json` for export metadata only
+
+HTML and CSV are generated on demand from the saved structured report. Large generated artifacts are not stored inline in Postgres by default. If persistent file retention is added later, the files belong in authenticated object storage and the table stores only their references.
 - `status`
 
 Use JSONB for structured report payloads.
@@ -512,10 +513,10 @@ Target workflow:
    - “Generate September Smoking Gun.”
    - “Generate YTD.”
    - “Generate only SPY/QQQ.”
-4. ChatGPT reads the appropriate connected journal data.
+4. ChatGPT reads the appropriate connected journal data through the user's authorized Supabase connection.
 5. ChatGPT computes or verifies the full analysis.
 6. ChatGPT creates the deep diagnosis and action plan.
-7. ChatGPT writes the completed report to the report-library table.
+7. ChatGPT writes the completed structured report directly to the private report-library table through that authorized connection.
 8. Trading Journal immediately shows it in Report Library.
 9. User can open/download the report from phone or PC.
 
@@ -582,7 +583,9 @@ Requirements:
 - report access follows the same ownership/access model as journal trades
 - backend or trusted connected tooling performs privileged report writes
 - user-facing browser access never bypasses authorization
-- report downloads must require the same authenticated journal access
+- the private `journal` schema is not made public merely to support this feature
+- app reads/downloads continue through the authenticated Trading Journal backend
+- connected ChatGPT access uses the user's authorized Supabase connection rather than a browser-exposed service credential
 - any future public/shareable report requires a separate explicit sharing design
 
 ---
