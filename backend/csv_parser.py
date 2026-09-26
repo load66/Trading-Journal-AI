@@ -672,31 +672,76 @@ def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
     return executions
 
 
+def _identity_num(value) -> str:
+    try:
+        return f"{float(value):.8f}".rstrip('0').rstrip('.')
+    except (TypeError, ValueError):
+        return str(value or '')
+
+
+def _minute_time(value) -> str:
+    """Normalize HH:MM:SS and HH:MM to the broker-guaranteed minute."""
+    raw = str(value or '').strip()
+    match = re.search(r'(\d{1,2}):(\d{2})', raw)
+    if not match:
+        return raw
+    return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+
 def execution_fingerprint(exec_dict: dict) -> str:
-    """Create a unique key for duplicate detection. Uses iso_date so it matches stored executions."""
+    """Contract-aware fill identity for idempotent re-imports.
+
+    We deliberately normalize time to the minute because Schwab transaction
+    history guarantees only minute precision. Multiplicity is preserved by a
+    Counter, so two legitimate identical split fills in the same minute remain
+    two fills rather than collapsing into one.
+    """
     date = exec_dict.get('iso_date') or exec_dict.get('date', '')
-    return f"{date}|{exec_dict.get('time','')}|{exec_dict.get('ticker','')}|{exec_dict.get('action','')}|{exec_dict.get('qty','')}|{exec_dict.get('price','')}"
+    return '|'.join([
+        str(date),
+        _minute_time(exec_dict.get('time', '')),
+        str(exec_dict.get('ticker', '')).upper(),
+        str(exec_dict.get('instrument_type', 'STOCK')).upper(),
+        str(exec_dict.get('option_expiry') or ''),
+        _identity_num(exec_dict.get('option_strike')),
+        str(exec_dict.get('option_type') or '').upper(),
+        str(exec_dict.get('action') or '').upper(),
+        _identity_num(exec_dict.get('qty')),
+        _identity_num(exec_dict.get('price')),
+    ])
 
 
-def get_existing_fingerprints(conn, account_id: int) -> set[str]:
-    """Load all existing execution fingerprints for an account.
-    Reads ticker from the trade row (not stored in executions JSON) to match execution_fingerprint format.
+def get_existing_fingerprints(conn, account_id: int) -> Counter:
+    """Load stored execution identities as a multiset.
+
+    Contract metadata lives on the trade row, while the serialized execution
+    supplies date/time/action/qty/price. Using a Counter preserves legitimate
+    repeated fills and makes a second import exactly idempotent.
     """
     cursor = conn.execute(
-        "SELECT ticker, executions FROM trades WHERE account_id = ?", (account_id,)
+        """SELECT ticker, instrument_type, option_expiry, option_strike,
+                  option_type, executions
+           FROM trades WHERE account_id = ?""",
+        (account_id,),
     )
-    fingerprints = set()
+    fingerprints = Counter()
     for row in cursor:
-        ticker = row[0] or ''
         try:
-            execs = json.loads(row[1] or '[]')
-            for e in execs:
-                fp = f"{e.get('date','')}|{e.get('time','')}|{ticker}|{e.get('action','')}|{e.get('qty','')}|{e.get('price','')}"
-                fingerprints.add(fp)
+            ticker, instrument, expiry, strike, option_type, raw_execs = row
+            for execution in json.loads(raw_execs or '[]'):
+                payload = {
+                    **execution,
+                    'ticker': ticker or '',
+                    'instrument_type': instrument or 'STOCK',
+                    'option_expiry': expiry,
+                    'option_strike': strike,
+                    'option_type': option_type,
+                    'iso_date': execution.get('date', ''),
+                }
+                fingerprints[execution_fingerprint(payload)] += 1
         except Exception:
-            pass
+            continue
     return fingerprints
-
 
 def _make_group_meta(date_str: str, ticker: str, instr: str, fills: list[dict]) -> dict:
     return {
