@@ -59,7 +59,7 @@ def canonical_execution_timestamp(
             return None
         local_dt = datetime.combine(day, clock, tzinfo=ZoneInfo(source_timezone))
         return local_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-    except (ValueError, TypeError, ZoneInfo.KeyError):
+    except (ValueError, TypeError, KeyError):
         return None
 
 
