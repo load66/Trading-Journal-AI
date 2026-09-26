@@ -481,3 +481,164 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   border-color: var(--divider); border-bottom-color: var(--accent-line);
   color: var(--text-primary);
 }
+
+
+/* ---------- phone layout ----------
+   Mobile is a first-class composition, not the desktop grid squeezed narrower. */
+@media (max-width: 600px) {
+  :root { --v3-pad: 16px; }
+
+  .v3-band { padding: 20px var(--v3-pad); }
+  .v3-band-tight { padding-top: 16px; padding-bottom: 16px; }
+
+  .v3-head {
+    padding: 22px var(--v3-pad) 17px;
+    gap: 14px;
+    align-items: flex-start;
+  }
+  .v3-head h1 { font-size: 28px; }
+  .v3-head .v3-sub { font-size: 12px; line-height: 1.45; }
+
+  .v3-hero {
+    padding: 18px var(--v3-pad) 0;
+  }
+  .v3-eyeline {
+    gap: 14px;
+    display: block;
+  }
+  .v3-acct { margin-bottom: 8px; }
+  .v3-money {
+    font-size: clamp(46px, 14vw, 58px);
+    line-height: 0.94;
+  }
+  .v3-money-sub {
+    margin-top: 9px;
+    font-size: 13px;
+    line-height: 1.5;
+    max-width: none;
+  }
+  .v3-heroside {
+    width: 100%;
+    margin-top: 18px;
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .v3-readout {
+    min-width: 0;
+    text-align: left;
+  }
+  .v3-readout dd { font-size: 24px; }
+  .v3-readout .when { font-size: 11px; }
+
+  .v3-curve {
+    height: 106px;
+    margin-top: 10px;
+  }
+  .v3-strip-wrap {
+    margin-top: 4px;
+    padding: 12px 0 18px;
+  }
+  .v3-strip-head {
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .v3-strip { height: 52px; }
+
+  .v3-measures {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0;
+  }
+  .v3-m {
+    min-width: 0;
+    padding: 16px;
+  }
+  .v3-m:nth-child(2n) { border-right: 0; }
+  .v3-m-val { font-size: 26px; }
+  .v3-m-read {
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+  .v3-track { margin-top: 0; }
+
+  .v3-sec-head {
+    margin-bottom: 14px;
+    gap: 12px;
+    align-items: center;
+  }
+  .v3-h { font-size: 19px; }
+  .v3-h-sub { font-size: 12px; }
+
+  .v3-split > * + * {
+    padding-top: 20px;
+    margin-top: 20px;
+  }
+
+  .v3-cal-head {
+    margin-bottom: 12px;
+    gap: 10px;
+  }
+  .v3-cal-month { font-size: 19px; }
+  .v3-cal-tot {
+    width: 100%;
+    margin-left: 0;
+    font-size: 12px;
+  }
+  .v3-cal {
+    min-width: 510px;
+    grid-template-columns: repeat(5, 1fr) 88px;
+    grid-auto-rows: minmax(68px, 1fr);
+  }
+  .v3-day {
+    min-height: 68px;
+    padding: 7px;
+  }
+  .v3-day .v { font-size: 16px; }
+  .v3-wk { padding: 7px 8px; }
+
+  table.v3-t { font-size: 12.5px; min-width: 620px; }
+  table.v3-t thead th { padding: 0 10px 9px; }
+  table.v3-t tbody td { padding: 10px; }
+
+  .v3-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .v3-tabs::-webkit-scrollbar { display: none; }
+  .v3-tab {
+    flex: 0 0 auto;
+    padding: 9px 11px;
+  }
+
+  .v3-pop {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    min-width: 0;
+    max-height: min(72dvh, 560px);
+    overflow-y: auto;
+    flex-direction: column-reverse;
+    border-radius: 6px;
+  }
+  .v3-pop-custom {
+    border-right: 0;
+    border-top: 1px solid var(--divider-soft);
+  }
+  .v3-pop-presets { min-width: 0; }
+
+  .v3-tipbox {
+    max-width: calc(100vw - 32px);
+  }
+}
+
+@media (max-width: 380px) {
+  :root { --v3-pad: 12px; }
+  .v3-money { font-size: 44px; }
+  .v3-m { padding: 14px 12px; }
+  .v3-m-val { font-size: 24px; }
+}
