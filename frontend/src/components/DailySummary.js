@@ -209,7 +209,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
               <div>
                 <h2 className="v3-h">The session</h2>
                 <p className="v3-h-sub">
-                  Running P&amp;L from the open to the close, with every trade marked where you entered it
+                  Realized P&amp;L through the session, booking each trade when its final execution closes it
                 </p>
               </div>
             </div>
