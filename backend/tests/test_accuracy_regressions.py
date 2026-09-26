@@ -113,3 +113,29 @@ def test_trade_pl_percent_stock_uses_entry_notional(monkeypatch, tmp_path):
     }
     # $1,000 entry notional; $50 net profit = 5%.
     assert main._trade_pl_percent(trade) == 5.0
+
+
+def test_avg_trade_pl_percent_reuses_canonical_trade_percent(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    trades = [
+        {
+            "side": "LONG",
+            "instrument_type": "OPTION",
+            "net_pnl": 100.0,
+            "executions": [
+                {"action": "BOT", "qty": 2, "price": 2.50},
+                {"action": "SOLD", "qty": 2, "price": 3.00},
+            ],
+        },
+        {
+            "side": "LONG",
+            "instrument_type": "STOCK",
+            "net_pnl": -50.0,
+            "executions": [
+                {"action": "BOT", "qty": 10, "price": 100.0},
+                {"action": "SOLD", "qty": 10, "price": 95.0},
+            ],
+        },
+    ]
+    # Option = +20%; stock = -5%; average = +7.5%.
+    assert main._avg_trade_pl_percent(trades) == 7.5

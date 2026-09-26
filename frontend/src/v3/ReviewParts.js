@@ -6,6 +6,50 @@ import { Measures, Tabs, Grade, money, money2, tone } from './parts';
 const OPEN = 9.5;
 const CLOSE = 16;
 
+function tradeExecutions(t) {
+  let execs = t.executions || [];
+  if (!Array.isArray(execs)) {
+    try { execs = JSON.parse(execs || '[]'); } catch { execs = []; }
+  }
+  return execs;
+}
+
+function tradeHoldLabel(t) {
+  const execs = tradeExecutions(t)
+    .map((e) => {
+      const raw = e.date && e.time ? `${e.date}T${e.time}` : (e.datetime || '');
+      const ms = raw ? new Date(raw).getTime() : NaN;
+      return Number.isFinite(ms) ? ms : null;
+    })
+    .filter((v) => v != null)
+    .sort((a, b) => a - b);
+  if (execs.length < 2) return '—';
+  const sec = Math.max(0, Math.round((execs[execs.length - 1] - execs[0]) / 1000));
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function tradePLPercent(t) {
+  if (t.pl_pct != null && Number.isFinite(Number(t.pl_pct))) return Number(t.pl_pct);
+  const side = String(t.side || '').toUpperCase();
+  const entryAction = side === 'SHORT' ? 'SOLD' : 'BOT';
+  const entries = tradeExecutions(t).filter((e) => String(e.action || '').toUpperCase() === entryAction);
+  const qty = entries.reduce((s, e) => s + Number(e.qty || 0), 0);
+  if (!(qty > 0)) return null;
+  const weighted = entries.reduce((s, e) => s + Number(e.qty || 0) * Number(e.price || 0), 0);
+  const avgEntry = weighted / qty;
+  if (!(avgEntry > 0)) return null;
+  const inst = String(t.instrument_type || 'STOCK').toUpperCase();
+  if (inst === 'FUTURE') return null;
+  const multiplier = inst === 'OPTION' ? 100 : 1;
+  const entryCost = Math.abs(avgEntry * qty * multiplier);
+  if (!(entryCost > 0)) return null;
+  return Number(t.net_pnl || 0) / entryCost * 100;
+}
+
 export function tradeTime(t, which = 'entry') {
   let execs = t.executions || [];
   if (!Array.isArray(execs)) {
@@ -173,15 +217,12 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
   const avgDay = a && a.trading_days ? Number(a.total_net_pnl || 0) / a.trading_days : null;
   const pf = k.profit_factor == null ? null : Number(k.profit_factor);
   const noLosers = pf == null && wins > 0;
-  const eff = k.exit_efficiency == null ? null : Number(k.exit_efficiency);
-  const allEff = a && a.exit_efficiency != null ? Number(a.exit_efficiency) : null;
-  const optionExcursions = Number(k.excursion_option_n || 0);
-  const stockExcursions = Number(k.excursion_stock_n || 0);
-  const effLabel = optionExcursions > 0 && stockExcursions === 0
-    ? 'Underlying exit efficiency'
-    : optionExcursions > 0
-      ? 'Directional exit efficiency'
-      : 'Exit efficiency';
+  const avgWin = Math.abs(Number(k.avg_win || 0));
+  const avgLoss = Math.abs(Number(k.avg_loss || 0));
+  const payoff = avgLoss > 0 ? avgWin / avgLoss : null;
+  const allAvgWin = a ? Math.abs(Number(a.avg_win || 0)) : 0;
+  const allAvgLoss = a ? Math.abs(Number(a.avg_loss || 0)) : 0;
+  const allPayoff = allAvgLoss > 0 ? allAvgWin / allAvgLoss : null;
   const perTrade = n ? net / n : null;
   const allExp = a && a.expectancy != null ? Number(a.expectancy) : null;
 
@@ -238,16 +279,16 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
           </>,
         },
         {
-          label: effLabel,
-          value: eff == null ? '—' : `${eff.toFixed(0)}%`,
-          amber: eff != null && allEff != null && eff < allEff,
-          read: eff == null
-            ? 'Insufficient 1-minute market data for these trades'
+          label: 'Payoff ratio',
+          value: payoff == null ? '—' : `${payoff.toFixed(2)}x`,
+          met: payoff != null && payoff >= 1,
+          tone: payoff != null && payoff < 1 ? 'neg' : undefined,
+          read: payoff == null
+            ? 'Needs at least one winning and one losing trade'
             : <>
-              Directional move captured while the trade was open.{' '}
-              {optionExcursions > 0 ? 'Options use the underlying ticker. ' : ''}
-              {allEff != null ? <>All-time {allEff.toFixed(0)}%</> : null}
-              {allEff != null ? <Delta day={eff} all={allEff} digits={0} unit="pp" /> : null}
+              Avg win {money(avgWin)} / avg loss {money(avgLoss)}
+              {allPayoff != null ? <> · All-time {allPayoff.toFixed(2)}x</> : null}
+              {allPayoff != null ? <Delta day={payoff} all={allPayoff} digits={2} unit="x" /> : null}
             </>,
         },
         {
@@ -374,8 +415,8 @@ export function DayTrades({ trades, gradeMap, loading, onOpen }) {
             <th className="v3-hide-s">Side</th>
             <th className="v3-hide-s">Strategy</th>
             <th>Grade</th>
-            <th className="r v3-hide-s">MFE / MAE</th>
-            <th className="r v3-hide-s">Captured</th>
+            <th className="r v3-hide-s">Hold</th>
+            <th className="r v3-hide-s">P/L %</th>
             <th className="r">R</th>
             <th className="r">P&amp;L</th>
           </tr>
@@ -405,24 +446,9 @@ export function DayTrades({ trades, gradeMap, loading, onOpen }) {
                 <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                   {g ? <Grade grade={g.grade} reason={g.one_line} /> : <span className="v3-flat">&mdash;</span>}
                 </td>
-                <td
-                  className="r v3-mono v3-hide-s v3-read"
-                  title={t.instrument_type === 'OPTION'
-                    ? 'VERIFIED from Alpaca 1-minute underlying price path'
-                    : t.instrument_type === 'FUTURE'
-                      ? 'VERIFIED from Alpaca 1-minute ETF proxy path'
-                      : 'VERIFIED from actual fill price + Alpaca 1-minute highs/lows'}
-                >
-                  {t.mfe_pct == null && t.mae_pct == null ? '—' : (
-                    <>
-                      <span className="v3-pos">{t.mfe_pct == null ? '—' : `+${Number(t.mfe_pct).toFixed(1)}%`}</span>
-                      <span className="v3-flat"> / </span>
-                      <span className="v3-neg">{t.mae_pct == null ? '—' : `${Number(t.mae_pct).toFixed(1)}%`}</span>
-                    </>
-                  )}
-                </td>
-                <td className={`r v3-mono v3-hide-s ${t.exit_efficiency == null ? 'v3-flat' : t.exit_efficiency < 0 ? 'v3-neg' : t.exit_efficiency >= 50 ? 'v3-pos' : ''}`}>
-                  {t.exit_efficiency == null ? '—' : `${Number(t.exit_efficiency).toFixed(0)}%`}
+                <td className="r v3-mono v3-hide-s">{tradeHoldLabel(t)}</td>
+                <td className={`r v3-mono v3-hide-s ${tradePLPercent(t) == null ? 'v3-flat' : tone(tradePLPercent(t))}`}>
+                  {tradePLPercent(t) == null ? '—' : `${tradePLPercent(t) > 0 ? '+' : ''}${tradePLPercent(t).toFixed(1)}%`}
                 </td>
                 <td className={`r v3-mono ${t.r_multiple != null ? tone(t.r_multiple) : 'v3-flat'}`}>
                   {t.r_multiple != null ? `${t.r_multiple > 0 ? '+' : ''}${Number(t.r_multiple).toFixed(2)}R` : '—'}
