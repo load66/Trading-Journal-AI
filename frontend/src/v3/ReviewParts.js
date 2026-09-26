@@ -325,11 +325,7 @@ export function Coaching({ summary, loading, onRegenerate }) {
       </div>
 
       <div className="v3-cols">
-        {summary.narrative && (
-          <p className="v3-narr">
-            <EvidenceBadge level={summary.evidence_locked ? 'VERIFIED' : null} /> {summary.narrative}
-          </p>
-        )}
+        {summary.narrative && <p className="v3-narr">{summary.narrative}</p>}
         {summary.mental_game && (
           <p className="v3-narr v3-narr-quiet">
             <EvidenceBadge level={obs.mental_game?.evidence || (summary.evidence_locked ? 'INSUFFICIENT DATA' : null)} /> {summary.mental_game}
