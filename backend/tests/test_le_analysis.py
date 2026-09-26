@@ -76,8 +76,8 @@ def market_bars(*, pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0):
     prev = minute_run(
         (2026, 9, 24), 9, 30, 90,
         lambda i: 98.0 + (i % 5) * 0.02,
-        high=lambda i: pdh if i == 10 else 99.0,
-        low=lambda i: pdl if i == 20 else 97.0,
+        high=lambda i: pdh if i in {10, 11} else 99.0,
+        low=lambda i: pdl if i in {20, 21} else 97.0,
     )
     pre = [
         bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 98.0, pmh, pml, 98.5),
@@ -231,8 +231,8 @@ def test_entry_snapshot_uses_only_completed_one_minute_bar():
 def test_exact_10m_boundary_is_not_used_as_pre_entry_confirmation():
     prev = minute_run(
         (2026, 9, 24), 9, 30, 90, 98.0,
-        high=lambda i: 100.0 if i == 10 else 99.0,
-        low=lambda i: 95.0 if i == 20 else 97.0,
+        high=lambda i: 100.0 if i in {10, 11} else 99.0,
+        low=lambda i: 95.0 if i in {20, 21} else 97.0,
     )
     pre = [
         bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 98.0, 101.0, 96.0, 98.5),
