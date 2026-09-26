@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { calendarApi } from '../api';
 import {
-  Measures, BarRow, Tabs, Seg, EquityCurve, DailyPnlBars, SessionStrip, MonthGrid,
+  Measures, BarRow, Tabs, Seg, EquityCurve, DailyPnlBars, TimeOfDayBars, MonthGrid,
   money, money2, moneyK, tone, shortDate, MONTH_NAMES,
 } from './parts';
 
@@ -323,8 +323,6 @@ export default function DashboardRender(p) {
     recentTrades, edgeReport, goals,
   } = p;
 
-  const [scrub, setScrub] = useState(null);
-
   const k = kpis || {};
   const days = k.daily_pnl || [];
   const net = k.total_net_pnl || 0;
@@ -449,19 +447,11 @@ export default function DashboardRender(p) {
     },
   ];
 
-  // daily_pnl carries no trade count, but it does carry the running total,
-  // which answers a better question: where did the account stand that day.
-  const readout = scrub
-    ? {
-      label: shortDate(scrub.date),
-      value: scrub.net_pnl,
-      when: scrub.cumulative != null ? `balance ${money(scrub.cumulative)}` : '',
-    }
-    : (() => {
-      if (!days.length) return null;
-      const last = days[days.length - 1];
-      return { label: 'Last session', value: last.net_pnl, when: shortDate(last.date) };
-    })();
+  const readout = (() => {
+    if (!days.length) return null;
+    const last = days[days.length - 1];
+    return { label: 'Last session', value: last.net_pnl, when: shortDate(last.date) };
+  })();
 
   return (
     <div>
@@ -542,12 +532,15 @@ export default function DashboardRender(p) {
             <DailyPnlBars days={days} height={210} onPick={onDayClick} />
           </div>
         </div>
-        <div className="v3-strip-wrap v3-strip-compact">
-          <div className="v3-strip-head">
-            <span className="v3-lab">Session distribution</span>
-            <span className="v3-lab v3-hide-s">Hover to scrub &middot; click to open the day</span>
+        <div className="v3-tod-panel">
+          <div className="v3-chart-title v3-tod-title">
+            <div>
+              <div className="v3-lab">Time-of-day edge</div>
+              <strong>Entry window performance</strong>
+            </div>
+            <span>30-minute buckets · first broker-recorded entry · {k.entry_time_timezone || 'CT'}</span>
           </div>
-          <SessionStrip days={days} onPick={onDayClick} onHover={setScrub} />
+          <TimeOfDayBars rows={k.by_entry_time || []} timezone={k.entry_time_timezone || 'CT'} />
         </div>
       </section>
 

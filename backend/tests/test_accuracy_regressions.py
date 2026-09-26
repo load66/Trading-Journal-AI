@@ -241,3 +241,49 @@ def test_recent_closed_trades_sort_by_broker_exit_time(monkeypatch, tmp_path):
         assert [row["trade_group"] for row in result] == ["late", "middle"]
     finally:
         conn.close()
+
+
+def test_time_of_day_kpis_group_by_first_entry(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    trades = [
+        {
+            "side": "LONG",
+            "instrument_type": "OPTION",
+            "net_pnl": 100.0,
+            "executions": [
+                {"date": "2026-09-25", "time": "08:33:00", "action": "BOT", "qty": 1, "price": 5.00},
+                {"date": "2026-09-25", "time": "08:45:00", "action": "SOLD", "qty": 1, "price": 6.00},
+            ],
+        },
+        {
+            "side": "LONG",
+            "instrument_type": "OPTION",
+            "net_pnl": -50.0,
+            "executions": [
+                {"date": "2026-09-25", "time": "08:50:00", "action": "BOT", "qty": 1, "price": 5.00},
+                {"date": "2026-09-25", "time": "08:55:00", "action": "SOLD", "qty": 1, "price": 4.50},
+            ],
+        },
+        {
+            "side": "LONG",
+            "instrument_type": "OPTION",
+            "net_pnl": 60.0,
+            "executions": [
+                {"date": "2026-09-25", "time": "09:01:00", "action": "BOT", "qty": 1, "price": 2.00},
+                {"date": "2026-09-25", "time": "09:10:00", "action": "SOLD", "qty": 1, "price": 2.60},
+            ],
+        },
+    ]
+
+    rows = main._time_of_day_kpis(trades)
+
+    assert [r["start_minute"] for r in rows] == [510, 540]
+    assert rows[0]["label"] == "8:30 AM–9:00 AM"
+    assert rows[0]["count"] == 2
+    assert rows[0]["net_pnl"] == 50.0
+    assert rows[0]["win_rate"] == 50.0
+    assert rows[0]["expectancy"] == 25.0
+    assert rows[0]["avg_pl_pct"] == 5.0
+    assert rows[1]["label"] == "9:00 AM–9:30 AM"
+    assert rows[1]["count"] == 1
+    assert rows[1]["net_pnl"] == 60.0
