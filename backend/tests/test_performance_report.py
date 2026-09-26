@@ -105,3 +105,46 @@ def test_negative_opening_window_is_ranked_as_behavior_flaw():
     report = build_performance_report(rows)
     names = [r["name"] for r in report["behavior"]["ranked_flaws"]]
     assert "First 30 minutes" in names
+
+
+def test_option_and_stock_sizing_are_normalized_separately():
+    rows = [
+        trade("os", "2026-09-10", "SPY", 50, "09:30:00", "09:36:00",
+              qty=2, price=2.0, instrument="OPTION"),
+        trade("ob", "2026-09-10", "QQQ", -40, "09:40:00", "09:41:00",
+              qty=10, price=2.0, instrument="OPTION"),
+        trade("ss", "2026-09-10", "AMD", 100, "10:00:00", "10:06:00",
+              qty=10, price=100, instrument="STOCK"),
+        trade("sb", "2026-09-10", "NVDA", -100, "10:10:00", "10:11:00",
+              qty=100, price=100, instrument="STOCK"),
+    ]
+    report = build_performance_report(rows)
+    cross = report["position_size"]["cross_reference"]
+    assert cross["typical_option_contracts"] == 6.0
+    assert cross["typical_share_notional"] == 5500.0
+    assert cross["small_size_long_hold"]["trade_count"] == 2
+    assert cross["big_size_short_hold"]["trade_count"] == 2
+
+
+def test_averaging_down_uses_running_average_not_first_fill_only():
+    # 100 then 102 gives a running average of 101. Adding at 100.5 is below
+    # the running average, so it is an add after price moved against the position.
+    row = trade("avg-running", "2026-09-11", "SPY", -25, "09:30:00", "09:40:00",
+                qty=1, price=100, instrument="STOCK",
+                extra_entries=[("09:31:00", 1, 102), ("09:32:00", 1, 100.5)])
+    report = build_performance_report([row])
+    assert report["behavior"]["averaging_down"]["averaged_down"]["trade_count"] == 1
+
+
+def test_tilt_size_is_reported_as_multiple_of_typical_instrument_size():
+    rows = [
+        trade("a1", "2026-09-12", "SPY", -100, "09:30:00", "09:31:00", qty=2),
+        trade("a2", "2026-09-12", "QQQ", -100, "09:32:00", "09:33:00", qty=2),
+        trade("a3", "2026-09-12", "IWM", -100, "09:34:00", "09:35:00", qty=2),
+        trade("a4", "2026-09-12", "DIA", -100, "09:36:00", "09:37:00", qty=6),
+    ]
+    report = build_performance_report(rows)
+    tilt = report["behavior"]["tilt_escalation"]
+    assert tilt["size_unit"] == "multiple of typical size within instrument family"
+    assert tilt["first3_avg_size"] is not None
+    assert tilt["post_threshold_avg_size"] is not None
