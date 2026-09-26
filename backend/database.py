@@ -137,11 +137,18 @@ class RemoteConnection:
         return RemoteCursor(self._raw.cursor())
 
     def executescript(self, script: str):
-        # The app's scripts are schema-only and contain no semicolons in literals.
-        for statement in script.split(";"):
-            statement = statement.strip()
-            if statement:
-                self.execute(statement)
+        # sqlite3.complete_statement understands quoted semicolons and comments,
+        # unlike a naive split(";"). This keeps existing schema scripts portable.
+        buffer = ""
+        for line in script.splitlines(keepends=True):
+            buffer += line
+            if sqlite3.complete_statement(buffer):
+                statement = buffer.strip()
+                if statement:
+                    self.execute(statement)
+                buffer = ""
+        if buffer.strip():
+            self.execute(buffer.strip())
         return self
 
     def commit(self):
