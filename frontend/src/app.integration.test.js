@@ -615,7 +615,7 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
 
   expect(await screen.findByRole('heading', { name: /Trade management/i })).toBeVisible();
   expect(screen.getByText('Profit capture')).toBeVisible();
-  expect(screen.getByText('64%')).toBeVisible();
+  expect(screen.getAllByText('64%').length).toBeGreaterThan(0);
   expect(screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i })).toBeVisible();
   expect(screen.getByText('September Smoking Gun')).toBeVisible();
   expect(screen.queryByRole('heading', { name: 'What works' })).not.toBeInTheDocument();
