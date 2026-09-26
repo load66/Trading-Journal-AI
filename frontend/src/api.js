@@ -112,6 +112,14 @@ export const smokingGunApi = {
 
 // Settings > Library: strategy names, sources and tags. `item` is
 // { kind: 'strategy' | 'source' | 'tag', tag_type?, name, ... }.
+export const smokingGunLibraryApi = {
+  list: (params) => api.get('/api/smoking-gun-reports', { params }),
+  get: (id) => api.get(`/api/smoking-gun-reports/${id}`),
+  remove: (id) => api.delete(`/api/smoking-gun-reports/${id}`),
+  downloadHtml: (id) => api.get(`/api/smoking-gun-reports/${id}/report.html`, { responseType: 'blob' }),
+  downloadLedger: (id) => api.get(`/api/smoking-gun-reports/${id}/trade-ledger.csv`, { responseType: 'blob' }),
+};
+
 export const libraryApi = {
   list: () => api.get('/api/library'),
   create: (item) => api.post('/api/library', item),

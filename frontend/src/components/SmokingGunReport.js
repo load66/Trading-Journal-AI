@@ -4,6 +4,7 @@ import {
   ResponsiveContainer, Cell, ReferenceLine,
 } from 'recharts';
 import { smokingGunApi } from '../api';
+import SmokingGunLibrary from './SmokingGunLibrary';
 import { PanelHead } from './ui';
 
 const fmt$ = (v) => {
@@ -361,7 +362,7 @@ function Diagnosis({ diagnosis }) {
   );
 }
 
-export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
+function LiveSmokingGunReport({ accountId, dateFrom, dateTo }) {
   const [data, setData] = useState(null);
   const [diagnosis, setDiagnosis] = useState(null);
   const [aiMeta, setAiMeta] = useState(null);
@@ -514,6 +515,50 @@ export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
       </Card>
 
       <Diagnosis diagnosis={diagnosis} />
+    </div>
+  );
+}
+
+
+export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
+  const [view, setView] = useState('live');
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div
+        role="tablist"
+        aria-label="Smoking Gun views"
+        style={{ display: 'inline-flex', gap: 4, padding: 4, border: '1px solid var(--divider)', borderRadius: 8, width: 'fit-content', background: 'var(--surface-inset)' }}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'live'}
+          className={'btn ' + (view === 'live' ? 'btn-primary' : '')}
+          onClick={() => setView('live')}
+        >
+          Live Analytics
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'library'}
+          className={'btn ' + (view === 'library' ? 'btn-primary' : '')}
+          onClick={() => setView('library')}
+        >
+          Report Library
+        </button>
+      </div>
+
+      <div role="tabpanel" aria-label="Live Analytics" hidden={view !== 'live'}>
+        <LiveSmokingGunReport accountId={accountId} dateFrom={dateFrom} dateTo={dateTo} />
+      </div>
+
+      {view === 'library' && (
+        <div role="tabpanel" aria-label="Report Library">
+          <SmokingGunLibrary accountId={accountId} />
+        </div>
+      )}
     </div>
   );
 }

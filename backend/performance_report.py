@@ -8,6 +8,12 @@ from statistics import mean, median
 
 from behavior_rules import detect_daily_flags
 
+from smoking_gun_library import (
+    ANALYTICS_ENGINE_VERSION,
+    BEHAVIOR_VERSION,
+    REPORT_SCHEMA_VERSION,
+)
+
 
 HOLD_BUCKETS = [
     ("Under 30 sec", 0, 30),
@@ -483,6 +489,68 @@ def by_day_ticker_sorted(trades):
     return {k: sorted(v, key=lambda r: r.get("entry_dt") or datetime.max) for k, v in groups.items()}
 
 
+def _scoreboard(trades, daily):
+    pnls = [float(t.get("pnl") or 0) for t in trades]
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    gross = sum(
+        float(t.get("gross_pnl")) if t.get("gross_pnl") is not None
+        else float(t.get("pnl") or 0) + float(t.get("commissions") or 0)
+        for t in trades
+    )
+    fees = sum(float(t.get("commissions") or 0) for t in trades)
+    avg_winner = mean(wins) if wins else 0.0
+    avg_loser = abs(mean(losses)) if losses else 0.0
+
+    peak = 0.0
+    max_drawdown = 0.0
+    for day in daily:
+        running = float(day.get("running_total") or 0)
+        peak = max(peak, running)
+        max_drawdown = min(max_drawdown, running - peak)
+
+    best = max(daily, key=lambda d: d["total_pnl"]) if daily else None
+    worst = min(daily, key=lambda d: d["total_pnl"]) if daily else None
+    return {
+        "net_pnl": round(sum(pnls), 2),
+        "gross_pnl": round(gross, 2),
+        "fees": round(fees, 2),
+        "win_rate": round(len(wins) / len(pnls) * 100, 1) if pnls else 0.0,
+        "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) else None,
+        "avg_winner": round(avg_winner, 2),
+        "avg_loser": round(avg_loser, 2),
+        "reward_risk": round(avg_winner / avg_loser, 2) if avg_loser else None,
+        "max_drawdown": round(max_drawdown, 2),
+        "active_days": len(daily),
+        "best_day": {"date": best["date"], "pnl": round(best["total_pnl"], 2)} if best else None,
+        "worst_day": {"date": worst["date"], "pnl": round(worst["total_pnl"], 2)} if worst else None,
+    }
+
+
+def _compact_trade_ledger(trades):
+    out = []
+    for t in trades:
+        entry_dt = t.get("entry_dt")
+        exit_dt = t.get("exit_dt")
+        out.append({
+            "trade_group": t.get("trade_group"),
+            "date": t.get("date"),
+            "ticker": t.get("ticker"),
+            "instrument_type": t.get("instrument_type"),
+            "side": t.get("side"),
+            "entry_time": entry_dt.isoformat(sep=" ") if entry_dt else None,
+            "exit_time": exit_dt.isoformat(sep=" ") if exit_dt else None,
+            "hold_sec": round(t["hold_sec"], 3) if t.get("hold_sec") is not None else None,
+            "entry_size": round(float(_position_size_value(t)), 6) if _position_size_value(t) is not None else None,
+            "gross_pnl": round(float(t["gross_pnl"]), 2) if t.get("gross_pnl") is not None else None,
+            "commissions": round(float(t.get("commissions") or 0), 2),
+            "net_pnl": round(float(t.get("pnl") or 0), 2),
+            "hold_bucket": _hold_bucket(t),
+            "size_bucket": _size_bucket(t),
+        })
+    return out
+
+
 def build_performance_report(trades):
     enriched = [enrich_trade(t) for t in trades]
     open_positions = [t for t in enriched if t.get("is_open")]
@@ -512,7 +580,6 @@ def build_performance_report(trades):
 
     daily = _daily_rows(rows)
     behavior = _behavior_analysis(rows)
-
     raw_by_day = defaultdict(list)
     for t in trades:
         if t.get("date"):
@@ -590,6 +657,9 @@ def build_performance_report(trades):
 
     return {
         "meta": {
+            "report_schema_version": REPORT_SCHEMA_VERSION,
+            "analytics_engine_version": ANALYTICS_ENGINE_VERSION,
+            "behavior_version": BEHAVIOR_VERSION,
             "trade_count": len(rows),
             "open_position_count": len(open_positions),
             "timestamp_coverage": round(sum(t.get("hold_sec") is not None for t in rows) / len(rows) * 100, 1) if rows else 0,
@@ -597,6 +667,8 @@ def build_performance_report(trades):
             "ticker_edge_rule": "EDGE requires positive P&L, win rate >=55%, and at least 5 completed trades; positive thinner samples are MARGINAL.",
             "behavior_counterfactual_note": "P&L-if-eliminated is an independent what-if for each negative cohort. Behavior cohorts can overlap, so impacts must not be summed.",
         },
+        "scoreboard": _scoreboard(rows, daily),
+        "trade_ledger": _compact_trade_ledger(rows),
         "matching": {
             "completed_trades": len(rows),
             "open_positions": [

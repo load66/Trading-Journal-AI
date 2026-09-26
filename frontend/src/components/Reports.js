@@ -312,16 +312,22 @@ export default function Reports({ accountId }) {
         ))}
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 18px' }}>
-        <Seg
-          label="How to show every breakdown"
-          value={view}
-          onChange={setView}
-          options={[{ id: 'bars', label: 'Bars' }, { id: 'table', label: 'Table' }]}
-        />
-      </div>
+      {tab !== 'smoking-gun' && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 18px' }}>
+          <Seg
+            label="How to show every breakdown"
+            value={view}
+            onChange={setView}
+            options={[{ id: 'bars', label: 'Bars' }, { id: 'table', label: 'Table' }]}
+          />
+        </div>
+      )}
 
-      {loading ? (
+      {tab === 'smoking-gun' ? (
+        <div style={gap} role="tabpanel" id="report-panel" aria-labelledby="report-tab-smoking-gun">
+          <SmokingGunReport accountId={accountId} dateFrom={dateFrom} dateTo={dateTo} />
+        </div>
+      ) : loading ? (
         <div style={gap}>
           {[1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 220 }} />)}
         </div>
@@ -329,10 +335,6 @@ export default function Reports({ accountId }) {
         <div className="card"><NoData msg="Import trades to see reports." /></div>
       ) : (
         <div style={gap} role="tabpanel" id="report-panel" aria-labelledby={`report-tab-${tab}`}>
-
-          {tab === 'smoking-gun' && (
-            <SmokingGunReport accountId={accountId} dateFrom={dateFrom} dateTo={dateTo} />
-          )}
 
           {tab === 'overview' && (
             <>

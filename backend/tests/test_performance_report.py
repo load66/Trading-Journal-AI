@@ -172,3 +172,57 @@ def test_behavior_counterfactual_reports_pnl_if_eliminated():
     opening = next(x for x in report["behavior"]["ranked_flaws"] if x["name"] == "First 30 minutes")
     assert opening["dollar_impact"] == 200
     assert opening["pnl_if_eliminated"] == 50
+
+
+def test_scoreboard_reconciles_to_daily_and_trade_metrics():
+    rows = [
+        trade("score-win", "2026-09-21", "SPY", 100, "09:30:00", "09:40:00"),
+        trade("score-loss", "2026-09-22", "QQQ", -50, "10:00:00", "10:10:00"),
+    ]
+    report = build_performance_report(rows)
+    board = report["scoreboard"]
+
+    assert board["net_pnl"] == 50.0
+    assert board["gross_pnl"] == 50.0
+    assert board["fees"] == 0.0
+    assert board["win_rate"] == 50.0
+    assert board["profit_factor"] == 2.0
+    assert board["avg_winner"] == 100.0
+    assert board["avg_loser"] == 50.0
+    assert board["reward_risk"] == 2.0
+    assert board["max_drawdown"] == -50.0
+    assert board["active_days"] == len(report["daily_pnl"]) == 2
+    assert board["best_day"] == {"date": "2026-09-21", "pnl": 100.0}
+    assert board["worst_day"] == {"date": "2026-09-22", "pnl": -50.0}
+
+
+def test_trade_ledger_reconciles_to_report_meta_and_pnl():
+    rows = [
+        trade("ledger-a", "2026-09-23", "SPY", 75, "09:30:00", "09:36:00", qty=2),
+        trade("ledger-b", "2026-09-23", "QQQ", -25, "10:00:00", "10:02:00", qty=5),
+    ]
+    report = build_performance_report(rows)
+    ledger = report["trade_ledger"]
+
+    assert len(ledger) == report["meta"]["trade_count"] == 2
+    assert round(sum(r["net_pnl"] for r in ledger), 2) == round(
+        sum(r["total_pnl"] for r in report["daily_pnl"]), 2
+    )
+    assert {
+        "trade_group", "date", "ticker", "instrument_type", "side",
+        "entry_time", "exit_time", "hold_sec", "entry_size",
+        "gross_pnl", "commissions", "net_pnl", "hold_bucket", "size_bucket",
+    } <= set(ledger[0])
+    assert ledger[0]["entry_size"] == 2.0
+    assert ledger[0]["hold_bucket"] == "5-10min"
+    assert ledger[1]["size_bucket"] == "4-5"
+
+
+def test_report_exposes_version_metadata():
+    report = build_performance_report([
+        trade("versioned", "2026-09-24", "SPY", 10, "09:30:00", "09:35:00")
+    ])
+
+    assert report["meta"]["report_schema_version"] == "1"
+    assert report["meta"]["analytics_engine_version"]
+    assert report["meta"]["behavior_version"]
