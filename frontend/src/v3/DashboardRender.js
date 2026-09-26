@@ -339,6 +339,7 @@ function LatestSmokingGunSummary({ report, onOpen }) {
         <div className="v3-smoking-head-actions">
           <div className="v3-smoking-period">
             <span>Report period</span>
+            <strong>{report.title || 'Latest report'}</strong>
             <b>{report.date_from || '—'} → {report.date_to || '—'}</b>
             {report.generated_at && <small>Generated {compactDateTime(report.generated_at)}</small>}
           </div>
