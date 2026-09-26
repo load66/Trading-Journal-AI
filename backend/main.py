@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 import httpx
 
-from database import init_db, get_db, row_to_dict
+from database import init_db, get_db, row_to_dict\nfrom runtime_config import load_runtime_config
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
