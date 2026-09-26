@@ -2274,10 +2274,14 @@ def get_daily_summary(
         if row:
             try:
                 content = json.loads(row['ai_content'])
-                content['date'] = date
-                content['cached'] = True
-                content['generated_at'] = row['generated_at']
-                return content
+                # Version 2 introduced deterministic evidence-locking. Older
+                # cached summaries may contain unsupported psychological/process
+                # claims, so they are regenerated instead of silently reused.
+                if int(content.get('evidence_version') or 0) >= 2:
+                    content['date'] = date
+                    content['cached'] = True
+                    content['generated_at'] = row['generated_at']
+                    return content
             except Exception:
                 pass
 
