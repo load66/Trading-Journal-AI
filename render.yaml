@@ -14,7 +14,7 @@ services:
       - key: AUTH_REQUIRED
         value: "true"
       - key: DATABASE_MODE
-        value: turso
+        value: postgres
       - key: STORAGE_MODE
         value: supabase
       - key: FRONTEND_ORIGINS
@@ -23,9 +23,7 @@ services:
         sync: false
       - key: AUTHORIZED_USER_ID
         sync: false
-      - key: TURSO_DATABASE_URL
-        sync: false
-      - key: TURSO_AUTH_TOKEN
+      - key: DATABASE_URL
         sync: false
       - key: SUPABASE_SECRET_KEY
         sync: false

@@ -1,4 +1,4 @@
-# Web Deployment v1 Implementation Plan
+> **SUPERSEDED FOR DATABASE/DEPLOYMENT WORK:** The Turso portions of this historical plan were replaced by `docs/superpowers/plans/2026-09-26-supabase-postgres-migration.md`. Do not execute the Turso tasks below.\n\n# Web Deployment v1 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

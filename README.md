@@ -290,6 +290,6 @@ MIT. See [LICENSE](LICENSE).
 
 ## Private web deployment
 
-This fork includes an optional private, single-user web deployment path while preserving the original local-first workflow. The hosted architecture uses GitHub Pages for the React frontend, a stateless FastAPI service, Supabase email/password authentication and private diary storage, and a remote SQLite-compatible database.
+This fork includes an optional private, single-user web deployment path while preserving the original local-first workflow. The hosted architecture uses GitHub Pages for the React frontend, a stateless FastAPI service, and Supabase for email/password authentication, durable Postgres trading data, and private diary storage.
 
 See `docs/deployment.md` for the provisioning and verification runbook. Cloud credentials are never committed to the repository.
