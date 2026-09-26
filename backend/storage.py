@@ -15,8 +15,8 @@ class DiaryStorage:
         if self.settings.storage_mode == "supabase":
             if not self.settings.supabase_url:
                 raise ConfigError("SUPABASE_URL is required when STORAGE_MODE=supabase")
-            if not self.settings.supabase_service_role_key:
-                raise ConfigError("SUPABASE_SERVICE_ROLE_KEY is required when STORAGE_MODE=supabase")
+            if not self.settings.supabase_secret_key:
+                raise ConfigError("SUPABASE_SECRET_KEY is required when STORAGE_MODE=supabase")
         else:
             Path(self.settings.upload_dir).mkdir(parents=True, exist_ok=True)
 
@@ -34,9 +34,16 @@ class DiaryStorage:
         path = quote(name, safe="/")
         return f"{base}/storage/v1/object/{bucket}/{path}"
 
+    def _authenticated_url(self, name: str) -> str:
+        name = self._safe_name(name)
+        base = self.settings.supabase_url.rstrip("/")
+        bucket = quote(self.settings.supabase_storage_bucket, safe="")
+        path = quote(name, safe="/")
+        return f"{base}/storage/v1/object/authenticated/{bucket}/{path}"
+
     def _headers(self, content_type: str | None = None) -> dict:
-        key = self.settings.supabase_service_role_key
-        headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+        key = self.settings.supabase_secret_key
+        headers = {"apikey": key}
         if content_type:
             headers["Content-Type"] = content_type
         return headers
@@ -63,7 +70,7 @@ class DiaryStorage:
         if self.settings.storage_mode == "local":
             path = Path(self.settings.upload_dir) / name
             return path.read_bytes(), mimetypes.guess_type(name)[0] or "application/octet-stream"
-        response = httpx.get(self._url(name), headers=self._headers(), timeout=30)
+        response = httpx.get(self._authenticated_url(name), headers=self._headers(), timeout=30)
         response.raise_for_status()
         return response.content, response.headers.get("content-type", "application/octet-stream")
 
