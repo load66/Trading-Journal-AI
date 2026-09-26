@@ -120,3 +120,8 @@ export const weeklySummaryApi = {
 export const yearlyKpisApi = {
   get: (params) => api.get('/api/yearly-kpis', { params }),
 };
+
+
+export const diaryFileApi = {
+  get: (name) => api.get(`/api/diary-files/${encodeURIComponent(name)}`, { responseType: 'blob' }),
+};
