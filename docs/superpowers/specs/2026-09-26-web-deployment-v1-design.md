@@ -1,27 +1,29 @@
-# Web Deployment v1 Design
+# Web Deployment v1 Design — Supabase Postgres Revision
 
 **Date:** 2026-09-26  
 **Repository:** `load66/Trading-Journal-AI`  
-**Branch:** `feature/web-deployment-v1`
+**Branch:** `feature/web-deployment-v1`  
+**Status:** Revised architecture pending implementation-plan review
 
 ## Intent
 
-Turn the existing local-first Trading Journal AI into a private, single-user web application that can be opened from phone or desktop while preserving the existing localhost workflow.
+Turn Trading Journal AI into a private, single-user web application that is available from phone and desktop, preserves the existing localhost workflow, stays free-first, and keeps the user's trading data accessible for future in-app and ChatGPT-assisted analysis.
 
-The first deployment must be free-first, avoid unnecessary rewrites, protect trading data and API credentials, and leave a low-friction upgrade path to paid always-on infrastructure later.
+This revision replaces the previously selected Turso production database with **Supabase Postgres**. Supabase now provides authentication, the production trading database, and private diary-file storage in one platform.
 
 ## Success criteria
 
-1. The React frontend can be deployed to `https://load66.github.io/Trading-Journal-AI/`.
-2. The hosted frontend requires email/password authentication before rendering journal content.
-3. Public signup is not exposed by the application; the deployment is intended for one pre-created Supabase user.
-4. Every protected FastAPI route rejects missing, expired, invalid, wrong-project, or wrong-user access tokens.
-5. The backend remains usable locally without authentication unless local auth is explicitly enabled.
-6. Hosted trading data survives backend restarts and free-tier spin-downs.
-7. Diary images survive backend restarts and remain private.
-8. Anthropic, Alpaca, Turso, and storage secrets never enter the browser bundle or repository.
-9. Existing broker import, trade reconstruction, reports, diary analysis, and localhost tests remain intact.
-10. The cloud database/storage layer can later move to paid infrastructure without redesigning the application.
+1. React deploys to `https://load66.github.io/Trading-Journal-AI/`.
+2. Hosted users must authenticate with the pre-created Supabase email/password account.
+3. FastAPI rejects missing, invalid, expired, wrong-project, or wrong-user access tokens.
+4. Local development continues to use SQLite with no cloud credentials unless hosted mode is explicitly enabled.
+5. Hosted trading data persists in Supabase Postgres and survives Render restarts/spin-downs.
+6. Diary images persist in the private Supabase `diary` bucket.
+7. Trading tables are not exposed for browser CRUD; FastAPI remains the application data boundary.
+8. Supabase, Anthropic, Alpaca, and database credentials never enter the browser bundle or Git repository.
+9. Existing import/reconstruction/report/diary behavior remains functionally compatible.
+10. The connected Supabase project can be queried directly through ChatGPT for future journal analytics and automation work.
+11. No Turso dependency or Turso provisioning remains in the production architecture.
 
 ## Architecture
 
@@ -39,11 +41,11 @@ GitHub repository
                               FastAPI API
                                /       \
                               /         \
-                    Turso database   Supabase private storage
-                    trading data     diary files
-                              \
-                               +--> Anthropic / Alpaca
-                                    server-side secrets only
+                Supabase Postgres    Supabase Storage
+                trading data        private diary files
+                       |
+                       +--> Anthropic / Alpaca
+                            server-side secrets only
 ```
 
 ### Local path
@@ -59,199 +61,232 @@ SQLite trading_journal.db
 local uploads/
 ```
 
-Local development remains the default when cloud environment variables are absent.
+Local remains the default when hosted environment variables are absent.
 
 ## Technology decisions
 
 ### Frontend: GitHub Pages
 
-GitHub Pages hosts only the static React build. It never receives server-side secrets. The React build uses a project base path for `/Trading-Journal-AI/` and receives public configuration through GitHub repository variables:
+GitHub Pages hosts only the static React build. Browser-visible configuration is limited to:
 
 - `REACT_APP_API_URL`
 - `REACT_APP_AUTH_REQUIRED=true`
 - `REACT_APP_SUPABASE_URL`
 - `REACT_APP_SUPABASE_PUBLISHABLE_KEY`
 
-The Supabase publishable/anon key is intentionally browser-visible; service-role keys are never used client-side.
+No database password, Supabase secret key, Anthropic key, or Alpaca secret enters the React bundle.
 
 ### Authentication: Supabase Auth
 
-Use email/password sign-in only. The application contains no signup UI.
+Email/password login only. No signup UI.
 
-The React app obtains a Supabase access token and attaches it to API requests. The backend verifies the JWT against the Supabase project JWKS with:
+The React app obtains a Supabase access token and sends it to FastAPI. FastAPI verifies:
 
-- valid cryptographic signature;
+- cryptographic signature through the project JWKS;
 - issuer `<SUPABASE_URL>/auth/v1`;
 - audience `authenticated`;
-- non-expired token;
-- subject exactly matching `AUTHORIZED_USER_ID`.
+- expiry;
+- `sub` exactly matching the configured `AUTHORIZED_USER_ID`.
 
-This second subject check makes the API single-user even if another account exists in the Supabase project.
+This remains a single-user application even if another Supabase account is ever created.
 
-Hosted mode fails closed if required auth configuration is missing. Local mode remains unauthenticated unless `AUTH_REQUIRED=true`.
+### Production database: Supabase Postgres
 
-### Database: SQLite locally, Turso remotely
+Production uses PostgreSQL in the existing Supabase project. Local development continues to use SQLite.
 
-The existing SQLite SQL and schema are preserved.
+Runtime selection:
 
-A database adapter chooses the backend from configuration:
+- `DATABASE_MODE=sqlite` → Python `sqlite3`;
+- `DATABASE_MODE=postgres` → `psycopg` connection to Supabase Postgres.
 
-- default/local: Python `sqlite3`;
-- hosted: remote Turso DB-API connection using `turso_serverless`.
+Hosted configuration uses one server-side connection string:
 
-Hosted mode must not depend on a writable local SQLite file on Render.
+- `DATABASE_URL`
 
-Required hosted variables:
+For Render/free hosting, use the **Supavisor session-mode connection string** when the runtime network is IPv4-only. Supabase currently recommends session mode for persistent IPv4 application backends. Direct connections remain suitable where IPv6 is available.
 
-- `DATABASE_MODE=turso`
-- `TURSO_DATABASE_URL`
-- `TURSO_AUTH_TOKEN`
+The backend must never silently fall back to local SQLite when `DATABASE_MODE=postgres`.
 
-The rest of the application continues to consume a DB-API style connection through `get_db()`.
+### SQL compatibility boundary
 
-### Database migrations
+The current application contains substantial SQLite-oriented SQL. The migration must preserve behavior without rewriting every route at once.
 
-Replace catch-all, silent `ALTER TABLE` exception handling with an explicit `schema_migrations` table and ordered migration functions.
+A database compatibility layer will:
 
-Requirements:
+- normalize rows to mapping/dict behavior;
+- translate DB-API parameter placeholders from the application's existing `?` convention to PostgreSQL `%s` for parameterized statements;
+- use PostgreSQL-safe identity/default syntax in the production schema;
+- replace SQLite-only schema inspection (`PRAGMA table_info`) with PostgreSQL catalog/information-schema queries in Postgres mode;
+- keep transaction semantics explicit: commit on success, rollback on failure;
+- provide an explicit insert-id helper using `RETURNING id` in Postgres rather than depending on SQLite `lastrowid`;
+- reject unsupported SQLite-only SQL explicitly instead of silently producing different behavior.
 
-- migrations are idempotent;
-- already-applied versions are skipped;
-- a real migration error aborts startup rather than being swallowed;
-- a fresh database creates the complete current schema and records migration versions;
-- existing SQLite databases migrate without losing data.
+Do not introduce an ORM in v1. A focused compatibility layer is lower-risk and keeps the existing business logic recognizable.
+
+### Schema design
+
+Supabase Postgres gets the same logical entities already used locally:
+
+- `accounts`
+- `trades`
+- `diary_entries`
+- `trade_analysis`
+- `trade_tags`
+- `daily_summaries`
+- `settings`
+- `custom_setups`
+- `schema_migrations`
+
+Use native PostgreSQL identity columns, timestamps/defaults, constraints, and indexes while preserving current API-visible values and relationships.
+
+The production schema is created through a committed, reviewable Supabase migration. Application startup may verify schema version, but it must not perform broad ad-hoc DDL on every request.
+
+### Supabase table security
+
+The React app does **not** query trading tables directly through Supabase's Data API.
+
+Defense-in-depth requirements:
+
+- enable RLS on all application tables in an exposed schema;
+- revoke `anon` and `authenticated` table privileges unless a future feature explicitly requires browser-side access;
+- create no permissive browser RLS policies in v1;
+- backend access uses the server-side Postgres connection, not the browser publishable key;
+- never authorize based on user-editable `user_metadata`.
+
+The FastAPI JWT boundary remains the primary application authorization layer.
 
 ### Diary file storage
 
-Introduce a storage abstraction:
+Local mode uses the existing filesystem abstraction. Hosted mode uses the private Supabase `diary` bucket.
 
-- local mode: current `uploads/` filesystem behavior;
-- hosted mode: private Supabase Storage bucket.
-
-Required hosted variables:
+Hosted variables:
 
 - `STORAGE_MODE=supabase`
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SECRET_KEY`
 - `SUPABASE_STORAGE_BUCKET=diary`
 
-The service-role key is backend-only.
+The Supabase secret key is backend-only.
 
-Diary uploads are read into memory, HEIC conversion remains supported, and AI image analysis uses a temporary local file for the duration of the request. Persistent hosted copies go to the private bucket.
-
-The API exposes an authenticated diary-file endpoint rather than making the bucket public. This endpoint returns file bytes only after normal API authentication.
-
-Deleting diary entries also deletes the associated stored object/file where practical.
+Files are retrieved through authenticated FastAPI routes. The bucket stays private.
 
 ### Render backend
 
-Render hosts the existing FastAPI service on free compute.
+Render runs stateless FastAPI.
 
-The repository includes a `render.yaml` Blueprint that:
+The Blueprint must:
 
-- uses `backend/` as the runtime root;
-- installs `backend/requirements.txt`;
-- starts Uvicorn on Render's `$PORT`;
-- configures only non-secret defaults in source;
-- leaves secret values for the Render environment.
+- set `APP_ENV=production`;
+- set `AUTH_REQUIRED=true`;
+- set `DATABASE_MODE=postgres`;
+- set `STORAGE_MODE=supabase`;
+- request `DATABASE_URL` instead of Turso variables;
+- keep all secret values outside source control;
+- deploy only after CI checks pass.
 
-The backend is stateless in hosted mode. Free-tier sleep/cold start is accepted for v1.
+The backend must not depend on Render's filesystem for durable database or diary data.
 
-### GitHub Pages workflow
+## Production schema migration strategy
 
-A dedicated workflow builds and deploys `frontend/` to GitHub Pages on pushes to `main` and manual dispatch.
+There is currently no production trading data in Supabase, so this is a clean bootstrap rather than a live data migration.
 
-The workflow:
+Implementation sequence:
 
-- uses least-privilege Pages permissions;
-- installs with `npm ci`;
-- validates required hosted public variables;
-- runs the production build;
-- uploads the build artifact;
-- deploys with the official Pages action.
+1. create/test the Postgres compatibility layer against isolated tests;
+2. create a Supabase migration representing the current logical schema;
+3. apply it to the connected Supabase project;
+4. enable RLS and revoke browser-role table access;
+5. run Supabase security/performance advisors;
+6. run test queries through the Supabase connector;
+7. only then configure Render to use the Postgres connection string.
 
-Normal CI remains separate and continues to run backend tests plus frontend build/tests.
-
-## API security boundary
-
-Authentication is applied to API and diary-file routes while health checks remain public for hosting diagnostics.
-
-CORS:
-
-- localhost remains allowed for development;
-- hosted origin is explicitly supplied through `FRONTEND_ORIGINS`;
-- wildcard origins are not used;
-- Authorization headers are allowed.
-
-Generic 500 responses are sanitized in hosted mode so exception classes/messages are not leaked to the browser. Detailed exceptions remain visible in server logs.
-
-## Frontend authentication behavior
-
-When hosted auth is required:
-
-1. Load the existing Supabase session.
-2. If no session exists, show the login screen only.
-3. Sign in with email/password.
-4. Render the journal after a valid session exists.
-5. Axios retrieves the current access token immediately before protected requests.
-6. A 401 response signs the user out and returns to the login screen.
-7. Provide an explicit Sign out action in the authenticated UI.
-
-When `REACT_APP_AUTH_REQUIRED` is not true, the frontend behaves exactly like the current local application.
-
-## Secrets and public configuration
-
-Never commit:
-
-- Supabase service-role key;
-- Turso auth token;
-- Anthropic key;
-- Alpaca secrets;
-- passwords;
-- database snapshots containing trading data.
-
-Public configuration that may appear in the frontend build:
-
-- hosted API URL;
-- Supabase project URL;
-- Supabase publishable/anon key.
-
-Update `.env.example` with placeholders and comments that distinguish public browser values from backend secrets.
+Existing local SQLite files are not automatically uploaded. A separate import/migration utility can be added later if historical local journal data needs to be transferred.
 
 ## Failure behavior
 
-- Missing hosted auth configuration: backend startup fails closed with a clear server-side error.
-- Invalid/missing bearer token: HTTP 401.
+- Missing Postgres configuration in hosted mode: startup fails closed.
+- Database connection failure: request fails; no fallback to local SQLite.
+- Schema-version mismatch: startup/health diagnostics expose a server-side configuration error without leaking credentials.
+- Invalid/missing auth token: HTTP 401.
 - Valid token for another user: HTTP 403.
-- Turso unavailable: request fails; no fallback to ephemeral local data in hosted mode.
-- Supabase storage unavailable during a diary upload: do not write a database row that points to a nonexistent object.
-- AI analysis failure after a successful storage/database write: retain the diary entry and return `analysis_error`, matching current behavior.
-- GitHub Pages build missing required variables: deployment workflow fails instead of publishing a broken login shell.
+- Supabase Storage upload failure: do not create a diary row pointing to a missing object.
+- Unexpected production exception: return a generic 500 body; log details server-side.
+- GitHub Pages missing required public variables: deployment fails instead of publishing a broken app.
 
 ## Testing strategy
 
-Backend tests cover authentication, database mode selection, migration behavior, storage behavior through mocks, public health, and sanitized hosted errors. Frontend tests cover the login gate, local bypass, login/logout, bearer-token attachment, and 401 sign-out. Existing suites remain mandatory.
+Backend tests must cover:
+
+- SQLite remains the default;
+- Postgres mode requires `DATABASE_URL`;
+- no Turso configuration remains;
+- placeholder translation preserves bound parameters;
+- mapping-row behavior is compatible;
+- insert ID behavior works in both engines;
+- schema introspection works in both engines;
+- migration/version errors propagate;
+- existing broker-import/reimport tests remain green;
+- auth/storage/production-error tests remain green.
+
+Integration verification must include:
+
+- Supabase schema exists with expected columns/constraints/indexes;
+- RLS is enabled on application tables;
+- browser roles do not have direct CRUD privileges;
+- Supabase security advisor is reviewed;
+- Supabase performance advisor is reviewed;
+- Render can connect using the server-side Postgres URL;
+- a created trade survives a backend restart.
+
+Frontend auth/deployment behavior remains unchanged from the approved v1 design.
+
+## Future trade-analysis automation
+
+Using Supabase Postgres for trading data intentionally creates a clean foundation for future analysis.
+
+A later feature may:
+
+- compute deterministic trade metrics server-side after import;
+- persist analysis snapshots and rule-adherence results;
+- expose user-triggered or event-triggered AI coaching inside the journal;
+- allow ChatGPT, through the connected Supabase integration, to query journal performance directly.
+
+That feature is **not** mixed into this database-provider migration. The database migration only creates the foundation for it.
 
 ## Deployment/provisioning boundary
 
-Repository code can be completed automatically. External account-level provisioning still requires credentials that do not exist in GitHub:
+Already provisioned in Supabase:
 
-1. Supabase project: create the single user, disable public signup, create private `diary` bucket, collect URL/publishable key/service-role key/user UUID.
-2. Turso database: create database/token and collect URL/token.
-3. Render service: connect repository/Blueprint and set secrets/environment variables.
-4. GitHub Pages: configure the repository to use GitHub Actions if not already enabled and add required public repository variables.
+- project;
+- single private user;
+- public signup disabled;
+- private `diary` bucket with 10 MB object limit;
+- project URL and publishable key available through the connected Supabase integration.
 
-The repository includes an exact deployment runbook for those one-time actions.
+Still needed after code/schema work:
+
+1. obtain/configure the server-side Supabase Postgres connection string in Render;
+2. configure remaining Render secrets;
+3. add GitHub Pages public variables;
+4. merge PR only after full verification;
+5. verify the live site and persistence.
+
+## Removed from the previous design
+
+The following are no longer part of v1:
+
+- Turso database;
+- `turso_serverless`;
+- `TURSO_DATABASE_URL`;
+- `TURSO_AUTH_TOKEN`;
+- Turso provisioning documentation.
 
 ## Deferred work
 
-Not part of this deployment branch:
-
 - Schwab CSV adapter;
-- PostgreSQL migration;
-- major UI redesign;
+- automatic trade-analysis/coaching subsystem;
 - multi-user tenancy/RBAC;
-- background jobs;
+- major UI redesign;
 - paid always-on hosting;
-- normalized executions table;
-- broad backend module refactor.
+- normalized executions-table refactor;
+- historical local-SQLite-to-cloud import utility unless needed before launch.
