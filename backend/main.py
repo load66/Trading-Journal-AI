@@ -1531,7 +1531,9 @@ async def calculate_excursions(
         sql += " AND account_id = ?"
         params.append(account_id)
     if not force:
-        sql += " AND (mfe_pct IS NULL OR mae_pct IS NULL OR exit_efficiency IS NULL)"
+        # A zero-MFE trade legitimately has no exit-efficiency denominator, so
+        # completeness is based on the excursion pair rather than efficiency.
+        sql += " AND (mfe_pct IS NULL OR mae_pct IS NULL)"
     sql += " ORDER BY id"
 
     rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
@@ -2398,10 +2400,11 @@ def get_daily_summary(
         if row:
             try:
                 content = json.loads(row['ai_content'])
-                # Version 2 introduced deterministic evidence-locking. Older
-                # cached summaries may contain unsupported psychological/process
-                # claims, so they are regenerated instead of silently reused.
-                if int(content.get('evidence_version') or 0) >= 2:
+                # Version 3 adds deterministic strengths/behavior flags and
+                # evidence badges. Older cached summaries are regenerated so
+                # the UI never mixes the previous free-form lists with the new
+                # evidence model.
+                if int(content.get('evidence_version') or 0) >= 3:
                     content['date'] = date
                     content['cached'] = True
                     content['generated_at'] = row['generated_at']
