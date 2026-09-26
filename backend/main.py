@@ -18,7 +18,8 @@ from dotenv import load_dotenv
 from config import Settings
 import httpx
 
-from database import init_db, get_db, row_to_dict, insert_and_get_id
+from database import (init_db, get_db, row_to_dict, insert_and_get_id,
+                      year_filter_clause, is_integrity_error)
 from auth import AuthError, authorize_header, auth_required, validate_auth_config
 from storage import DiaryStorage
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
@@ -355,7 +356,11 @@ def create_custom_setup(body: CustomSetupBody,
             "INSERT INTO custom_setups (name, side, notes) VALUES (?,?,?)",
             (name, side, body.notes))
         conn.commit()
-    except sqlite3.IntegrityError:
+    except Exception as exc:
+        if not is_integrity_error(exc):
+            raise
+        # Postgres requires clearing the failed transaction before issuing another statement.
+        conn.rollback()
         # Already exists — reactivate rather than erroring, so re-adding is harmless.
         conn.execute("UPDATE custom_setups SET active=1 WHERE name=?", (name,))
         conn.commit()
@@ -1498,7 +1503,7 @@ def get_yearly_kpis(
     account_id: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    sql = "SELECT date, net_pnl, gross_pnl FROM trades WHERE strftime('%Y', date) = ?"
+    sql = f"SELECT date, net_pnl, gross_pnl FROM trades WHERE {year_filter_clause('date')}"
     params = [str(year)]
     if account_id is not None:
         sql += " AND account_id = ?"

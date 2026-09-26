@@ -304,6 +304,24 @@ def insert_and_get_id(conn, sql: str, params=()) -> int:
     return int(cursor.lastrowid)
 
 
+def year_filter_clause(column: str = 'date') -> str:
+    """Return a SQLite/Postgres portable year predicate for ISO text dates."""
+    if not column.isidentifier():
+        raise ValueError('column must be a simple SQL identifier')
+    return f'substr({column}, 1, 4) = ?'
+
+
+def is_integrity_error(exc: Exception) -> bool:
+    """Recognize unique/constraint errors from either supported database driver."""
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    try:
+        import psycopg
+    except ImportError:
+        return False
+    return isinstance(exc, psycopg.IntegrityError)
+
+
 def _column_names(conn, table: str) -> set[str]:
     rows = conn.execute(f'PRAGMA table_info({table})').fetchall()
     columns = set()
