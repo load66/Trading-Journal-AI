@@ -2,6 +2,7 @@ import os
 import logging
 import tempfile
 import json
+import hashlib
 import sqlite3
 import aiofiles
 from pathlib import Path
@@ -38,6 +39,7 @@ from ai_analysis import (
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
 from excursion_analysis import calculate_trade_excursion
+from risk_plan_vision import extract_risk_plan_image, validate_extraction
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 from le_analysis import build_le_review
 
@@ -445,6 +447,7 @@ def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None
         if not has_own:
             conn.execute("UPDATE trade_analysis SET trade_group=? WHERE trade_group=?", (target, g))
             conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=?", (target, g))
+            conn.execute("UPDATE risk_plan_evidence SET trade_group=? WHERE trade_group=?", (target, g))
 
 
 @app.post("/api/import-csv")
@@ -806,12 +809,403 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
     trade = row_to_dict(row)
     trade_group = trade['trade_group']
 
+    evidence_paths = [
+        r["image_path"]
+        for r in conn.execute(
+            "SELECT image_path FROM risk_plan_evidence WHERE trade_group=?",
+            (trade_group,),
+        ).fetchall()
+    ]
+    conn.execute("DELETE FROM risk_plan_evidence WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trade_tags WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trade_analysis WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trades WHERE id=?", (trade_id,))
     conn.commit()
 
+    for path in evidence_paths:
+        try:
+            DIARY_STORAGE.delete(path)
+        except Exception:
+            logger.warning("Could not remove risk-plan evidence image %s", path, exc_info=True)
+
     return {"deleted": True, "id": trade_id}
+
+
+
+RISK_PLAN_CONTENT_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+}
+
+
+def _expected_underlying_direction(trade: dict) -> str:
+    """Translate the broker position into the expected TradingView direction."""
+    side = str(trade.get("side") or "").upper()
+    instrument = str(trade.get("instrument_type") or "STOCK").upper()
+    if instrument != "OPTION":
+        return "LONG" if side == "LONG" else "SHORT"
+    option_type = str(trade.get("option_type") or "").upper()
+    if option_type == "CALL":
+        return "LONG" if side == "LONG" else "SHORT"
+    if option_type == "PUT":
+        return "SHORT" if side == "LONG" else "LONG"
+    return "UNKNOWN"
+
+
+def _entry_quantity_and_average(trade: dict) -> tuple[float, float | None]:
+    raw = trade.get("executions") or "[]"
+    try:
+        rows = raw if isinstance(raw, list) else json.loads(raw)
+    except Exception:
+        rows = []
+    side = str(trade.get("side") or "").upper()
+    entry_action = "BOT" if side == "LONG" else "SOLD"
+    entries = [e for e in rows if str(e.get("action") or "").upper() == entry_action]
+    qty = sum(float(e.get("qty") or 0) for e in entries)
+    if qty <= 0:
+        return 0.0, None
+    avg = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries) / qty
+    return qty, avg
+
+
+def _risk_plan_preview(trade: dict, extraction: dict) -> dict:
+    plan = dict(extraction)
+    warnings = list(plan.get("warnings") or [])
+    expected_direction = _expected_underlying_direction(trade)
+    extracted_direction = plan.get("direction") or "UNKNOWN"
+    direction_match = None
+    if expected_direction != "UNKNOWN" and extracted_direction != "UNKNOWN":
+        direction_match = expected_direction == extracted_direction
+        if not direction_match:
+            warnings.append(
+                f"Screenshot direction {extracted_direction} conflicts with the trade's "
+                f"expected underlying direction {expected_direction}."
+            )
+
+    qty, actual_avg_entry = _entry_quantity_and_average(trade)
+    cash_risk = None
+    cash_risk_source = None
+
+    if plan.get("cash_risk") and plan.get("cash_risk_currency") == "USD":
+        cash_risk = float(plan["cash_risk"])
+        cash_risk_source = "explicit screenshot/user cash risk"
+
+    instrument = str(trade.get("instrument_type") or "STOCK").upper()
+    entry_ref = plan.get("entry_price") or actual_avg_entry
+    stop = plan.get("stop_price")
+
+    if cash_risk is None and instrument == "STOCK" and qty and entry_ref and stop:
+        cash_risk = abs(float(entry_ref) - float(stop)) * qty
+        cash_risk_source = (
+            "screenshot entry × actual shares"
+            if plan.get("entry_price")
+            else "actual fill entry × actual shares"
+        )
+
+    if cash_risk is None and instrument == "FUTURE" and qty and entry_ref and stop:
+        multiplier = FUTURES_MULTIPLIERS.get(str(trade.get("ticker") or "").upper())
+        if multiplier:
+            cash_risk = abs(float(entry_ref) - float(stop)) * qty * float(multiplier)
+            cash_risk_source = "futures stop distance × contracts × multiplier"
+
+    if instrument == "OPTION" and cash_risk is None:
+        warnings.append(
+            "Option cash risk cannot be derived from an underlying TradingView price box. "
+            "Record Planned Risk ($) or use an explicitly visible cash-risk value."
+        )
+
+    realized_r = None
+    if cash_risk and cash_risk > 0 and trade.get("net_pnl") is not None:
+        realized_r = float(trade["net_pnl"]) / cash_risk
+
+    rr = plan.get("calculated_risk_reward")
+    if rr is None:
+        rr = plan.get("risk_reward_ratio")
+
+    safe = bool(plan.get("safe_to_apply")) and direction_match is not False
+    return {
+        **plan,
+        "expected_direction": expected_direction,
+        "direction_match": direction_match,
+        "cash_risk": round(cash_risk, 2) if cash_risk else None,
+        "cash_risk_source": cash_risk_source,
+        "planned_risk_reward": round(float(rr), 4) if rr else None,
+        "realized_r": round(realized_r, 4) if realized_r is not None else None,
+        "safe_to_apply": safe,
+        "warnings": list(dict.fromkeys(warnings)),
+        "evidence_badges": {
+            "image_values": "AI EXTRACTED",
+            "risk_reward_math": "VERIFIED" if plan.get("math_verified") else "INSUFFICIENT DATA",
+            "cash_risk": (
+                "RECORDED" if cash_risk_source == "explicit screenshot/user cash risk"
+                else "VERIFIED" if cash_risk is not None
+                else "INSUFFICIENT DATA"
+            ),
+        },
+    }
+
+
+class RiskPlanApply(BaseModel):
+    evidence_id: int
+    direction: str | None = None
+    entry_price: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
+    risk_distance: float | None = None
+    reward_distance: float | None = None
+    risk_reward_ratio: float | None = None
+    cash_risk: float | None = None
+    replace_existing: bool = False
+    allow_direction_mismatch: bool = False
+
+
+@app.post("/api/trades/{trade_group:path}/risk-plan/extract")
+async def extract_trade_risk_plan(
+    trade_group: str,
+    file: UploadFile = File(...),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    trade_row = conn.execute(
+        "SELECT * FROM trades WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not trade_row:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    trade = row_to_dict(trade_row)
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in RISK_PLAN_CONTENT_TYPES:
+        raise ValueError("TradingView risk-plan image must be PNG, JPEG, or WEBP.")
+
+    raw = await file.read()
+    if not raw:
+        raise ValueError("The uploaded risk-plan image is empty.")
+    if len(raw) > 20 * 1024 * 1024:
+        raise ValueError("Risk-plan images must be 20 MB or smaller.")
+
+    extraction = extract_risk_plan_image(raw, content_type)
+    preview = _risk_plan_preview(trade, extraction)
+
+    group_hash = hashlib.sha256(trade_group.encode("utf-8")).hexdigest()[:12]
+    image_hash = hashlib.sha256(raw).hexdigest()[:16]
+    ext = RISK_PLAN_CONTENT_TYPES[content_type]
+    image_path = f"risk_plans/{group_hash}/{trade.get('date')}_{image_hash}{ext}"
+    DIARY_STORAGE.save(image_path, raw, content_type)
+
+    evidence_id = insert_and_get_id(
+        conn,
+        """INSERT INTO risk_plan_evidence
+           (trade_group, image_path, provider, model, extraction_json, status)
+           VALUES (?,?,?,?,?,'pending')""",
+        (
+            trade_group,
+            image_path,
+            extraction.get("provider") or "groq",
+            extraction.get("model") or "unknown",
+            json.dumps(extraction),
+        ),
+    )
+    conn.commit()
+
+    existing = conn.execute(
+        "SELECT * FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    existing_plan = None
+    if existing:
+        row = row_to_dict(existing)
+        if any(row.get(k) is not None for k in ("stop_loss", "target_price", "risk_per_trade", "risk_reward")):
+            existing_plan = {
+                "stop_loss": row.get("stop_loss"),
+                "target_price": row.get("target_price"),
+                "risk_per_trade": row.get("risk_per_trade"),
+                "risk_reward": row.get("risk_reward"),
+                "r_multiple": row.get("r_multiple"),
+            }
+
+    return {
+        "evidence_id": evidence_id,
+        "trade_group": trade_group,
+        "preview": preview,
+        "existing_plan": existing_plan,
+        "image_path": image_path,
+        "message": (
+            "Review the extracted levels before applying. AI-extracted values are not "
+            "written to the trade until you approve them."
+        ),
+    }
+
+
+@app.get("/api/trades/{trade_group:path}/risk-plan")
+def get_trade_risk_plan(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    trade = conn.execute(
+        "SELECT * FROM trades WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    evidence = conn.execute(
+        """SELECT * FROM risk_plan_evidence
+           WHERE trade_group=?
+           ORDER BY id DESC LIMIT 1""",
+        (trade_group,),
+    ).fetchone()
+    analysis = conn.execute(
+        "SELECT * FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+
+    evidence_data = None
+    if evidence:
+        evidence_data = row_to_dict(evidence)
+        evidence_data["extraction"] = json.loads(evidence_data.get("extraction_json") or "{}")
+        if evidence_data.get("applied_json"):
+            evidence_data["applied"] = json.loads(evidence_data["applied_json"])
+
+    return {
+        "trade_group": trade_group,
+        "analysis": row_to_dict(analysis) if analysis else None,
+        "evidence": evidence_data,
+    }
+
+
+@app.post("/api/trades/{trade_group:path}/risk-plan/apply")
+def apply_trade_risk_plan(
+    trade_group: str,
+    data: RiskPlanApply,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    trade_row = conn.execute(
+        "SELECT * FROM trades WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not trade_row:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    trade = row_to_dict(trade_row)
+
+    evidence_row = conn.execute(
+        "SELECT * FROM risk_plan_evidence WHERE id=? AND trade_group=?",
+        (data.evidence_id, trade_group),
+    ).fetchone()
+    if not evidence_row:
+        raise HTTPException(status_code=404, detail="Risk-plan evidence not found for this trade")
+
+    extraction = json.loads(evidence_row["extraction_json"] or "{}")
+    for field in (
+        "direction",
+        "entry_price",
+        "stop_price",
+        "target_price",
+        "risk_distance",
+        "reward_distance",
+        "risk_reward_ratio",
+    ):
+        value = getattr(data, field)
+        if value is not None:
+            extraction[field] = value
+    if data.cash_risk is not None:
+        if data.cash_risk <= 0:
+            raise ValueError("Planned cash risk must be greater than zero.")
+        extraction["cash_risk"] = data.cash_risk
+        extraction["cash_risk_currency"] = "USD"
+
+    plan = validate_extraction(extraction)
+    preview = _risk_plan_preview(trade, plan)
+
+    if preview.get("direction_match") is False and not data.allow_direction_mismatch:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The extracted TradingView direction conflicts with this trade. "
+                "Review the screenshot or explicitly allow the mismatch."
+            ),
+        )
+    if not preview.get("stop_price") or not preview.get("target_price"):
+        raise ValueError(
+            "Exact stop and target prices are required to apply the risk plan. "
+            "Correct the preview fields before applying."
+        )
+
+    existing = conn.execute(
+        "SELECT * FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if existing and not data.replace_existing:
+        existing_dict = row_to_dict(existing)
+        if any(
+            existing_dict.get(k) is not None
+            for k in ("stop_loss", "target_price", "risk_per_trade", "risk_reward")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This trade already has a risk plan. Confirm replacement before applying.",
+            )
+
+    if not existing:
+        conn.execute(
+            "INSERT INTO trade_analysis (trade_group, ticker, date) VALUES (?,?,?)",
+            (trade_group, trade["ticker"], trade["date"]),
+        )
+
+    risk_reward = preview.get("planned_risk_reward")
+    cash_risk = preview.get("cash_risk")
+    realized_r = preview.get("realized_r")
+    conn.execute(
+        """UPDATE trade_analysis
+           SET stop_loss=?, target_price=?, risk_per_trade=?, risk_reward=?, r_multiple=?
+           WHERE trade_group=?""",
+        (
+            preview["stop_price"],
+            preview["target_price"],
+            cash_risk,
+            risk_reward,
+            realized_r,
+            trade_group,
+        ),
+    )
+
+    applied = {
+        "direction": preview.get("direction"),
+        "entry_price": preview.get("entry_price"),
+        "stop_price": preview.get("stop_price"),
+        "target_price": preview.get("target_price"),
+        "risk_distance": preview.get("risk_distance"),
+        "reward_distance": preview.get("reward_distance"),
+        "risk_reward": risk_reward,
+        "cash_risk": cash_risk,
+        "cash_risk_source": preview.get("cash_risk_source"),
+        "realized_r": realized_r,
+        "approved_by_user": True,
+    }
+    conn.execute(
+        """UPDATE risk_plan_evidence
+           SET applied_json=?, status='applied', applied_at=CURRENT_TIMESTAMP
+           WHERE id=?""",
+        (json.dumps(applied), data.evidence_id),
+    )
+    conn.commit()
+
+    analysis = conn.execute(
+        "SELECT * FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    return {
+        "applied": True,
+        "analysis": row_to_dict(analysis),
+        "preview": preview,
+        "evidence_id": data.evidence_id,
+    }
+
+
+@app.get("/api/risk-plan-files/{filename:path}")
+def get_risk_plan_file(filename: str):
+    data, content_type = DIARY_STORAGE.read(filename)
+    return Response(content=data, media_type=content_type)
 
 
 @app.get("/api/trades/{trade_group:path}/analysis")
