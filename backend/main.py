@@ -1421,6 +1421,161 @@ def _net_profit_factor(trades):
     return round(win_pnl / loss_pnl, 2) if loss_pnl else None
 
 
+def _edge_min_sample(total_trades: int) -> int:
+    """Minimum sample before a context label is ranked as an edge/leak."""
+    if total_trades >= 20:
+        return 5
+    if total_trades >= 8:
+        return 3
+    if total_trades >= 3:
+        return 2
+    return 1
+
+
+def _edge_clean_label(value) -> str | None:
+    if value is None:
+        return None
+    label = str(value).strip()
+    if not label or label.upper() in {"NONE", "N/A"}:
+        return None
+    return label
+
+
+def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
+    """Recorded-context performance for strategy/source/setup/emotion.
+
+    Each trade contributes to at most one label per dimension. Structured fields
+    are authoritative; the matching manual/AI tag is only a fallback when the
+    structured value is absent. Emotion is recorded-only and is never inferred.
+    """
+    eligible_trades = [t for t in trades if t.get("net_pnl") is not None]
+    groups = {str(t.get("trade_group") or "") for t in eligible_trades if t.get("trade_group")}
+    analysis_by_group: dict[str, dict] = {}
+    if groups:
+        for row in conn.execute(
+            "SELECT trade_group, strategy, idea_source, emotional_state, r_multiple FROM trade_analysis"
+        ).fetchall():
+            data = row_to_dict(row)
+            group = str(data.get("trade_group") or "")
+            if group in groups:
+                analysis_by_group[group] = data
+
+    fallback_tags: dict[str, dict[str, str]] = {}
+    if groups:
+        tag_rows = conn.execute(
+            """SELECT trade_group, tag_type, tag_value, source, id
+               FROM trade_tags
+               WHERE lower(tag_type) IN ('strategy','source','setup','emotion')
+               ORDER BY CASE WHEN source='manual' THEN 0 ELSE 1 END, id"""
+        ).fetchall()
+        for row in tag_rows:
+            data = row_to_dict(row)
+            group = str(data.get("trade_group") or "")
+            if group not in groups:
+                continue
+            tag_type = str(data.get("tag_type") or "").lower()
+            label = _edge_clean_label(data.get("tag_value"))
+            if not label:
+                continue
+            fallback_tags.setdefault(group, {}).setdefault(tag_type, label)
+
+    specs = {
+        "strategy": ("strategy", "strategy"),
+        "source": ("idea_source", "source"),
+        "setup": ("setup", "setup"),
+        "emotion": ("emotional_state", "emotion"),
+    }
+    total = len(eligible_trades)
+    min_sample = _edge_min_sample(total)
+    result = {}
+
+    for dimension, (structured_field, tag_type) in specs.items():
+        buckets: dict[str, list[dict]] = {}
+        labeled_trade_count = 0
+
+        for trade in eligible_trades:
+            group = str(trade.get("trade_group") or "")
+            analysis = analysis_by_group.get(group, {})
+            if dimension == "setup":
+                label = _edge_clean_label(trade.get(structured_field))
+            else:
+                label = _edge_clean_label(analysis.get(structured_field))
+            if not label:
+                label = _edge_clean_label(fallback_tags.get(group, {}).get(tag_type))
+            if not label:
+                continue
+
+            labeled_trade_count += 1
+            buckets.setdefault(label, []).append(trade)
+
+        rows = []
+        for label, sample in buckets.items():
+            count = len(sample)
+            pnls = [float(t.get("net_pnl") or 0) for t in sample]
+            wins = sum(1 for pnl in pnls if pnl > 0)
+            losses = sum(1 for pnl in pnls if pnl < 0)
+            avg_r_values = []
+            for trade in sample:
+                analysis = analysis_by_group.get(str(trade.get("trade_group") or ""), {})
+                value = analysis.get("r_multiple")
+                if value is not None:
+                    avg_r_values.append(float(value))
+
+            row = {
+                "label": label,
+                dimension: label,
+                "count": count,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": round(wins / count * 100, 1) if count else 0,
+                "net_pnl": round(sum(pnls), 2),
+                "expectancy": round(sum(pnls) / count, 2) if count else 0,
+                "profit_factor": _net_profit_factor(sample),
+                "avg_pl_pct": _avg_trade_pl_percent(sample),
+                "avg_r": round(sum(avg_r_values) / len(avg_r_values), 2) if avg_r_values else None,
+                "sample_qualified": count >= min_sample,
+            }
+            rows.append(row)
+
+        rows.sort(
+            key=lambda r: (
+                0 if r["sample_qualified"] else 1,
+                -float(r["win_rate"]),
+                -int(r["count"]),
+                str(r["label"]).lower(),
+            )
+        )
+        qualified = [r for r in rows if r["sample_qualified"]]
+        best_win_rate = max(
+            qualified,
+            key=lambda r: (float(r["win_rate"]), float(r["expectancy"]), int(r["count"])),
+            default=None,
+        )
+        strongest = max(
+            qualified,
+            key=lambda r: (float(r["expectancy"]), float(r["net_pnl"]), float(r["win_rate"])),
+            default=None,
+        )
+        weakest = min(
+            qualified,
+            key=lambda r: (float(r["expectancy"]), float(r["net_pnl"]), float(r["win_rate"])),
+            default=None,
+        )
+
+        result[dimension] = {
+            "rows": rows,
+            "coverage_count": labeled_trade_count,
+            "coverage_pct": round(labeled_trade_count / total * 100, 1) if total else 0,
+            "total_trades": total,
+            "min_sample": min_sample,
+            "best_win_rate": dict(best_win_rate) if best_win_rate else None,
+            "strongest": dict(strongest) if strongest else None,
+            "weakest": dict(weakest) if weakest else None,
+        }
+
+    return result
+
+
 @app.get("/api/kpis")
 def get_kpis(
     account_id: int | None = Query(None),
@@ -1532,56 +1687,13 @@ def get_kpis(
         if (t.get('net_pnl') or 0) > 0:
             by_instrument[inst]['wins'] += 1
 
-    # By strategy (join with trade_analysis)
-    # Strategy breakdown = playbook setup tag first, diary strategy as fallback.
-    # The label is resolved in an inner query so GROUP BY cannot bind to the
-    # underlying ta.strategy column instead of the resolved alias.
-    strategy_sql = """
-        SELECT label as strategy,
-               COUNT(*) as count,
-               SUM(net_pnl) as total_pnl,
-               SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) as wins,
-               AVG(r_multiple) as avg_r
-        FROM (
-            SELECT COALESCE(
-                       CASE WHEN t.setup IS NOT NULL AND t.setup <> 'NONE'
-                            THEN t.setup END,
-                       ta.strategy
-                   ) as label,
-                   t.net_pnl as net_pnl,
-                   ta.r_multiple as r_multiple,
-                   t.account_id as account_id,
-                   t.date as trade_date
-            FROM trades t
-            LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
-            WHERE t.net_pnl IS NOT NULL AND t.net_pnl != 0
-        ) sub
-        WHERE label IS NOT NULL
-    """
-    strat_params = []
-    if account_id is not None:
-        strategy_sql += " AND account_id = ?"
-        strat_params.append(account_id)
-    if date_from:
-        strategy_sql += " AND trade_date >= ?"
-        strat_params.append(date_from)
-    if date_to:
-        strategy_sql += " AND trade_date <= ?"
-        strat_params.append(date_to)
-    strategy_sql += " GROUP BY label ORDER BY total_pnl DESC"
-
-    strat_rows = conn.execute(strategy_sql, strat_params).fetchall()
-    by_strategy = []
-    for r in strat_rows:
-        r = dict(r)
-        count = r['count']
-        by_strategy.append({
-            "strategy": r['strategy'],
-            "net_pnl": round(r['total_pnl'] or 0, 2),
-            "win_rate": round(r['wins'] / count * 100, 1) if count else 0,
-            "count": count,
-            "avg_r": round(r['avg_r'] or 0, 2),
-        })
+    # Recorded context edges. Keep strategy, source, setup and emotion
+    # separate so the journal never conflates a playbook setup with a strategy.
+    edge_dimensions = _context_edge_breakdowns(conn, trades)
+    by_strategy = edge_dimensions["strategy"]["rows"]
+    by_source = edge_dimensions["source"]["rows"]
+    by_setup = edge_dimensions["setup"]["rows"]
+    by_emotion = edge_dimensions["emotion"]["rows"]
 
     return {
         "total_net_pnl": round(total_net_pnl, 2),
@@ -1601,6 +1713,10 @@ def get_kpis(
         "daily_pnl": daily_pnl,
         "by_instrument": by_instrument,
         "by_strategy": by_strategy,
+        "by_source": by_source,
+        "by_setup": by_setup,
+        "by_emotion": by_emotion,
+        "edge_dimensions": edge_dimensions,
         "expectancy": expectancy,
         "avg_pl_pct": avg_pl_pct,
         "avg_r": avg_r,
