@@ -132,7 +132,9 @@ def _fresh_client(monkeypatch, tmp_path):
 
 def test_authoritative_reconcile_rebuilds_imported_trade_without_duplicates(monkeypatch, tmp_path):
     for client, main in _fresh_client(monkeypatch, tmp_path):
-        conn = main.get_db()
+        db_path = tmp_path / "journal.db"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         conn.execute("INSERT INTO accounts (id, name, type) VALUES (1, 'Day', 'day_trading')")
         old_execs = [
             {"date": "2026-09-25", "time": "09:47:31", "action": "BOT", "qty": 5, "price": 0.67, "commission": 2.56},
