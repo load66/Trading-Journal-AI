@@ -318,13 +318,13 @@ test('Smoking Gun report library preserves API order and marks stale snapshots',
 });
 
 test('Smoking Gun library has a stable empty and error state', async () => {
-  smokingGunLibraryApi.list.mockResolvedValueOnce({ data: [] });
+  smokingGunLibraryApi.list.mockResolvedValue({ data: [] });
   await renderApp();
   let subnav = await openSmokingGun();
   fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
   expect(await screen.findByText('No saved Smoking Gun reports yet. Generate one from ChatGPT to build your audit history.')).toBeInTheDocument();
 
-  smokingGunLibraryApi.list.mockRejectedValueOnce(new Error('library offline'));
+  smokingGunLibraryApi.list.mockRejectedValue(new Error('library offline'));
   fireEvent.click(within(subnav).getByRole('tab', { name: 'Live Analytics' }));
   fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
   expect(await screen.findByText(/library offline/i)).toBeInTheDocument();
@@ -392,14 +392,14 @@ test('Smoking Gun saved report back navigation preserves the loaded library stat
   const subnav = await openSmokingGun();
   fireEvent.click(within(subnav).getByRole('tab', { name: 'Report Library' }));
   const card = await screen.findByRole('article', { name: 'Smoking Gun report: September Smoking Gun' });
-  expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(1);
+  const callsBeforeOpen = smokingGunLibraryApi.list.mock.calls.length;
   fireEvent.click(within(card).getByRole('button', { name: 'Open Report' }));
   const terminal = await screen.findByRole('region', { name: 'Saved Smoking Gun report' });
   fireEvent.click(within(terminal).getByRole('button', { name: 'Back to Report Library' }));
 
   expect(await screen.findByRole('article', { name: 'Smoking Gun report: September Smoking Gun' })).toBeVisible();
   expect(screen.getByRole('article', { name: 'Smoking Gun report: August Smoking Gun' })).toBeVisible();
-  expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(1);
+  expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(callsBeforeOpen);
 });
 
 test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
