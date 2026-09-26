@@ -128,12 +128,13 @@ function TickerTable({ rows }) {
   return (
     <div className="scroll-x">
       <table style={{ minWidth: 760 }}>
-        <thead><tr><th>Ticker</th><th>Status</th><th className="num">Trades</th><th className="num">P&L</th><th className="num">Win %</th><th className="num">$/trade</th></tr></thead>
+        <thead><tr><th>Ticker</th><th>Status</th><th>Sample</th><th className="num">Trades</th><th className="num">P&L</th><th className="num">Win %</th><th className="num">$/trade</th></tr></thead>
         <tbody>
           {(rows || []).map(r => (
             <tr key={r.ticker}>
               <td style={{ fontWeight: 700 }}>{r.ticker}</td>
               <td><span className={`chip ${r.total_pnl >= 0 ? 'pos' : 'neg'}`}>{r.label}</span></td>
+              <td><span className="v3-thin">{r.sample_quality === 'thin' ? 'thin' : 'established'}</span></td>
               <td className="num">{r.trade_count}</td>
               <td className={`num ${tone(r.total_pnl)}`}>{signed$(r.total_pnl)}</td>
               <td className="num">{r.win_rate}%</td>
@@ -151,7 +152,7 @@ function FlawTable({ flaws }) {
   return (
     <div className="scroll-x">
       <table style={{ minWidth: 700 }}>
-        <thead><tr><th>Priority</th><th>Behavior</th><th className="num">Trades</th><th className="num">Observed P&L</th><th className="num">Dollar impact</th></tr></thead>
+        <thead><tr><th>Priority</th><th>Behavior</th><th className="num">Trades</th><th className="num">Observed P&L</th><th className="num">Dollar impact</th><th className="num">P&L if removed</th></tr></thead>
         <tbody>
           {flaws.map((r, i) => (
             <tr key={r.name}>
@@ -160,6 +161,7 @@ function FlawTable({ flaws }) {
               <td className="num">{r.trade_count}</td>
               <td className="num neg">{fmt$(r.pnl)}</td>
               <td className="num neg" style={{ fontWeight: 700 }}>{fmt$(r.dollar_impact)}</td>
+              <td className={`num ${tone(r.pnl_if_eliminated)}`} style={{ fontWeight: 700 }}>{signed$(r.pnl_if_eliminated)}</td>
             </tr>
           ))}
         </tbody>
@@ -245,8 +247,8 @@ function BehaviorEvidence({ behavior, time }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }}>
         {[
           ['Rapid re-entry ≤30 sec', `${chase.trade_count || 0} trades · ${signed$(chase.total_pnl)}`],
-          ['First-3 avg size', tilt.first3_avg_size == null ? 'Insufficient evidence' : String(tilt.first3_avg_size)],
-          ['Post-loss avg size', tilt.post_threshold_avg_size == null ? 'Insufficient evidence' : String(tilt.post_threshold_avg_size)],
+          ['First-3 avg size', tilt.first3_avg_size == null ? 'Insufficient evidence' : `${tilt.first3_avg_size}× typical`],
+          ['Post-loss avg size', tilt.post_threshold_avg_size == null ? 'Insufficient evidence' : `${tilt.post_threshold_avg_size}× typical`],
           ['Post-loss-threshold P&L', signed$(tilt.post_threshold_pnl)],
           ['Averaging-down P&L', signed$(avgd.averaged_down?.total_pnl)],
           ['Clean-entry P&L', signed$(avgd.clean_entries?.total_pnl)],
@@ -424,11 +426,11 @@ export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
         </Card>
       </div>
 
-      <Card title="5. Ticker ranking" sub="EDGE / MARGINAL / LEAK / BLEEDING / HEMORRHAGE is generated from actual P&L contribution and win rate.">
+      <Card title="5. Ticker ranking" sub="EDGE requires positive P&L, at least 55% wins, and 5+ completed trades. Thin positive samples stay MARGINAL.">
         <TickerTable rows={data.ticker_ranking} />
       </Card>
 
-      <Card title="6. Behavioral flaws ranked by dollar impact" sub="Counterfactual impact is the negative P&L attributable to the detected behavior cohort; overlapping behaviors can overlap in dollars.">
+      <Card title="6. Behavioral flaws ranked by dollar impact" sub="Each P&L-if-removed scenario is independent. Behavior cohorts can overlap, so dollar impacts must not be added together.">
         <FlawTable flaws={data.behavior?.ranked_flaws} />
       </Card>
 
@@ -436,7 +438,7 @@ export default function SmokingGunReport({ accountId, dateFrom, dateTo }) {
         <Card title="7. Time of day" sub="30-minute entry blocks.">
           <PnlBarChart rows={data.time_analysis?.half_hour_blocks} />
         </Card>
-        <Card title="8. Position-size cross-check" sub="Median size splits small vs big; long hold is 5+ minutes.">
+        <Card title="8. Position-size cross-check" sub="Small/big is relative to the median inside each instrument family, so option contracts are never compared directly with stock dollars.">
           <div style={{ display: 'grid', gap: 12 }}>
             {[
               ['Small size + long hold', data.position_size?.cross_reference?.small_size_long_hold],
