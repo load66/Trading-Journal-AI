@@ -35,57 +35,14 @@ def test_sqlite_mode_keeps_named_rows(tmp_path):
     conn.close()
 
 
-def test_turso_mode_requires_url_and_token():
-    with pytest.raises(ConfigError, match='TURSO_DATABASE_URL'):
-        settings(DATABASE_MODE='turso', TURSO_DATABASE_URL='', TURSO_AUTH_TOKEN='token')
-    with pytest.raises(ConfigError, match='TURSO_AUTH_TOKEN'):
-        settings(DATABASE_MODE='turso', TURSO_DATABASE_URL='https://db.turso.io', TURSO_AUTH_TOKEN='')
+def test_postgres_mode_requires_database_url():
+    with pytest.raises(ConfigError, match='SUPABASE_DB_URL'):
+        settings(DATABASE_MODE='postgres', SUPABASE_DB_URL='')
 
 
-def test_turso_mode_uses_serverless_driver(monkeypatch):
-    calls = {}
-
-    class FakeConnection:
-        def execute(self, sql, params=()):
-            return FakeCursor()
-
-        def cursor(self):
-            return FakeCursor()
-
-        def commit(self):
-            pass
-
-        def rollback(self):
-            pass
-
-        def close(self):
-            pass
-
-    class FakeCursor:
-        description = [('id', None, None, None, None, None, None)]
-        lastrowid = 1
-        rowcount = 1
-
-        def fetchone(self):
-            return (1,)
-
-        def fetchall(self):
-            return [(1,)]
-
-    class FakeTurso:
-        @staticmethod
-        def connect(url, auth_token=None):
-            calls['args'] = (url, auth_token)
-            return FakeConnection()
-
-    monkeypatch.setitem(sys.modules, 'turso_serverless', FakeTurso)
-    conn = database.get_db(settings(
-        DATABASE_MODE='turso',
-        TURSO_DATABASE_URL='https://db.turso.io',
-        TURSO_AUTH_TOKEN='secret',
-    ))
-    assert calls['args'] == ('https://db.turso.io', 'secret')
-    assert conn.execute('SELECT 1').fetchone()[0] == 1
+def test_turso_mode_is_no_longer_supported():
+    with pytest.raises(ConfigError, match='DATABASE_MODE'):
+        settings(DATABASE_MODE='turso', TURSO_DATABASE_URL='https://db.turso.io', TURSO_AUTH_TOKEN='secret')
 
 
 def test_remote_rows_support_name_index_and_dict_conversion():
