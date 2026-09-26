@@ -3,11 +3,21 @@ import {
   executionTimeETMinutes,
   formatExecutionTimeET,
 } from './TradeDetail';
+import { executionToChartTs } from '../tradeTime';
 
 describe('TradeDetail Eastern Time normalization', () => {
   test('converts Schwab Central execution time to Eastern time', () => {
     expect(formatExecutionTimeET('2026-09-25', '09:22:00')).toBe('10:22 ET');
     expect(executionTimeETMinutes('2026-09-25', '09:22:00')).toBe(10 * 60 + 22);
+  });
+
+  test('plots broker fills on the same ET wall-clock timeline as market bars', () => {
+    const expected = Math.floor(Date.UTC(2026, 8, 25, 10, 20, 0) / 1000);
+    expect(executionToChartTs('2026-09-25', '09:22:33', 5)).toBe(expected);
+  });
+
+  test('keeps Central-to-Eastern conversion DST-aware in winter', () => {
+    expect(formatExecutionTimeET('2026-12-15', '09:22:00')).toBe('10:22 ET');
   });
 
   test('What If offsets are anchored to ET exit time', () => {
