@@ -355,6 +355,8 @@ def analyze_context(
     qqq_bars: list[dict],
     market_calendar: dict | None = None,
     underlying_feed: str | None = None,
+    spy_feed: str | None = None,
+    qqq_feed: str | None = None,
 ) -> dict:
     entry_dt = entry_datetime(trade)
     if entry_dt is None:
@@ -557,7 +559,12 @@ def analyze_context(
             "Entry occurred during the 9:30–9:40 ET scan-only window.",
         )
 
-    if ema_distance_pct is not None and ema_distance_pct > 1.0:
+    ema_status = _level_status(
+        underlying_feed,
+        True,
+        entry_dt - timedelta(minutes=1),
+    )
+    if _status_is_verified(ema_status) and ema_distance_pct is not None and ema_distance_pct > 1.0:
         add_rule_tag(
             "mistake", "Airgapped from 8 EMA",
             f"Underlying was {ema_distance_pct:.2f}% from the last completed 10-minute 8 EMA at entry.",
@@ -602,17 +609,36 @@ def analyze_context(
         data_warnings.append("No underlying 1-minute bar was available at or before the entry time.")
     if ema8 is None:
         data_warnings.append("10-minute 8 EMA could not be calculated.")
+    elif not _status_is_verified(ema_status):
+        data_warnings.append(
+            f"10-minute 8 EMA is {ema_status}; EMA-dependent automatic mistake tags are disabled."
+        )
 
     spy = _session_vwap_snapshot(spy_bars, entry_dt)
     qqq = _session_vwap_snapshot(qqq_bars, entry_dt)
-    market_sign = _market_sign_status(direction, spy, qqq)
+    observed_market_sign = _market_sign_status(direction, spy, qqq)
+    spy_status = _level_status(spy_feed, True, entry_dt - timedelta(minutes=1))
+    qqq_status = _level_status(qqq_feed, True, entry_dt - timedelta(minutes=1))
+    market_sign_verified = (
+        _status_is_verified(spy_status)
+        and _status_is_verified(qqq_status)
+        and spy["vwap"] is not None
+        and qqq["vwap"] is not None
+    )
+    market_sign = observed_market_sign if market_sign_verified else "unverified"
+
     if spy["vwap"] is None or qqq["vwap"] is None:
         data_warnings.append("SPY/QQQ VWAP market-confirmation evidence is incomplete.")
+    elif not market_sign_verified:
+        data_warnings.append(
+            f"SPY/QQQ Market Sign is unverified (SPY {spy_status}, QQQ {qqq_status}); "
+            "it cannot create an automatic No Market Sign tag."
+        )
 
-    if market_sign == "failed":
+    if market_sign_verified and market_sign == "failed":
         add_rule_tag(
             "mistake", "No Market Sign",
-            "Both SPY and QQQ were on the wrong side of regular-session VWAP for the trade direction before entry.",
+            "Both verified SPY and QQQ VWAP signals opposed the trade direction before entry.",
         )
 
     evidence = {
@@ -640,12 +666,17 @@ def analyze_context(
         "underlying_price_last_completed_1m": underlying_price,
         "ema8_10m_last_completed": ema8,
         "ema_distance_pct": ema_distance_pct,
+        "ema_integrity_status": ema_status,
         "nearest_broken_level": nearest_broken_level,
         "spy": spy,
         "qqq": qqq,
         "market_sign": {
             "basis": "SPY/QQQ regular-session HLC3 VWAP",
             "status": market_sign,
+            "observed_status": observed_market_sign,
+            "integrity_status": "VERIFIED" if market_sign_verified else "UNVERIFIED",
+            "spy_integrity_status": spy_status,
+            "qqq_integrity_status": qqq_status,
             "rule": (
                 "Bullish: both SPY and QQQ above VWAP = confirmed; both below = failed; otherwise mixed. "
                 "Bearish: both below VWAP = confirmed; both above = failed; otherwise mixed."
@@ -670,11 +701,16 @@ async def _fetch_market_calendar(entry_dt: datetime) -> dict:
     key = (os.getenv("APCA_API_KEY_ID") or "").strip()
     secret = (os.getenv("APCA_API_SECRET_KEY") or "").strip()
     if not key or not secret or key == "your_alpaca_api_key_here":
-        return {"verified": False, "current": None, "previous": None, "error": "Alpaca calendar credentials unavailable."}
+        return {
+            "verified": False,
+            "current": None,
+            "previous": None,
+            "source": None,
+            "error": "Alpaca calendar credentials unavailable.",
+        }
 
     start_day = entry_dt.date() - timedelta(days=14)
     end_day = entry_dt.date()
-    url = f"{ALPACA_TRADING_BASE_URL}/v2/calendar"
     headers = {
         "APCA-API-KEY-ID": key,
         "APCA-API-SECRET-KEY": secret,
@@ -683,19 +719,46 @@ async def _fetch_market_calendar(entry_dt: datetime) -> dict:
         "start": start_day.isoformat(),
         "end": end_day.isoformat(),
     }
+    bases = []
+    for base in (
+        ALPACA_TRADING_BASE_URL,
+        "https://paper-api.alpaca.markets",
+        "https://api.alpaca.markets",
+    ):
+        base = base.rstrip("/")
+        if base not in bases:
+            bases.append(base)
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(url, params=params, headers=headers)
-            response.raise_for_status()
-            rows = response.json()
-        if not isinstance(rows, list):
-            return {"verified": False, "current": None, "previous": None, "error": "Unexpected calendar response."}
-        context = _calendar_context(rows, entry_dt.date())
-        context["error"] = None if context["verified"] else "Trade day or previous trading session missing from market calendar."
-        return context
-    except Exception as exc:
-        return {"verified": False, "current": None, "previous": None, "error": str(exc)}
+    errors = []
+    for base in bases:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(f"{base}/v2/calendar", params=params, headers=headers)
+                response.raise_for_status()
+                rows = response.json()
+            if not isinstance(rows, list):
+                errors.append(f"{base}: unexpected calendar response")
+                continue
+            context = _calendar_context(rows, entry_dt.date())
+            context["source"] = base
+            context["error"] = (
+                None
+                if context["verified"]
+                else "Trade day or previous trading session missing from market calendar."
+            )
+            if context["verified"]:
+                return context
+            errors.append(f"{base}: incomplete calendar context")
+        except Exception as exc:
+            errors.append(f"{base}: {exc}")
+
+    return {
+        "verified": False,
+        "current": None,
+        "previous": None,
+        "source": None,
+        "error": "; ".join(errors[-3:]),
+    }
 
 
 def _historical_feed_order() -> list[str]:
@@ -1091,6 +1154,8 @@ async def build_le_review(trade: dict) -> dict:
         qqq_bars,
         market_calendar=market_calendar,
         underlying_feed=underlying_feed,
+        spy_feed=spy_feed,
+        qqq_feed=qqq_feed,
     )
     if context.get("available"):
         context["evidence"]["market_data_feed"] = {
@@ -1112,31 +1177,34 @@ async def build_le_review(trade: dict) -> dict:
             )
 
         ev = context["evidence"]
-        required = [
-            ev.get("levels", {}).get("PDH"),
-            ev.get("levels", {}).get("PDL"),
-            ev.get("levels", {}).get("PMH"),
-            ev.get("levels", {}).get("PML"),
-            ev.get("underlying_price_last_completed_1m"),
-            ev.get("ema8_10m_last_completed"),
-            ev.get("spy", {}).get("vwap"),
-            ev.get("qqq", {}).get("vwap"),
+        level_meta = ev.get("level_meta") or {}
+        verified_flags = [
+            _status_is_verified((level_meta.get(name) or {}).get("status"))
+            for name in ("PDH", "PDL", "PMH", "PML")
         ]
-        present = sum(value is not None for value in required)
-        completeness_pct = round(present / len(required) * 100)
-        if completeness_pct >= 90 and feeds == {"sip"} and not context["data_warnings"]:
+        verified_flags.extend([
+            _status_is_verified(ev.get("ema_integrity_status")),
+            (ev.get("market_sign") or {}).get("integrity_status") == "VERIFIED",
+            ev.get("underlying_price_last_completed_1m") is not None,
+        ])
+        verified_count = sum(bool(flag) for flag in verified_flags)
+        completeness_pct = round(verified_count / len(verified_flags) * 100)
+
+        if completeness_pct == 100 and feeds == {"sip"} and ev.get("market_calendar_verified"):
             quality = "High"
-            quality_reason = "Core LE evidence is complete and based on consolidated SIP market data."
+            quality_reason = (
+                "All core LE evidence is verified from consolidated SIP data with official session boundaries."
+            )
         elif completeness_pct >= 75:
             quality = "Moderate"
             quality_reason = (
-                "Core LE evidence is mostly complete, but feed quality or missing fields limit certainty."
+                "Most core LE evidence is verified, but one or more inputs are limited, delayed, or unavailable."
             )
         else:
             quality = "Low"
-            quality_reason = "Material LE evidence is missing; classifications should be treated cautiously."
-        if any(feed != "sip" for feed in feeds) and quality == "High":
-            quality = "Moderate"
+            quality_reason = (
+                "Material LE evidence is not verified; automatic conclusions are intentionally restricted."
+            )
         ev["evidence_quality"] = {
             "level": quality,
             "completeness_pct": completeness_pct,
