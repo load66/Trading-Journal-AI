@@ -86,7 +86,7 @@ def averaging_down(t: dict) -> bool:
     return False
 
 
-def detect_daily_flags(trades: list[dict]) -> list[dict]:
+def detect_daily_flags(trades: list[dict], historical_daily_counts: list[int] | None = None) -> list[dict]:
     rows = [enrich_trade(t) for t in trades]
     rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
     flags = []
@@ -179,6 +179,22 @@ def detect_daily_flags(trades: list[dict]) -> list[dict]:
             )
         streak = streak + 1 if r.get("pnl", 0) < 0 else 0
 
+    # Personalized high-trade-count day: only activate with at least 10 prior
+    # sessions so the threshold is based on the trader's own history.
+    counts = sorted(int(x) for x in (historical_daily_counts or []) if int(x) >= 0)
+    if len(counts) >= 10 and rows:
+        idx = max(0, min(len(counts) - 1, int(round(0.90 * (len(counts) - 1)))))
+        p90 = counts[idx]
+        if len(rows) > p90:
+            add(
+                "high_trade_count",
+                "Trade count exceeded your historical 90th percentile",
+                f"{len(rows)} trades were taken; your prior-session 90th percentile is {p90}.",
+                None,
+                "medium",
+                {"trade_count": len(rows), "historical_p90": p90},
+            )
+
     seen = set()
     out = []
     for f in flags:
@@ -213,6 +229,19 @@ def deterministic_strengths(trades: list[dict], day_kpis: dict) -> list[dict]:
             "text": f"Average winner (USD {avg_win:,.2f}) was {ratio:.2f}× the average loss (USD {avg_loss:,.2f}).",
             "evidence": "VERIFIED",
         })
+    effs = [
+        float(t.get("exit_efficiency"))
+        for t in trades
+        if t.get("exit_efficiency") is not None and float(t.get("net_pnl") or 0) > 0
+    ]
+    if effs:
+        avg_eff = sum(effs) / len(effs)
+        if avg_eff >= 50:
+            observations.append({
+                "text": f"Average winner directional exit efficiency was {avg_eff:.0f}%.",
+                "evidence": "VERIFIED",
+            })
+
     if rows:
         best = max(rows, key=lambda r: r.get("pnl", 0))
         if best.get("pnl", 0) > 0:
