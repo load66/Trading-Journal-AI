@@ -1,4 +1,5 @@
 import anthropic
+import httpx
 import base64
 import json
 import os
@@ -9,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MODEL = "claude-opus-5"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 DIARY_SYSTEM_PROMPT = """You are an expert trading coach analyzing a trader's handwritten or typed diary entry.
 
@@ -787,28 +790,126 @@ Return ONLY valid JSON with this schema:
 }"""
 
 
-def generate_performance_diagnosis(performance_report: dict) -> dict:
-    """Interpret deterministic performance analytics without recalculating them."""
-    client = get_client()
+def _valid_api_key(name: str, placeholder: str | None = None) -> str | None:
+    value = (os.getenv(name) or "").strip()
+    if not value or (placeholder and value == placeholder):
+        return None
+    return value
+
+
+def performance_ai_is_configured() -> bool:
+    """True when at least one server-side provider can generate the report."""
+    return bool(
+        _valid_api_key("GROQ_API_KEY")
+        or _valid_api_key("ANTHROPIC_API_KEY", "your_anthropic_api_key_here")
+    )
+
+
+def _performance_prompt(performance_report: dict) -> str:
+    return (
+        "Analyze this deterministic trading-performance report. "
+        "Use the numbers exactly as supplied. Return only JSON.\n\n"
+        + json.dumps(performance_report, indent=2)
+    )
+
+
+def _strip_json_fence(raw: str) -> str:
+    raw = (raw or "").strip()
+    if raw.startswith("~~~"):
+        raw = re.sub(r"^~~~(?:json)?\\n?", "", raw)
+        raw = re.sub(r"\\n?~~~$", "", raw)
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\\n?", "", raw)
+        raw = re.sub(r"\\n?```$", "", raw)
+    return raw.strip()
+
+
+def _groq_performance_diagnosis(performance_report: dict, api_key: str) -> dict:
+    """Generate the Smoking Gun interpretation with Groq GPT-OSS.
+
+    Groq is used only for interpretation. All numeric facts are supplied by the
+    deterministic report engine and are explicitly locked by the system prompt.
+    """
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": SMOKING_GUN_SYSTEM_PROMPT},
+            {"role": "user", "content": _performance_prompt(performance_report)},
+        ],
+        "max_completion_tokens": 6000,
+        "reasoning_effort": "medium",
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1,
+    }
+    response = httpx.post(
+        GROQ_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=90.0,
+    )
+    response.raise_for_status()
+    body = response.json()
+    try:
+        raw = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("Groq returned an unexpected response shape.") from exc
+    return json.loads(_strip_json_fence(raw))
+
+
+def _anthropic_performance_diagnosis(performance_report: dict, api_key: str) -> dict:
+    """Optional paid fallback for the Smoking Gun interpretation."""
+    client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
         model=MODEL,
         max_tokens=6000,
         system=SMOKING_GUN_SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": (
-                "Analyze this deterministic trading-performance report. "
-                "Use the numbers exactly as supplied. Return only JSON.\n\n"
-                + json.dumps(performance_report, indent=2)
-            ),
-        }],
+        messages=[{"role": "user", "content": _performance_prompt(performance_report)}],
     )
     raise_if_truncated(response, "Smoking Gun diagnosis")
-    raw = response_text(response)
-    if raw.startswith("~~~"):
-        raw = re.sub(r"^~~~(?:json)?\n?", "", raw)
-        raw = re.sub(r"\n?~~~$", "", raw)
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
-    return json.loads(raw)
+    return json.loads(_strip_json_fence(response_text(response)))
+
+
+def generate_performance_diagnosis(performance_report: dict) -> dict:
+    """Interpret deterministic performance analytics with provider metadata.
+
+    Provider order is Groq first, then Anthropic only when it is also configured.
+    If Groq is rate-limited or unavailable and Anthropic is present, the user
+    still gets a diagnosis. No provider is allowed to recalculate source metrics.
+    """
+    groq_key = _valid_api_key("GROQ_API_KEY")
+    anthropic_key = _valid_api_key("ANTHROPIC_API_KEY", "your_anthropic_api_key_here")
+    errors = []
+
+    if groq_key:
+        try:
+            return {
+                "diagnosis": _groq_performance_diagnosis(performance_report, groq_key),
+                "provider": "groq",
+                "model": GROQ_MODEL,
+            }
+        except Exception as exc:
+            errors.append(f"Groq: {exc}")
+            if not anthropic_key:
+                raise RuntimeError(
+                    "Groq AI diagnosis failed. " + errors[-1]
+                ) from exc
+
+    if anthropic_key:
+        try:
+            return {
+                "diagnosis": _anthropic_performance_diagnosis(performance_report, anthropic_key),
+                "provider": "anthropic",
+                "model": MODEL,
+            }
+        except Exception as exc:
+            errors.append(f"Anthropic: {exc}")
+            raise RuntimeError("AI diagnosis failed. " + " | ".join(errors)) from exc
+
+    raise ValueError(
+        "AI diagnosis is not configured. Add GROQ_API_KEY to the server environment "
+        "(recommended), or ANTHROPIC_API_KEY as an optional fallback."
+    )
+
