@@ -114,3 +114,70 @@ def test_generic_template_reimport_keeps_iso_named_trades(client):
     trades = stored(client)
     assert set(trades) == {"2026-09-15_TSLA_STOCK_1", "2026-09-15_TSLA_STOCK_2"}
     assert trades["2026-09-15_TSLA_STOCK_1"] == (-403.0, 2)
+
+
+def test_reimport_preserves_legitimate_identical_split_fills(client):
+    """Identical minute/price/qty fills are a multiset, not one duplicate row."""
+    conn = sqlite3.connect(client.db)
+    if not conn.execute("SELECT 1 FROM accounts WHERE id=1").fetchone():
+        conn.execute("INSERT INTO accounts (id, name, type) VALUES (1, 'Day', 'day_trading')")
+        conn.commit()
+
+    rows = [
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
+    ]
+    payload = GENERIC + "\n".join(rows) + "\n"
+
+    first = client.post(
+        "/api/import-csv",
+        data={"account_id": "1", "broker": "generic"},
+        files={"file": ("fills.csv", payload.encode(), "text/csv")},
+    )
+    assert first.status_code == 200, first.text
+
+    trades = stored(client)
+    assert trades["2026-09-25_QCOM_STOCK_1"] == (10.0, 4)
+
+    before = stored(client)
+    second = client.post(
+        "/api/import-csv",
+        data={"account_id": "1", "broker": "generic"},
+        files={"file": ("fills.csv", payload.encode(), "text/csv")},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["imported"] == 0
+    assert second.json()["skipped"] == 4
+    assert stored(client) == before
+
+
+def test_incremental_reimport_adds_only_excess_identical_fill_occurrences(client):
+    """A newer export may legitimately contain one more identical split fill."""
+    conn = sqlite3.connect(client.db)
+    if not conn.execute("SELECT 1 FROM accounts WHERE id=1").fetchone():
+        conn.execute("INSERT INTO accounts (id, name, type) VALUES (1, 'Day', 'day_trading')")
+        conn.commit()
+
+    first_rows = [
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
+    ]
+    full_rows = first_rows + [
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
+    ]
+
+    for rows in (first_rows, full_rows):
+        response = client.post(
+            "/api/import-csv",
+            data={"account_id": "1", "broker": "generic"},
+            files={"file": ("fills.csv", (GENERIC + "\n".join(rows) + "\n").encode(), "text/csv")},
+        )
+        assert response.status_code == 200, response.text
+
+    trades = stored(client)
+    assert trades["2026-09-25_QCOM_STOCK_1"] == (15.0, 6)
