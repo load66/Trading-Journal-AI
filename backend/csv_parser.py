@@ -753,10 +753,11 @@ def load_open_positions_from_db(conn, account_id: int) -> list[dict]:
 def _rebuild_fill_from_db_exec(e: dict, trade_meta: dict) -> dict:
     """Reconstruct a full fill dict from a stored execution + trade metadata."""
     instr = trade_meta['instrument_type']
-    multiplier = 100 if instr == 'OPTION' else 1
     price = e.get('price', 0.0)
     qty = e.get('qty', 0)
-    amount = price * qty * multiplier
+    # Return raw price × quantity. overlapping_db_fills applies the instrument
+    # point value exactly once for stocks, options, and futures.
+    amount = price * qty
     if e.get('action') == 'BOT':
         amount = -amount
     return {
