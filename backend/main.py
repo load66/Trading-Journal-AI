@@ -13,6 +13,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+from config import Settings
+from auth import install_auth_middleware
+
 import httpx
 
 from database import init_db, get_db, row_to_dict
@@ -32,7 +35,8 @@ from library import router as library_router, init_library_tables, apply_aliases
 
 load_dotenv()
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+SETTINGS = Settings.from_env()
+UPLOAD_DIR = SETTINGS.upload_dir
 
 
 @asynccontextmanager
@@ -52,7 +56,7 @@ app = FastAPI(title="Trading Journal AI API", lifespan=lifespan)
 # This runs on your own machine, so any localhost port is accepted: when 3010 is
 # busy the dev server offers 3011, and the app should still work. FRONTEND_ORIGINS
 # (comma separated) adds non-localhost origins, e.g. another machine on your LAN.
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "").split(",") if o.strip()]
+ALLOWED_ORIGINS = list(SETTINGS.frontend_origins)
 LOCALHOST_ANY_PORT = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 
 app.add_middleware(
@@ -63,6 +67,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+install_auth_middleware(app, SETTINGS)
 
 # Serve uploaded diary screenshots (create the folder on first run)
 Path(UPLOAD_DIR).mkdir(exist_ok=True)
