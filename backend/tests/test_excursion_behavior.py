@@ -115,3 +115,43 @@ def test_strengths_are_deterministic_numbers():
     assert "4.00" in text
     assert "4.00×" in text
     assert all(o["evidence"] == "VERIFIED" for o in obs)
+
+
+def test_stock_excursion_does_not_look_ahead_to_later_scale_in():
+    d = "2026-09-25"
+    trade = {
+        "trade_group": "scale",
+        "date": d,
+        "ticker": "SPY",
+        "instrument_type": "STOCK",
+        "side": "LONG",
+        "net_pnl": 10,
+        "executions": [
+            fill(d, "09:30:10", "BOT", 10, 100),
+            fill(d, "09:31:10", "BOT", 10, 80),
+            fill(d, "09:32:20", "SOLD", 20, 90),
+        ],
+    }
+    bars = [
+        {"t": "2026-09-25T13:30:00Z", "o": 100, "h": 105, "l": 99, "c": 100},
+        {"t": "2026-09-25T13:31:00Z", "o": 90, "h": 92, "l": 79, "c": 80},
+        {"t": "2026-09-25T13:32:00Z", "o": 88, "h": 91, "l": 87, "c": 90},
+    ]
+    result = calculate_trade_excursion(trade, bars)
+    assert result["entry_reference"] == 100
+    assert result["mfe_pct"] == 5.0
+    assert result["mae_pct"] == 21.0
+
+
+def test_high_trade_count_requires_personal_history():
+    rows = [
+        stock_trade(f"t{i}", 5, entry=f"10:{i:02d}:00", exit=f"10:{i:02d}:30", ticker=f"T{i}")
+        for i in range(12)
+    ]
+    no_history = detect_daily_flags(rows, [])
+    assert "high_trade_count" not in {f["code"] for f in no_history}
+
+    flags = detect_daily_flags(rows, [3, 4, 5, 4, 6, 5, 7, 4, 6, 5, 4, 5])
+    high = next(f for f in flags if f["code"] == "high_trade_count")
+    assert high["metric"]["trade_count"] == 12
+    assert high["evidence"] == "VERIFIED"
