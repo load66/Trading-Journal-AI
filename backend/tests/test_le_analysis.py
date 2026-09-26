@@ -11,7 +11,6 @@ from le_analysis import (
     _historical_feed_order,
     _history_window,
     _le_json_schema,
-    _market_sign_status,
     _session_vwap_snapshot,
     analyze_context,
     build_le_levels,
@@ -266,52 +265,15 @@ def test_vwap_snapshot_uses_only_completed_regular_session_bars():
     assert snap["position_vs_vwap"] == "above"
 
 
-def test_vwap_market_sign_confirmed_failed_and_mixed():
-    rising = minute_run(
-        (2026, 9, 25), 9, 30, 20,
-        lambda i: 100.0 + i * 0.1,
-    )
-    falling = minute_run(
-        (2026, 9, 25), 9, 30, 20,
-        lambda i: 102.0 - i * 0.1,
-    )
-    entry = datetime(2026, 9, 25, 9, 47, 4, tzinfo=ET)
-    above = _session_vwap_snapshot(rising, entry)
-    below = _session_vwap_snapshot(falling, entry)
+def test_market_sign_is_removed_from_le_review():
+    bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    review = review_context(base_trade("CALL"), bars)
+    names = tag_names(review)
 
-    assert _market_sign_status("bullish", above, above) == "confirmed"
-    assert _market_sign_status("bullish", below, below) == "failed"
-    assert _market_sign_status("bullish", above, below) == "mixed"
-    assert _market_sign_status("bearish", below, below) == "confirmed"
-    assert _market_sign_status("bearish", above, above) == "failed"
-
-
-def test_failed_vwap_market_sign_adds_deterministic_mistake_tag():
-    underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
-    falling = minute_run(
-        (2026, 9, 25), 9, 30, 20,
-        lambda i: 102.0 - i * 0.1,
-    )
-    review = review_context(base_trade("CALL"), underlying, falling, falling)
-
-    assert review["evidence"]["market_sign"]["status"] == "failed"
-    assert ("mistake", "No Market Sign") in tag_names(review)
-
-
-def test_mixed_vwap_market_sign_does_not_add_no_market_sign_tag():
-    underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
-    rising = minute_run(
-        (2026, 9, 25), 9, 30, 20,
-        lambda i: 100.0 + i * 0.1,
-    )
-    falling = minute_run(
-        (2026, 9, 25), 9, 30, 20,
-        lambda i: 102.0 - i * 0.1,
-    )
-    review = review_context(base_trade("CALL"), underlying, rising, falling)
-
-    assert review["evidence"]["market_sign"]["status"] == "mixed"
-    assert ("mistake", "No Market Sign") not in tag_names(review)
+    assert "market_sign" not in review["evidence"]
+    assert "spy" not in review["evidence"]
+    assert "qqq" not in review["evidence"]
+    assert ("mistake", "No Market Sign") not in names
 
 
 def test_outside_day_requires_both_directional_levels_before_entry():
