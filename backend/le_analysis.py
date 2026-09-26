@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v4_INTEGRITY"
+LE_RULESET_VERSION = "LE_2026_09_v4_1_LEVEL_AUDIT"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
@@ -348,6 +348,89 @@ def _status_is_verified(status: str | None) -> bool:
     return status in {"VERIFIED", "VERIFIED_HISTORICAL"}
 
 
+def _level_extreme_audit(
+    bars: list[dict],
+    level: float | None,
+    field: str,
+    kind: str,
+) -> dict:
+    """Explain exactly which one-minute bar established a session extreme.
+
+    A verified consolidated level can still differ from a venue-specific chart.
+    If one isolated minute establishes the extreme and the next distinct extreme
+    is materially different, flag it for manual chart review rather than letting
+    it silently drive deterministic LE tags.
+    """
+    if level is None or not bars:
+        return {
+            "source_bar_count": 0,
+            "source_times_et": [],
+            "source_bar": None,
+            "next_distinct_extreme": None,
+            "gap_to_next": None,
+            "gap_to_next_pct": None,
+            "isolated_extreme": False,
+            "review_required": False,
+        }
+
+    values: list[tuple[float, dict]] = []
+    for bar in bars:
+        try:
+            value = float(bar.get(field))
+        except (TypeError, ValueError):
+            continue
+        values.append((value, bar))
+
+    if not values:
+        return {
+            "source_bar_count": 0,
+            "source_times_et": [],
+            "source_bar": None,
+            "next_distinct_extreme": None,
+            "gap_to_next": None,
+            "gap_to_next_pct": None,
+            "isolated_extreme": False,
+            "review_required": False,
+        }
+
+    eps = 1e-8
+    source = [bar for value, bar in values if abs(value - level) <= eps]
+    distinct = sorted({round(value, 8) for value, _ in values})
+    if kind == "high":
+        second = distinct[-2] if len(distinct) >= 2 else None
+    else:
+        second = distinct[1] if len(distinct) >= 2 else None
+
+    gap = abs(level - second) if second is not None else None
+    gap_pct = (gap / abs(level) * 100) if gap is not None and level not in (0, None) else None
+    # 2.5 bps with a five-cent floor. This is only a review trigger, never a
+    # replacement value. It is intentionally conservative.
+    material_gap = max(0.05, abs(level) * 0.00025)
+    isolated = len(source) == 1 and gap is not None and gap >= material_gap
+
+    first = min(source, key=_bar_dt) if source else None
+    return {
+        "source_bar_count": len(source),
+        "source_times_et": [_bar_dt(bar).isoformat() for bar in sorted(source, key=_bar_dt)],
+        "source_bar": (
+            {
+                "time_et": _bar_dt(first).isoformat(),
+                "open": float(first.get("o") or 0),
+                "high": float(first.get("h") or 0),
+                "low": float(first.get("l") or 0),
+                "close": float(first.get("c") or 0),
+                "volume": float(first.get("v") or 0),
+            }
+            if first else None
+        ),
+        "next_distinct_extreme": second,
+        "gap_to_next": gap,
+        "gap_to_next_pct": gap_pct,
+        "isolated_extreme": isolated,
+        "review_required": isolated,
+    }
+
+
 def analyze_context(
     trade: dict,
     underlying_bars: list[dict],
@@ -443,6 +526,7 @@ def analyze_context(
             "session_date": previous_day.isoformat() if previous_day else None,
             "session_start_et": previous_open.isoformat() if previous_open else None,
             "session_end_et": previous_close.isoformat() if previous_close else None,
+            **_level_extreme_audit(previous_rth, pdh, "h", "high"),
         },
         "PDL": {
             "status": pd_status,
@@ -450,6 +534,7 @@ def analyze_context(
             "session_date": previous_day.isoformat() if previous_day else None,
             "session_start_et": previous_open.isoformat() if previous_open else None,
             "session_end_et": previous_close.isoformat() if previous_close else None,
+            **_level_extreme_audit(previous_rth, pdl, "l", "low"),
         },
         "PMH": {
             "status": pm_status,
@@ -457,6 +542,7 @@ def analyze_context(
             "session_date": trade_day.isoformat(),
             "session_start_et": premarket_start.isoformat(),
             "session_end_et": premarket_end.isoformat(),
+            **_level_extreme_audit(premarket, pmh, "h", "high"),
         },
         "PML": {
             "status": pm_status,
@@ -464,9 +550,18 @@ def analyze_context(
             "session_date": trade_day.isoformat(),
             "session_start_et": premarket_start.isoformat(),
             "session_end_et": premarket_end.isoformat(),
+            **_level_extreme_audit(premarket, pml, "l", "low"),
         },
     }
-    verified_level = {name: _status_is_verified(meta["status"]) for name, meta in level_meta.items()}
+    for meta in level_meta.values():
+        meta["trusted_for_rules"] = (
+            _status_is_verified(meta.get("status"))
+            and not bool(meta.get("review_required"))
+        )
+    verified_level = {
+        name: bool(meta.get("trusted_for_rules"))
+        for name, meta in level_meta.items()
+    }
 
     bars_10m = _aggregate_10m(underlying_bars)
     completed_before_entry = [b for b in bars_10m if b["end"] < entry_dt]
@@ -604,6 +699,19 @@ def analyze_context(
     elif not (verified_level["PMH"] and verified_level["PML"]):
         data_warnings.append(
             f"PMH/PML are {pm_status}; they are not eligible for automatic LE level classification."
+        )
+    for level_name, level_value in (("PDH", pdh), ("PDL", pdl), ("PMH", pmh), ("PML", pml)):
+        meta = level_meta.get(level_name) or {}
+        if not meta.get("review_required"):
+            continue
+        source_time = (meta.get("source_times_et") or [None])[0]
+        next_extreme = meta.get("next_distinct_extreme")
+        gap = meta.get("gap_to_next")
+        data_warnings.append(
+            f"{level_name} {level_value:.2f} is a verified SIP extreme but was set by one isolated "
+            f"1-minute bar{f' at {source_time}' if source_time else ''}. "
+            f"Next distinct extreme: {next_extreme:.2f}{f' (gap {gap:.2f})' if gap is not None else ''}. "
+            "This level is withheld from automatic LE level rules until chart-reviewed."
         )
     if underlying_price is None:
         data_warnings.append("No underlying 1-minute bar was available at or before the entry time.")
@@ -929,7 +1037,7 @@ Strategy rules:
 
 Tag rules:
 - The deterministic rule engine already handles Outside/Inside Day, level breaks, first-10m, airgapped >1%, no-level-break, chop-range, VWAP-based No Market Sign, and break-even. Do not repeat those.
-- Treat PDH/PDL/PMH/PML as usable only when the corresponding level_meta status is VERIFIED or VERIFIED_HISTORICAL.
+- Treat PDH/PDL/PMH/PML as usable only when the corresponding level_meta.trusted_for_rules is true. A VERIFIED level with review_required=true is not usable for AI classification.
 - Treat 10-minute 8 EMA evidence as usable only when ema_integrity_status is VERIFIED or VERIFIED_HISTORICAL.
 - Treat Market Sign as usable only when market_sign.integrity_status is VERIFIED. If status is unverified, do not infer confirmation from observed_status.
 - Market Sign is a custom trader rule supplied in objective evidence: bullish requires both SPY and QQQ above regular-session VWAP; bearish requires both below. Mixed is not a failed sign.
@@ -1092,11 +1200,23 @@ async def build_le_levels(trade: dict) -> dict:
     verified_levels = {
         name: value
         for name, value in levels.items()
-        if value is not None and _status_is_verified((level_meta.get(name) or {}).get("status"))
+        if (
+            value is not None
+            and bool((level_meta.get(name) or {}).get("trusted_for_rules"))
+        )
     }
     if not market_calendar.get("verified"):
         warnings.append(
             "Official market calendar could not be verified; unverified reference levels are withheld from the chart."
+        )
+    review_levels = [
+        name for name, meta in level_meta.items()
+        if meta.get("review_required")
+    ]
+    if review_levels:
+        warnings.append(
+            f"{', '.join(review_levels)} require chart review because an isolated SIP minute set the session extreme; "
+            "those lines are withheld from the chart overlay."
         )
 
     return {
@@ -1182,7 +1302,7 @@ async def build_le_review(trade: dict) -> dict:
         ev = context["evidence"]
         level_meta = ev.get("level_meta") or {}
         verified_flags = [
-            _status_is_verified((level_meta.get(name) or {}).get("status"))
+            bool((level_meta.get(name) or {}).get("trusted_for_rules"))
             for name in ("PDH", "PDL", "PMH", "PML")
         ]
         verified_flags.extend([
@@ -1196,12 +1316,12 @@ async def build_le_review(trade: dict) -> dict:
         if completeness_pct == 100 and feeds == {"sip"} and ev.get("market_calendar_verified"):
             quality = "High"
             quality_reason = (
-                "All core LE evidence is verified from consolidated SIP data with official session boundaries."
+                "All core LE evidence is trusted for deterministic rules from consolidated SIP data with official session boundaries."
             )
         elif completeness_pct >= 75:
             quality = "Moderate"
             quality_reason = (
-                "Most core LE evidence is verified, but one or more inputs are limited, delayed, or unavailable."
+                "Most core LE evidence is trusted for rules, but one or more inputs need review, are limited, delayed, or unavailable."
             )
         else:
             quality = "Low"
