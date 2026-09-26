@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil } from 'lucide-react';
 import { tradesApi, chartApi } from '../api';
 import TradingChart from './TradingChart';
+import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
 
 const fmt$ = (v) => {
@@ -189,7 +190,7 @@ function TagBadge({ tag, onDelete }) {
 
 // ── What If helpers ───────────────────────────────────────────────────────────
 
-const TABS = ['Stats', 'Strategy', 'Tags', 'Executions', 'What If'];
+const TABS = ['Stats', 'Strategy', 'Tags', 'LE Review', 'Executions', 'What If'];
 
 const SCENARIOS = [
   { label: '+5 min',    offsetMin: 5 },
@@ -839,6 +840,17 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   <div className="text-muted" style={{ fontSize: 14, marginTop: 8 }}>No tags yet.</div>
                 )}
               </div>
+            )}
+
+            {/* ── LE Review tab ────────────────────────────────────────── */}
+            {tab === 'LE Review' && (
+              <LEReview
+                trade={trade}
+                analysis={analysis}
+                tags={tags}
+                onAnalysisChange={setAnalysis}
+                onTagsChange={setTags}
+              />
             )}
 
             {/* ── Executions tab ────────────────────────────────────────── */}
