@@ -1342,7 +1342,7 @@ async def get_chart(
     if not ALPACA_KEY or ALPACA_KEY == "your_alpaca_api_key_here":
         return {
             "ticker": ticker, "date": date, "bars": [],
-            "warning": "Add APCA_API_KEY_ID and APCA_API_SECRET_KEY to backend/.env to enable price charts."
+            "warning": "Market data is not configured for this deployment. Add APCA_API_KEY_ID and APCA_API_SECRET_KEY to the backend environment variables to enable price charts."
         }
 
     # Normalize ticker
