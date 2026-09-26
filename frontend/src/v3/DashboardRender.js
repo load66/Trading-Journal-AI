@@ -331,7 +331,7 @@ export default function DashboardRender(p) {
   const awin = Math.abs(k.avg_win || 0);
   const aloss = Math.abs(k.avg_loss || 0);
   const ratio = aloss > 0 ? awin / aloss : null;
-  const avgPlPct = k.avg_pl_pct == null ? null : Number(k.avg_pl_pct);
+  const avgR = k.avg_r == null ? null : Number(k.avg_r);
 
   const greenDays = days.filter((d) => Number(d.net_pnl || 0) > 0);
   const redDays = days.filter((d) => Number(d.net_pnl || 0) < 0);
@@ -350,7 +350,9 @@ export default function DashboardRender(p) {
 
   const strategyTagged = (k.by_strategy || []).reduce((s, r) => s + Number(r.count || 0), 0);
   const strategyCoverage = k.total_trades ? strategyTagged / k.total_trades : 0;
-  const rSamples = (edgeReport?.r_multiple_dist || []).reduce((s, r) => s + Number(r.count || 0), 0);
+  const rSamples = k.r_sample_count != null
+    ? Number(k.r_sample_count)
+    : (edgeReport?.r_multiple_dist || []).reduce((s, r) => s + Number(r.count || 0), 0);
   const rCoverage = k.total_trades ? rSamples / k.total_trades : 0;
   const processReady = k.total_trades >= 10 && strategyCoverage >= 0.6 && rCoverage >= 0.6;
 
@@ -399,7 +401,14 @@ export default function DashboardRender(p) {
   const gPf = g.profit_factor ?? 1.5;
   const gRatio = g.avg_win_loss_ratio ?? 1.5;
   const gExp = g.expectancy ?? 50;
+  const gAvgR = g.avg_r ?? 0.5;
+  const gLossContain = g.loss_containment ?? 2.0;
   const cap = (x) => Math.max(0, Math.min(1, x));
+  // Keep the goal marker inside a readable scale instead of pinning every
+  // baseline to the far edge. Avg R is higher-is-better; loss containment is
+  // lower-is-better, so its bar grows toward the warning side.
+  const avgRScale = Math.max(gAvgR / 0.8, Math.abs(avgR || 0) * 1.05, 0.1);
+  const lossScale = Math.max(gLossContain / 0.35, (lossOutlierRatio || 0) * 1.05, 0.1);
 
   const measures = [
     {
@@ -431,19 +440,28 @@ export default function DashboardRender(p) {
       ),
     },
     {
-      label: 'Avg P/L %',
-      value: avgPlPct == null ? '—' : `${avgPlPct > 0 ? '+' : ''}${avgPlPct.toFixed(1)}%`,
-      tone: avgPlPct != null && avgPlPct < 0 ? 'neg' : undefined,
-      met: avgPlPct != null && avgPlPct > 0,
-      read: avgPlPct == null
-        ? 'Not enough completed trades with entry cost'
-        : 'Average net return per trade on entry premium/notional',
+      label: 'Avg R / trade',
+      value: avgR == null ? 'N/A' : `${avgR > 0 ? '+' : ''}${avgR.toFixed(2)}R`,
+      fill: cap(Math.max(avgR || 0, 0) / avgRScale),
+      goal: `${Number(gAvgR).toFixed(2)}R`,
+      goalPct: cap(gAvgR / avgRScale) * 100,
+      tone: avgR != null && avgR < 0 ? 'neg' : undefined,
+      met: avgR != null && avgR >= gAvgR,
+      read: avgR == null
+        ? `Record planned risk to unlock this metric · 0 of ${k.total_trades || 0} trades`
+        : `Average realized R across ${rSamples} recorded trade${rSamples === 1 ? '' : 's'}`,
     },
     {
-      label: 'Max drawdown',
-      value: money2(k.max_drawdown || 0),
-      tone: Number(k.max_drawdown || 0) < 0 ? 'neg' : undefined,
-      read: 'Largest realized peak-to-trough drop in this range',
+      label: 'Loss containment',
+      value: lossOutlierRatio == null ? 'N/A' : `${lossOutlierRatio.toFixed(1)}×`,
+      fill: cap((lossOutlierRatio || 0) / lossScale),
+      goal: `≤${Number(gLossContain).toFixed(1)}×`,
+      goalPct: cap(gLossContain / lossScale) * 100,
+      tone: lossOutlierRatio != null && lossOutlierRatio > gLossContain ? 'neg' : undefined,
+      met: lossOutlierRatio != null && lossOutlierRatio <= gLossContain,
+      read: lossOutlierRatio == null
+        ? 'Needs at least one losing session'
+        : 'Worst red day vs average red day',
     },
   ];
 
@@ -514,8 +532,8 @@ export default function DashboardRender(p) {
           <div className="v3-chart-panel">
             <div className="v3-chart-title">
               <div>
-                <div className="v3-lab">Cumulative net P&amp;L</div>
-                <strong className={tone(net)}>{money2(net)}</strong>
+                <div className="v3-lab">Equity curve</div>
+                <strong>Net account growth</strong>
               </div>
               <span>after commissions</span>
             </div>
