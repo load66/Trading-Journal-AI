@@ -628,6 +628,7 @@ export default function DashboardRender(p) {
   const net = Number(k.total_net_pnl || 0);
 
   const goalValue = (key, fallback) => Number(goals?.[key] ?? fallback);
+
   const pctGoalItem = (label, value, goal, read, amberBelow = false) => {
     const numeric = Number(value || 0);
     const target = Number(goal || 0);
@@ -643,6 +644,7 @@ export default function DashboardRender(p) {
       met: numeric >= target,
     };
   };
+
   const scaledGoalItem = (label, value, goal, formatter, read) => {
     const numeric = Number(value || 0);
     const target = Number(goal || 0);
@@ -695,114 +697,7 @@ export default function DashboardRender(p) {
       k.profit_factor == null ? 0 : Number(k.profit_factor),
       goalValue('profit_factor', 1.5),
       (value) => value.toFixed(2),
-      k.profit_factor == null ? 'Needs both wins and losses' : '
-
-  const readout = days.length ? days[days.length - 1] : null;
-
-  return (
-    <div className="v3-dashboard">
-      <div className="v3-hero v3-hero-compact">
-        <div className="v3-eyeline">
-          <div>
-            <p className="v3-acct">{accountLabel}{span ? ' · ' + span : ''}</p>
-            <div className="v3-hero-label">Total net P&amp;L</div>
-            <h1 className={'v3-money ' + tone(net)}>{money2(net)}</h1>
-            <p className="v3-money-sub">
-              {(k.total_trades || 0).toLocaleString()} completed trades
-              {' '}· {(k.trading_days || 0).toLocaleString()} sessions
-              {' '}· {k.trading_days ? money2(net / k.trading_days) + ' avg/day' : 'avg/day unavailable'}
-            </p>
-          </div>
-          <div className="v3-heroside">
-            <div className="v3-acts">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={onToggleGoals}
-                aria-pressed={showGoals}
-                aria-expanded={showGoals}
-              >
-                Edit goals
-              </button>
-              {RangePicker}
-            </div>
-            {readout && (
-              <dl className="v3-readout">
-                <dt className="v3-lab">Last session</dt>
-                <dd className={tone(readout.net_pnl)}>{money2(readout.net_pnl)}</dd>
-                <div className="when">{shortDate(readout.date)}</div>
-              </dl>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <Measures items={measures} className="v3-measures-dashboard" />
-      {goalsNode}
-
-      <div className="v3-dashboard-core">
-        <main className="v3-dashboard-main">
-          <section className="v3-band v3-dashboard-section">
-            <div className="v3-sec-head">
-              <div>
-                <h2 className="v3-h">Performance trend</h2>
-                <p className="v3-h-sub">See whether performance is trending up and which sessions are driving the result.</p>
-              </div>
-              <span className="v3-evidence verified">VERIFIED</span>
-            </div>
-            <div className="v3-chart-grid v3-chart-grid-dashboard">
-              <div className="v3-chart-panel">
-                <div className="v3-chart-title">
-                  <div>
-                    <div className="v3-lab">Cumulative net P&amp;L</div>
-                    <strong>Account growth</strong>
-                  </div>
-                  <span>after commissions</span>
-                </div>
-                <EquityCurve days={days} height={150} onPick={onDayClick} />
-              </div>
-              <div className="v3-chart-panel">
-                <div className="v3-chart-title">
-                  <div>
-                    <div className="v3-lab">Daily net P&amp;L</div>
-                    <strong>{k.trading_days || 0} sessions</strong>
-                  </div>
-                  <span>click a bar to review the day</span>
-                </div>
-                <DailyPnlBars days={days} height={150} onPick={onDayClick} />
-              </div>
-            </div>
-          </section>
-
-          <section className="v3-band v3-dashboard-section v3-management-section">
-            <TradeManagement
-              kpis={managementKpis || k}
-              edge={managementEdge}
-              range={managementRange || '30D'}
-              onRangeChange={onManagementRangeChange}
-              goals={goals}
-            />
-          </section>
-        </main>
-
-        <aside className="v3-dashboard-side">
-          <section className="v3-side-section">
-            <MonthPanel
-              accountId={accountId}
-              onDayClick={onDayClick}
-              latestDate={days.length ? days[days.length - 1].date : null}
-            />
-          </section>
-        </aside>
-      </div>
-
-      <section className="v3-band v3-smoking-band">
-        <LatestSmokingGunSummary report={latestSmokingGun} onOpen={onViewSmokingGun} />
-      </section>
-    </div>
-  );
-}
- + Number(k.profit_factor).toFixed(2) + ' won for every $1.00 lost'
+      k.profit_factor == null ? 'Needs both wins and losses' : '$' + Number(k.profit_factor).toFixed(2) + ' won for every $1.00 lost'
     ),
     scaledGoalItem(
       'Win / loss size',
