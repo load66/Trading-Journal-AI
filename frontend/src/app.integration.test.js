@@ -641,6 +641,7 @@ test('saved chart screenshot uses an 800px preview and fullscreen lightbox', asy
   fireEvent.click(preview);
   const lightbox = await screen.findByRole('dialog', { name: 'TradingView screenshot' });
   expect(lightbox).toBeVisible();
+  expect(lightbox.parentElement).toBe(document.body);
   expect(document.body.style.overflow).toBe('hidden');
   expect(screen.getByRole('button', { name: 'Close screenshot' })).toBeVisible();
   expect(screen.getByText(/Click outside or press Esc to close/i)).toBeVisible();
