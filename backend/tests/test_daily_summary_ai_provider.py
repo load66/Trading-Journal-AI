@@ -310,3 +310,33 @@ def test_day_review_preserves_structured_highlights(monkeypatch):
     assert result["highlights"] == payload["highlights"]
     assert result["diagnostic_mode"] == "unfiltered"
 
+
+
+def test_daily_auto_generation_limit_reuses_same_local_day():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 9, 27, 20, 0, tzinfo=timezone.utc)
+    assert daily_summary.daily_auto_generation_is_fresh(
+        "2026-09-27 15:20:00",
+        now=now,
+    ) is True
+
+
+def test_daily_auto_generation_limit_allows_next_local_day():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=timezone.utc)
+    assert daily_summary.daily_auto_generation_is_fresh(
+        "2026-09-27 04:30:00",
+        now=now,
+    ) is False
+
+
+def test_daily_auto_generation_limit_accepts_timezone_aware_timestamp():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=timezone.utc)
+    assert daily_summary.daily_auto_generation_is_fresh(
+        "2026-09-27T09:45:00-05:00",
+        now=now,
+    ) is True
