@@ -652,7 +652,7 @@ test('chart image opens a native fullscreen dialog from the image surface', asyn
   expect(screen.getByRole('button', { name: 'Close screenshot' })).toBeVisible();
   expect(screen.getByText(/Click outside the chart or press Esc to close/i)).toBeVisible();
 
-  fireEvent.cancel(lightbox);
+  fireEvent(lightbox, new Event('cancel', { bubbles: false, cancelable: true }));
   await waitFor(() => expect(lightbox).not.toHaveAttribute('open'));
   expect(document.body.style.overflow).toBe('');
 
