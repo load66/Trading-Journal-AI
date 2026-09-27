@@ -663,11 +663,19 @@ const TAG_CLASS = {
 
 function TagBadge({ tag, onDelete }) {
   return (
-    <span className={`chip ${TAG_CLASS[tag.tag_type] || ''}`} title={tag.tag_type} style={{ fontSize: 13, padding: onDelete ? '2px 4px 2px 10px' : '3px 10px' }}>
-      {tag.tag_value}
+    <span
+      className={`chip td-tag-chip td-tag-chip-${tag.tag_type} ${TAG_CLASS[tag.tag_type] || ''}`}
+      title={tag.tag_type}
+    >
+      <span className="td-tag-chip-label">{tag.tag_value}</span>
       {onDelete && (
-        <button type="button" onClick={onDelete} aria-label={`Remove tag ${tag.tag_value}`} title="Remove"
-          style={{ background: 'none', border: 'none', color: 'inherit', opacity: 0.75, padding: '0 4px', lineHeight: 1, fontSize: 16, display: 'flex', alignItems: 'center' }}>
+        <button
+          type="button"
+          className="td-tag-remove"
+          onClick={onDelete}
+          aria-label={`Remove tag ${tag.tag_value}`}
+          title="Remove tag"
+        >
           ×
         </button>
       )}
@@ -1691,49 +1699,68 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       </div>
 
                       <div className="td-tags-form">
-                        <label>
-                          <span>Category</span>
-                          <select
-                            aria-label="Tag category"
-                            value={tagForm.tag_type}
-                            onChange={e => {
-                              setTagForm({ tag_type: e.target.value, tag_value: '' });
-                              setTagError(null);
-                            }}
-                            disabled={tagLibraryLoading}
-                          >
-                            {TAG_TYPES.map(type => (
-                              <option key={type} value={type}>{TAG_TYPE_META[type].label}</option>
-                            ))}
-                          </select>
-                        </label>
+                        <div className="td-tags-field">
+                          <div className="td-tags-field-label">Category</div>
+                          <div className="td-tags-category-strip" role="group" aria-label="Tag category">
+                            {TAG_TYPES.map(type => {
+                              const count = tagLibraryItems(tagLibrary, type).length;
+                              const active = tagForm.tag_type === type;
+                              return (
+                                <button
+                                  key={type}
+                                  type="button"
+                                  className={`td-tags-category-btn type-${type} ${active ? 'active' : ''}`}
+                                  aria-pressed={active}
+                                  disabled={tagLibraryLoading}
+                                  onClick={() => {
+                                    setTagForm({ tag_type: type, tag_value: '' });
+                                    setTagError(null);
+                                  }}
+                                >
+                                  <span>{TAG_TYPE_META[type].label}</span>
+                                  <small>{count}</small>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="td-tags-category-help">
+                            {TAG_TYPE_META[tagForm.tag_type].help}
+                          </div>
+                        </div>
 
-                        <label>
-                          <span>Saved tag</span>
-                          <select
-                            aria-label="Saved tag"
-                            value={tagForm.tag_value}
-                            onChange={e => {
-                              setTagForm(f => ({ ...f, tag_value: e.target.value }));
-                              setTagError(null);
-                            }}
-                            disabled={tagLibraryLoading || availableItems.length === 0}
-                          >
-                            <option value="">
-                              {tagLibraryLoading
-                                ? 'Loading saved tags…'
-                                : availableItems.length
-                                  ? `Choose a ${TAG_TYPE_META[tagForm.tag_type].label.toLowerCase()}…`
-                                  : 'No unused saved tags'}
-                            </option>
-                            {availableItems.map(item => (
-                              <option key={item.name} value={item.name}>{item.name}</option>
-                            ))}
-                          </select>
-                        </label>
+                        <div className="td-tags-field">
+                          <div className="td-tags-field-label">Saved tag</div>
+                          <div className="td-tags-picker-row">
+                            <select
+                              aria-label="Saved tag"
+                              value={tagForm.tag_value}
+                              onChange={e => {
+                                setTagForm(f => ({ ...f, tag_value: e.target.value }));
+                                setTagError(null);
+                              }}
+                              disabled={tagLibraryLoading || availableItems.length === 0}
+                            >
+                              <option value="">
+                                {tagLibraryLoading
+                                  ? 'Loading saved tags…'
+                                  : availableItems.length
+                                    ? `Choose a ${TAG_TYPE_META[tagForm.tag_type].label.toLowerCase()}…`
+                                    : 'No unused saved tags'}
+                              </option>
+                              {availableItems.map(item => (
+                                <option key={item.name} value={item.name}>{item.name}</option>
+                              ))}
+                            </select>
 
-                        <div className="td-tags-category-help">
-                          {TAG_TYPE_META[tagForm.tag_type].help}
+                            <button
+                              type="button"
+                              onClick={handleAddTag}
+                              disabled={savingTag || !tagForm.tag_value}
+                              className="btn btn-primary td-tags-add"
+                            >
+                              <PlusCircle size={15} /> {savingTag ? 'Adding…' : 'Add tag'}
+                            </button>
+                          </div>
                         </div>
 
                         {selectedItem?.description && (
@@ -1769,14 +1796,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                           <div className="notice neg td-tags-error" role="alert">{tagError}</div>
                         )}
 
-                        <button
-                          type="button"
-                          onClick={handleAddTag}
-                          disabled={savingTag || !tagForm.tag_value}
-                          className="btn btn-primary td-tags-add"
-                        >
-                          <PlusCircle size={15} /> {savingTag ? 'Adding…' : 'Add tag'}
-                        </button>
                       </div>
 
                       <div className="td-tags-settings-note">
@@ -1796,8 +1815,11 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       {groupedTags.length ? (
                         <div className="td-tags-groups">
                           {groupedTags.map(group => (
-                            <div className="td-tags-group" key={group.type}>
-                              <div className="td-tags-group-label">{group.meta.label}</div>
+                            <div className={`td-tags-group type-${group.type}`} key={group.type}>
+                              <div className="td-tags-group-label">
+                                <span>{group.meta.label}</span>
+                                <small>{group.items.length}</small>
+                              </div>
                               <div className="td-tags-chip-row">
                                 {group.items.map(tag => (
                                   <TagBadge key={tag.id} tag={tag} onDelete={() => handleDeleteTag(tag.id)} />
