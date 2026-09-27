@@ -1202,8 +1202,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     }
   };
 
-  const selectedCopySource = copyCandidates.find(candidate => candidate.trade_group === copySourceGroup) || null;
-
   // ── Tag handlers ──────────────────────────────────────────────────────────
 
   const handleAddTag = async () => {
