@@ -619,7 +619,7 @@ test('trade screenshot can be pasted from clipboard without saving a local file'
   expect(formData.get('file').type).toBe('image/webp');
 });
 
-test('saved chart screenshot uses an 800px preview and fullscreen lightbox', async () => {
+test('chart image opens a native fullscreen dialog from the image surface', async () => {
   URL.createObjectURL.mockImplementation(() => 'blob:trade-chart-review');
   tradesApi.getAnalysis.mockResolvedValue({
     data: {
@@ -646,21 +646,20 @@ test('saved chart screenshot uses an 800px preview and fullscreen lightbox', asy
 
   const previewImage = within(preview).getByRole('img');
   fireEvent.click(previewImage);
-  const lightbox = await screen.findByRole('dialog', { name: 'TradingView screenshot' });
-  expect(lightbox).toBeVisible();
-  expect(lightbox.parentElement).toBe(document.body);
+  const lightbox = await screen.findByTestId('chart-screenshot-lightbox');
+  expect(lightbox).toHaveAttribute('open');
   expect(document.body.style.overflow).toBe('hidden');
   expect(screen.getByRole('button', { name: 'Close screenshot' })).toBeVisible();
-  expect(screen.getByText(/Click outside or press Esc to close/i)).toBeVisible();
+  expect(screen.getByText(/Click outside the chart or press Esc to close/i)).toBeVisible();
 
-  fireEvent.keyDown(document, { key: 'Escape' });
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'TradingView screenshot' })).not.toBeInTheDocument());
+  fireEvent.cancel(lightbox);
+  await waitFor(() => expect(lightbox).not.toHaveAttribute('open'));
   expect(document.body.style.overflow).toBe('');
 
-  fireEvent.click(preview);
-  const reopenedLightbox = await screen.findByRole('dialog', { name: 'TradingView screenshot' });
-  fireEvent.mouseDown(reopenedLightbox);
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'TradingView screenshot' })).not.toBeInTheDocument());
+  fireEvent.click(previewImage);
+  await waitFor(() => expect(lightbox).toHaveAttribute('open'));
+  fireEvent.click(lightbox);
+  await waitFor(() => expect(lightbox).not.toHaveAttribute('open'));
 });
 
 test('guided Review quick picks generate journal text and actionable correction', async () => {
