@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { tradesApi, chartApi } from '../api';
+import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, Maximize2 } from 'lucide-react';
+import { tradesApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
@@ -412,58 +412,8 @@ export function executionTimeETMinutes(dateStr, timeStr) {
   return parts ? parts.hour * 60 + parts.minute : null;
 }
 
-function barETMinutes(timestamp) {
-  if (!timestamp) return null;
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: DISPLAY_TIME_ZONE,
-      hour: '2-digit', minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(timestamp))
-      .filter(p => p.type !== 'literal')
-      .map(p => [p.type, p.value])
-  );
-  return Number(parts.hour) * 60 + Number(parts.minute);
-}
 
-const TABS = ['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'What If'];
-
-const SCENARIOS = [
-  { label: '+5 min',    offsetMin: 5 },
-  { label: '+10 min',   offsetMin: 10 },
-  { label: '+30 min',   offsetMin: 30 },
-  { label: '+1 hour',   offsetMin: 60 },
-  { label: 'End of day', offsetMin: null },
-];
-
-function getPriceAt(bars, targetETMinutes) {
-  if (!bars.length || targetETMinutes == null) return null;
-  for (const bar of bars) {
-    const minutes = barETMinutes(bar.t);
-    if (minutes != null && minutes >= targetETMinutes) return bar.c;
-  }
-  return bars[bars.length - 1].c;
-}
-
-export function computeWhatIf(bars, stats, trade) {
-  if (!bars.length || !stats.isClosed || !stats.avgExit || !stats.closeTime) return null;
-  const exitETMinutes = executionTimeETMinutes(trade.date, stats.closeTime);
-  if (exitETMinutes == null) return null;
-  const isStock  = !trade.instrument_type || trade.instrument_type === 'STOCK';
-  const sideSign = trade.side === 'LONG' ? 1 : -1;
-
-  return SCENARIOS.map(({ label, offsetMin }) => {
-    const scenarioETMinutes = offsetMin === null
-      ? 16 * 60
-      : Math.min(16 * 60, exitETMinutes + offsetMin);
-    const scenarioHHMM = `${String(Math.floor(scenarioETMinutes / 60)).padStart(2, '0')}:${String(scenarioETMinutes % 60).padStart(2, '0')}`;
-    const price = getPriceAt(bars, scenarioETMinutes);
-    if (price == null) return { label, scenarioHHMM, price: null, deltaPnl: null, whatIfPnl: null };
-    const deltaPnl  = isStock ? (price - stats.avgExit) * stats.totalQty * sideSign : null;
-    const whatIfPnl = deltaPnl != null ? (trade.net_pnl ?? 0) + deltaPnl : null;
-    return { label, scenarioHHMM, price, deltaPnl, whatIfPnl };
-  });
-}
+const TABS = ['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'Chart Review'];
 
 const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', date: '', time: '' };
 
@@ -548,10 +498,12 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [editExecForm, setEditExecForm]   = useState(null);
   const [savingEditExec, setSavingEditExec] = useState(false);
 
-  // What If
-  const [whatIfBars, setWhatIfBars]       = useState(null);
-  const [whatIfLoading, setWhatIfLoading] = useState(false);
-  const [whatIfWarning, setWhatIfWarning] = useState(null);
+  // Visual chart review screenshot
+  const [chartScreenshotUrl, setChartScreenshotUrl] = useState('');
+  const [chartScreenshotLoading, setChartScreenshotLoading] = useState(false);
+  const [chartScreenshotUploading, setChartScreenshotUploading] = useState(false);
+  const [chartScreenshotError, setChartScreenshotError] = useState(null);
+  const [chartScreenshotExpanded, setChartScreenshotExpanded] = useState(false);
 
   // Stats edit
   const [editingStats, setEditingStats]   = useState(false);
@@ -720,27 +672,62 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const stats = computeStats(trade);
 
   useEffect(() => {
-    // A TradeDetail component is reused when navigating the session sidebar.
-    // Clear the previous symbol's bars so What If can never analyze stale data.
-    setWhatIfBars(null);
-    setWhatIfWarning(null);
-  }, [trade.id, trade.ticker, trade.date]);
+    let active = true;
+    let objectUrl = '';
+    setChartScreenshotError(null);
+    setChartScreenshotUrl('');
 
-  useEffect(() => {
-    if (whatIfBars !== null) return;
-    if (!stats.isClosed) { setWhatIfBars([]); return; }
-    setWhatIfLoading(true);
-    chartApi.get(trade.ticker, trade.date, '1Min')
-      .then(r => {
-        setWhatIfBars(Array.isArray(r.data?.bars) ? r.data.bars : []);
-        setWhatIfWarning(r.data?.warning || null);
+    if (!analysis?.chart_screenshot_path) {
+      setChartScreenshotLoading(false);
+      return () => {};
+    }
+
+    setChartScreenshotLoading(true);
+    tradesApi.getChartScreenshot(trade.trade_group)
+      .then(response => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(response.data);
+        setChartScreenshotUrl(objectUrl);
       })
-      .catch((e) => {
-        setWhatIfBars([]);
-        setWhatIfWarning(e.response?.data?.detail || 'Failed to load Alpaca market data.');
+      .catch(() => {
+        if (active) setChartScreenshotError('Could not load the saved chart screenshot.');
       })
-      .finally(() => setWhatIfLoading(false));
-  }, [whatIfBars, trade.ticker, trade.date, stats.isClosed]);
+      .finally(() => {
+        if (active) setChartScreenshotLoading(false);
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [trade.trade_group, analysis?.chart_screenshot_path]);
+
+  const handleChartScreenshotUpload = async (file) => {
+    if (!file) return;
+    setChartScreenshotUploading(true);
+    setChartScreenshotError(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await tradesApi.uploadChartScreenshot(trade.trade_group, form);
+      setAnalysis(prev => ({ ...(prev || {}), chart_screenshot_path: res.data.chart_screenshot_path }));
+    } catch (e) {
+      setChartScreenshotError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Upload failed.');
+    } finally {
+      setChartScreenshotUploading(false);
+    }
+  };
+
+  const handleChartScreenshotDelete = async () => {
+    setChartScreenshotError(null);
+    try {
+      await tradesApi.deleteChartScreenshot(trade.trade_group);
+      setAnalysis(prev => ({ ...(prev || {}), chart_screenshot_path: null }));
+      setChartScreenshotExpanded(false);
+    } catch (e) {
+      setChartScreenshotError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Could not remove screenshot.');
+    }
+  };
 
   const pnl = trade.net_pnl ?? 0;
 
@@ -846,16 +833,64 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
 
         <div className="td-main">
-          <section className="card">
-            <TradingChart
-              ticker={trade.ticker}
-              date={trade.date}
-              tradeGroup={trade.trade_group}
-              executions={parseExecs(trade)}
-              side={trade.side}
-              analysis={analysis}
-              height={520}
-            />
+          <section className="td-visual-review" aria-label="Visual trade review">
+            <div className="card td-live-chart">
+              <TradingChart
+                ticker={trade.ticker}
+                date={trade.date}
+                tradeGroup={trade.trade_group}
+                defaultTimeframe="10Min"
+                executions={parseExecs(trade)}
+                side={trade.side}
+                analysis={analysis}
+                height={520}
+              />
+            </div>
+
+            <aside className="card td-chart-screenshot">
+              <div className="td-chart-screenshot-head">
+                <div>
+                  <div className="section-title" style={{ fontSize: 17 }}>TradingView screenshot</div>
+                  <div className="text-muted" style={{ fontSize: 12.5, marginTop: 3 }}>Compare your marked-up plan with the recorded trade.</div>
+                </div>
+                {analysis?.chart_screenshot_path && (
+                  <div className="td-chart-screenshot-actions">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setChartScreenshotExpanded(true)} title="Open larger">
+                      <Maximize2 size={14} /> View
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={handleChartScreenshotDelete} title="Remove screenshot">
+                      <Trash2 size={14} /> Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <label className={`td-chart-dropzone${chartScreenshotUrl ? ' has-image' : ''}`}>
+                {chartScreenshotLoading ? (
+                  <div className="text-muted">Loading screenshot…</div>
+                ) : chartScreenshotUrl ? (
+                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
+                ) : (
+                  <div className="td-chart-dropzone-empty">
+                    <Upload size={30} />
+                    <strong>{chartScreenshotUploading ? 'Uploading…' : 'Upload TradingView screenshot'}</strong>
+                    <span>PNG, JPG or WEBP · include your long/short position drawing and annotations</span>
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={chartScreenshotUploading}
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    handleChartScreenshotUpload(file);
+                  }}
+                />
+              </label>
+              {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
+              {chartScreenshotUrl && <div className="text-muted td-chart-replace-hint">Click the screenshot to replace it, or use View to inspect it larger.</div>}
+            </aside>
           </section>
 
           <div className="td-lower">
@@ -1308,67 +1343,35 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               </div>
             )}
 
-            {/* ── What If tab ───────────────────────────────────────────── */}
-            {tab === 'What If' && (
-              <div style={{ paddingTop: 8 }}>
-                {!stats.isClosed ? (
-                  <div className="text-muted" style={{ fontSize: 14 }}>Available for closed trades only.</div>
-                ) : whatIfLoading ? (
-                  <div className="text-muted" role="status" style={{ fontSize: 14 }}>Loading 1-min bar data…</div>
-                ) : whatIfBars !== null && whatIfBars.length === 0 ? (
-                  <div className="text-muted" style={{ fontSize: 14 }}>
-                    {whatIfWarning || 'No Alpaca market bars were returned for this symbol and date.'}
+            {/* ── Chart Review tab ─────────────────────────────────────── */}
+            {tab === 'Chart Review' && (
+              <div className="td-chart-review-panel">
+                <div className="td-chart-review-callout">
+                  <Target size={20} />
+                  <div>
+                    <strong>Review the setup visually</strong>
+                    <p>Use the 10-minute chart and your TradingView screenshot together. Check entry location, key levels, 8 EMA structure, planned risk, trims, and whether the trade followed your original thesis.</p>
                   </div>
-                ) : whatIfBars !== null && (() => {
-                  const isStock  = !trade.instrument_type || trade.instrument_type === 'STOCK';
-                  const scenarios = computeWhatIf(whatIfBars, stats, trade);
-                  if (!scenarios) return <div className="text-muted" style={{ fontSize: 14 }}>Insufficient trade data.</div>;
-                  return (
-                    <div>
-                      {!isStock && (
-                        <div className="notice accent" style={{ fontSize: 13, marginBottom: 10 }}>
-                          Prices shown are the <strong>underlying stock</strong>. Option P&L depends on delta, theta, and time value, so estimated P&L is not computed.
-                        </div>
-                      )}
-                      <div className="text-muted" style={{ marginBottom: 10, fontSize: 13 }}>
-                        Actual exit: <strong className="num" style={{ color: 'var(--text-primary)' }}>{formatExecutionTimeET(trade.date, stats.closeTime)}</strong> @ <strong className="num" style={{ color: 'var(--text-primary)' }}>${stats.avgExit?.toFixed(2)}</strong>
-                        {isStock && <> · Net P&L: <strong className={`num ${(trade.net_pnl ?? 0) >= 0 ? 'pos' : 'neg'}`}>{fmtSigned$(trade.net_pnl)}</strong></>}
-                      </div>
-                      <table>
-                        <thead>
-                          <tr>
-                            <th className={undefined}>Scenario</th>
-                            <th className={'num'}>Price</th>
-                            {isStock && <>
-                              <th className={'num'}>Est. P&L</th>
-                              <th className={'num'}>vs Actual</th>
-                            </>}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {scenarios.map((s, i) => {
-                            const better = s.deltaPnl != null && s.deltaPnl > 0;
-                            const worse  = s.deltaPnl != null && s.deltaPnl < 0;
-                            return (
-                              <tr key={i}>
-                                <td style={{ fontWeight: 500 }}>{s.label}</td>
-                                <td className="num">{s.price != null ? `$${s.price.toFixed(2)}` : '—'}</td>
-                                {isStock && <>
-                                  <td className={`num ${s.whatIfPnl != null ? (s.whatIfPnl >= 0 ? 'pos' : 'neg') : 'text-muted'}`} style={{ fontWeight: 600 }}>
-                                    {s.whatIfPnl != null ? fmtSigned$(s.whatIfPnl) : '—'}
-                                  </td>
-                                  <td className={`num ${better ? 'pos' : worse ? 'neg' : 'text-muted'}`} style={{ fontWeight: 600 }}>
-                                    {s.deltaPnl != null ? (s.deltaPnl === 0 ? '—' : (better ? '↑ +' : '↓ ') + '$' + Math.abs(s.deltaPnl).toFixed(0)) : '—'}
-                                  </td>
-                                </>}
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  );
-                })()}
+                </div>
+                <div className="td-chart-review-checks">
+                  <span>10m default</span>
+                  <span>8 EMA</span>
+                  <span>PDH / PDL solid</span>
+                  <span>PMH / PML dashed</span>
+                </div>
+                <label className="btn btn-primary btn-sm td-chart-review-upload">
+                  <Upload size={14} /> {analysis?.chart_screenshot_path ? 'Replace TradingView screenshot' : 'Upload TradingView screenshot'}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    disabled={chartScreenshotUploading}
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      handleChartScreenshotUpload(file);
+                    }}
+                  />
+                </label>
               </div>
             )}
 
@@ -1448,64 +1451,18 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             </section>
           )}
 
-          {/* What-if scenarios */}
-          {stats.isClosed && whatIfBars !== null && whatIfBars.length > 0 && (() => {
-            const isStock = !trade.instrument_type || trade.instrument_type === 'STOCK';
-            const scenarios = computeWhatIf(whatIfBars, stats, trade);
-            if (!scenarios) return null;
-            return (
-              <section className="card">
-                <h2 className="section-title">What If Scenarios</h2>
-                <div className="text-muted" style={{ fontSize: 13, margin: '4px 0 12px' }}>
-                  Actual exit: <strong className="num" style={{ color: 'var(--text-primary)' }}>{formatExecutionTimeET(trade.date, stats.closeTime)}</strong> @ <strong className="num" style={{ color: 'var(--text-primary)' }}>${stats.avgExit?.toFixed(2)}</strong>
-                  {isStock && <> · Net P&L: <strong className={`num ${pnl >= 0 ? 'pos' : 'neg'}`}>{fmtSigned$(trade.net_pnl)}</strong></>}
-                </div>
-                {!isStock && (
-                  <div className="notice accent" style={{ fontSize: 13, marginBottom: 10 }}>
-                    Prices shown are the underlying stock. Option P&L not estimated.
-                  </div>
-                )}
-                <div className="scroll-x" style={{ margin: '0 -24px', padding: '0 12px' }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th className={undefined}>Scenario</th>
-                      <th className={'num'}>Price</th>
-                      {isStock && <>
-                        <th className={'num'}>Est. P&L</th>
-                        <th className={'num'}>vs Actual</th>
-                      </>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {scenarios.map((s, i) => {
-                      const better = s.deltaPnl != null && s.deltaPnl > 0;
-                      const worse = s.deltaPnl != null && s.deltaPnl < 0;
-                      return (
-                        <tr key={i}>
-                          <td style={{ fontWeight: 500 }}>{s.label}</td>
-                          <td className="num">{s.price != null ? `$${s.price.toFixed(2)}` : '—'}</td>
-                          {isStock && <>
-                            <td className={`num ${s.whatIfPnl != null ? (s.whatIfPnl >= 0 ? 'pos' : 'neg') : 'text-muted'}`} style={{ fontWeight: 600 }}>
-                              {s.whatIfPnl != null ? fmtSigned$(s.whatIfPnl) : '—'}
-                            </td>
-                            <td className={`num ${better ? 'pos' : worse ? 'neg' : 'text-muted'}`} style={{ fontWeight: 600 }}>
-                              {s.deltaPnl != null ? (s.deltaPnl === 0 ? '—' : (better ? '↑ +' : '↓ ') + '$' + Math.abs(s.deltaPnl).toFixed(0)) : '—'}
-                            </td>
-                          </>}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                </div>
-              </section>
-            );
-          })()}
+
         </div>
           </div>
         </div>
       </div>
+
+      {chartScreenshotExpanded && chartScreenshotUrl && (
+        <div className="td-image-modal" role="dialog" aria-modal="true" aria-label="TradingView screenshot">
+          <button type="button" className="td-image-modal-close" onClick={() => setChartScreenshotExpanded(false)}>×</button>
+          <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot enlarged`} />
+        </div>
+      )}
     </div>
   );
 }

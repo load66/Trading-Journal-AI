@@ -308,3 +308,175 @@
     border-top: 1px solid var(--divider-soft);
   }
 }
+
+
+/* ---------- Trade chart visual review ---------- */
+.td-visual-review {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, .9fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.td-live-chart,
+.td-chart-screenshot {
+  min-width: 0;
+}
+.td-chart-screenshot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.td-chart-screenshot-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.td-chart-screenshot-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.td-chart-dropzone {
+  position: relative;
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px dashed rgba(63, 157, 209, .45);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, rgba(7, 30, 45, .82), rgba(4, 21, 32, .96));
+  cursor: pointer;
+}
+.td-chart-dropzone:hover {
+  border-color: rgba(58, 181, 239, .75);
+}
+.td-chart-dropzone.has-image {
+  border-style: solid;
+}
+.td-chart-dropzone input,
+.td-chart-review-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.td-chart-dropzone img {
+  width: 100%;
+  height: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  background: #020c13;
+}
+.td-chart-dropzone-empty {
+  max-width: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 20px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.td-chart-dropzone-empty svg {
+  color: var(--accent-line);
+}
+.td-chart-dropzone-empty strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.td-chart-dropzone-empty span,
+.td-chart-replace-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.td-chart-review-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 10px;
+}
+.td-chart-review-callout {
+  display: flex;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid rgba(0, 177, 231, .28);
+  border-radius: var(--radius-md);
+  background: rgba(0, 124, 171, .08);
+}
+.td-chart-review-callout svg {
+  flex: 0 0 auto;
+  color: var(--accent-line);
+}
+.td-chart-review-callout strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.td-chart-review-callout p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.td-chart-review-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.td-chart-review-checks span {
+  padding: 5px 8px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  font-size: 11px;
+  font-weight: 650;
+}
+.td-chart-review-upload {
+  position: relative;
+  align-self: flex-start;
+  overflow: hidden;
+  cursor: pointer;
+}
+.td-image-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(0, 7, 12, .92);
+  backdrop-filter: blur(7px);
+}
+.td-image-modal img {
+  max-width: 96vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border: 1px solid rgba(67, 171, 225, .42);
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .45);
+}
+.td-image-modal-close {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 50%;
+  color: white;
+  background: rgba(8, 26, 39, .86);
+  font-size: 25px;
+  line-height: 1;
+  cursor: pointer;
+}
+@media (max-width: 1180px) {
+  .td-visual-review {
+    grid-template-columns: 1fr;
+  }
+  .td-chart-dropzone {
+    min-height: 300px;
+  }
+}

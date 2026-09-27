@@ -40,6 +40,11 @@ export const tradesApi = {
   getLeLevels: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/le-levels`),
   getAnalysisOptions: () => api.get('/api/analysis-options'),
   updateAnalysis: (group, data) => api.patch(`/api/trades/${encodeURIComponent(group)}/analysis`, data),
+  uploadChartScreenshot: (group, formData) => api.post(`/api/trades/${encodeURIComponent(group)}/chart-screenshot`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  getChartScreenshot: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/chart-screenshot`, { responseType: 'blob' }),
+  deleteChartScreenshot: (group) => api.delete(`/api/trades/${encodeURIComponent(group)}/chart-screenshot`),
   addTag: (group, data) => api.post(`/api/trades/${encodeURIComponent(group)}/tags`, data),
   deleteTag: (tagId) => api.delete(`/api/trade-tags/${tagId}`),
   setSetup: (id, setup, note) => api.patch(`/api/trades/${id}/setup`, { setup, note }),
