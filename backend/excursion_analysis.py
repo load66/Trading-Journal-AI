@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
+EXCURSION_ALGORITHM_VERSION = "2026.09.27.2"
 
 
 def _execs(trade: dict) -> list[dict]:
@@ -102,40 +103,55 @@ def _bar_for_minute(bars: list[dict], dt: datetime) -> dict | None:
     return None
 
 
-def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | None, float, float]:
-    """Capture efficiency from broker executions plus the in-trade market path.
+def _execution_path_efficiency(
+    trade: dict,
+    bars: list[dict],
+) -> tuple[float | None, float, float, float, float, float | None]:
+    """Execution-aware P&L path and return excursion.
 
-    Broker fills define every cash flow and position-size change. Market bars
-    only mark the quantity that remained open between fills. This supports
-    scale-ins and partial exits without replacing any broker execution.
+    Broker fills define cash flow, position size and cumulative entry capital.
+    One-minute bars mark only periods when a position was actually open. When a
+    fill occurs inside a minute, full high/low is intentionally withheld because
+    its ordering relative to the fill is unknowable; actual fills plus the bar
+    close are used instead.
 
-    To avoid impossible look-ahead inside a one-minute bar, full bar high/low
-    is used only when no execution occurred during that minute. In a minute
-    containing fills, actual fill prices plus the bar close are used.
+    Return excursion is measured against cumulative entry capital deployed at
+    that point. This keeps scale-ins honest (early moves are not diluted by
+    capital added later) while partial exits retain the original deployed-capital
+    denominator for the remaining trade.
     """
     executions = sorted(
         [e for e in _execs(trade) if _exec_dt(e)],
         key=_exec_dt,
     )
     if not executions:
-        return None, 0.0, 0.0
+        return None, 0.0, 0.0, 0.0, 0.0, None
+
+    entry_action = "SOLD" if str(trade.get("side") or "").upper() == "SHORT" else "BOT"
 
     cashflow = 0.0
     signed_qty = 0.0
+    entry_capital = 0.0
     max_pnl = 0.0
     min_pnl = 0.0
+    max_return_pct = 0.0
+    min_return_pct = 0.0
     idx = 0
 
     def mark(price: float | None):
-        nonlocal max_pnl, min_pnl
+        nonlocal max_pnl, min_pnl, max_return_pct, min_return_pct
         if price is None or price <= 0:
             return
         pnl = cashflow + signed_qty * float(price)
         max_pnl = max(max_pnl, pnl)
         min_pnl = min(min_pnl, pnl)
+        if entry_capital > 1e-12:
+            ret = pnl / entry_capital * 100
+            max_return_pct = max(max_return_pct, ret)
+            min_return_pct = min(min_return_pct, ret)
 
     def apply_execution(execution: dict):
-        nonlocal cashflow, signed_qty
+        nonlocal cashflow, signed_qty, entry_capital
         qty = float(execution.get("qty") or 0)
         price = float(execution.get("price") or 0)
         action = str(execution.get("action") or "").upper()
@@ -147,6 +163,10 @@ def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | N
         elif action == "SOLD":
             cashflow += qty * price
             signed_qty -= qty
+        else:
+            return
+        if action == entry_action:
+            entry_capital += qty * price
         mark(price)
 
     ordered_bars = sorted(
@@ -192,13 +212,26 @@ def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | N
     realized_pnl = cashflow
     max_pnl = max(max_pnl, realized_pnl)
     min_pnl = min(min_pnl, realized_pnl)
+    realized_return_pct = (
+        realized_pnl / entry_capital * 100 if entry_capital > 1e-12 else None
+    )
+    if realized_return_pct is not None:
+        max_return_pct = max(max_return_pct, realized_return_pct)
+        min_return_pct = min(min_return_pct, realized_return_pct)
 
     net_pnl = float(trade.get("net_pnl") or 0)
     efficiency = None
     if net_pnl > 0 and realized_pnl > 0 and max_pnl > 1e-12:
         efficiency = max(0.0, min(100.0, realized_pnl / max_pnl * 100))
 
-    return efficiency, max_pnl, min_pnl
+    return (
+        efficiency,
+        max_pnl,
+        min_pnl,
+        max_return_pct,
+        min_return_pct,
+        realized_return_pct,
+    )
 
 
 def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str | None = None) -> dict:
@@ -292,8 +325,25 @@ def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str |
     efficiency = None
     path_max_pnl = None
     path_min_pnl = None
+    path_max_return_pct = None
+    path_min_return_pct = None
+    realized_return_pct = None
     if actual_instrument_path:
-        efficiency, path_max_pnl, path_min_pnl = _execution_path_efficiency(trade, held)
+        (
+            efficiency,
+            path_max_pnl,
+            path_min_pnl,
+            path_max_return_pct,
+            path_min_return_pct,
+            realized_return_pct,
+        ) = _execution_path_efficiency(trade, held)
+        # For stocks/options, Best/Worst Move is the actual position return path,
+        # not a first-fill price comparison. This is execution-aware for scale-ins
+        # and partial exits and guarantees the realized exit is part of the path.
+        mfe_pct = max(0.0, float(path_max_return_pct or 0.0))
+        mae_pct = max(0.0, -float(path_min_return_pct or 0.0))
+        if realized_return_pct is not None:
+            captured_pct = float(realized_return_pct)
 
     notes = {
         "stock_1m": "Stock excursion uses Alpaca 1-minute stock bars with actual Schwab fills as entry/exit anchors.",
@@ -317,5 +367,6 @@ def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str |
         "basis": basis,
         "bar_count": len(held),
         "resolution": "1Min",
+        "algorithm_version": EXCURSION_ALGORITHM_VERSION,
         "note": note,
     }
