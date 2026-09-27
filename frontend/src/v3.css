@@ -3926,6 +3926,16 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-measures-dashboard .v3-m-read b {
   font-weight: 700;
 }
+.v3-measures-dashboard .v3-m-read {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  min-height: 46px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
 @media (max-width: 1380px) {
   .v3-measures-dashboard {
     grid-template-columns: repeat(3, minmax(0, 1fr));
