@@ -17,7 +17,7 @@ jest.mock('./api', () => {
       { date: '2026-09-10', time: '09:54:10', action: 'BOT', qty: 200, price: 366.09, commission: 0 },
       { date: '2026-09-10', time: '10:08:24', action: 'SOLD', qty: 200, price: 367.07, commission: 1.55 },
     ],
-    setup: 'VWAP Reclaim', setup_grade: 'B', setup_notes: null, setup_source: 'manual',
+    setup: 'VWAP Reclaim', setup_notes: null, setup_source: 'manual',
     mfe_pct: 0.85, mae_pct: -0.27, exit_efficiency: 31.25, strategy: 'Test Strategy', r_multiple: 0.41,
   };
   const TRADE_2 = { ...TRADE, id: 102, trade_group: '9/10/26_META_STOCK_1', ticker: 'META', net_pnl: -50 };
@@ -454,7 +454,6 @@ test('Trade View surfaces option strategy, review status, excursion and planned 
       ],
       pl_pct: 38.13,
       strategy: 'LE E-Entry — 10m 8 EMA Retest + VWAP Reclaim',
-      setup_grade: 'A',
       emotional_state: 'Focused',
       entry_reason: 'Confirmed reclaim entry.',
       exit_reason: null,
@@ -475,8 +474,6 @@ test('Trade View surfaces option strategy, review status, excursion and planned 
 
   expect(await screen.findByText('QCOM')).toBeVisible();
   expect(screen.getByText(/LE E-Entry — 10m 8 EMA Retest/)).toBeVisible();
-  expect(screen.getByText('A')).toBeVisible();
-  expect(screen.getByText('Followed')).toBeVisible();
   expect(screen.getByText('+103.7')).toBeVisible();
   expect(screen.getByText('-72.2')).toBeVisible();
   expect(screen.getByText('71.8%')).toBeVisible();

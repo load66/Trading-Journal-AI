@@ -1332,12 +1332,11 @@ button.month-card:active { transform: translateY(1px); }
 .trade-view-table th:nth-child(1) { width: 96px; }
 .trade-view-table th:nth-child(2) { width: 108px; }
 .trade-view-table th:nth-child(3) { width: 104px; text-align: right; }
-.trade-view-table th:nth-child(4) { width: 392px; }
+.trade-view-table th:nth-child(4) { width: 500px; }
 .trade-view-table th:nth-child(5) { width: 104px; text-align: right; }
-.trade-view-table th:nth-child(6) { width: 108px; }
-.trade-view-table th:nth-child(7) { width: 126px; text-align: right; }
-.trade-view-table th:nth-child(8) { width: 92px; text-align: right; }
-.trade-view-table th:nth-child(9) { width: 32px; }
+.trade-view-table th:nth-child(6) { width: 126px; text-align: right; }
+.trade-view-table th:nth-child(7) { width: 92px; text-align: right; }
+.trade-view-table th:nth-child(8) { width: 32px; }
 
 .trade-view-row td {
   height: 66px;
@@ -1446,25 +1445,6 @@ button.month-card:active { transform: translateY(1px); }
   flex: 0 0 auto;
   font-size: 10px;
 }
-.trade-process-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 650;
-  white-space: nowrap;
-}
-.trade-process-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.trade-process-status.followed { color: var(--result-pos); }
-.trade-process-status.minor { color: var(--caution); }
-.trade-process-status.violation { color: var(--result-neg); }
-.trade-process-status.unscored { color: var(--text-tertiary); }
 .trade-excursion-col,
 .trade-exit-col,
 .trade-r-cell {

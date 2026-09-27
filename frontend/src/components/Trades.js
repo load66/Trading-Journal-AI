@@ -218,8 +218,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                 {sortTh('ticker', 'Trade')}
                 {sortTh('net_pnl', 'Result', 'num')}
                 <th>Setup</th>
-                <th className="num" title="Planned reward-to-risk. Realized R appears only when based on an explicit risk plan.">Plan</th>
-                <th title="Process adherence derived from setup grade.">Process</th>
+                <th className="num" title="Planned reward-to-risk with realized R underneath when available.">Plan</th>
                 <th title="Maximum favorable and adverse excursion while the trade was open.">Path</th>
                 <th title="Exit efficiency: share of covered favorable excursion retained at exit.">Exit</th>
                 <th><span className="sr-only">Open trade</span></th>
@@ -229,14 +228,14 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
               {loading ? (
                 [...Array(5)].map((_, i) => (
                   <tr key={i}>
-                    {[...Array(9)].map((_, j) => (
+                    {[...Array(8)].map((_, j) => (
                       <td key={j}><div className="skeleton" style={{ height: 16, width: '80%' }} /></td>
                     ))}
                   </tr>
                 ))
               ) : paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="empty">
+                  <td colSpan={8} className="empty">
                     No trades found. Import a CSV to get started.
                   </td>
                 </tr>

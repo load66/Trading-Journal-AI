@@ -39,86 +39,26 @@ function PLPercent({ trade }) {
   );
 }
 
-const GRADE_CLASS = {
-  'A++': 'pos', 'A+': 'pos', A: 'pos', B: 'pos',
-  C: 'caution', D: 'caution', F: 'text-faint',
-};
-
-const GRADE_MEANING = {
-  'A++': 'textbook execution',
-  'A+': 'excellent execution',
-  A: 'good execution, one minor slip',
-  B: 'solid, minor execution warnings',
-  C: 'one clear rule broken',
-  D: 'multiple rules broken',
-  F: 'no qualifying setup',
-};
-
-function SetupBadge({ setup, grade, notes, strategy }) {
+function SetupBadge({ setup, strategy }) {
   if (!setup || setup === 'NONE') {
-    if (!strategy) return <span className="text-faint">Not tagged</span>;
-    const gradeCls = GRADE_CLASS[grade] || 'text-muted';
-    return (
-      <span className="trade-setup-badge" title={strategy}>
-        <span className="trade-strategy-text">{strategy}</span>
-        {grade && (
-          <span className={`chip ${gradeCls === 'pos' ? 'pos' : gradeCls === 'caution' ? 'caution' : ''}`}>
-            {grade}
-          </span>
-        )}
-      </span>
-    );
+    return strategy
+      ? (
+        <span className="trade-setup-badge" title={strategy}>
+          <span className="trade-strategy-text">{strategy}</span>
+        </span>
+      )
+      : <span className="text-faint">Not tagged</span>;
   }
 
-  let violations = [];
-  try {
-    const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
-    violations = parsed?.violations || [];
-  } catch { /* malformed optional notes do not block the setup label */ }
-
-  const highs = violations.filter(v => v.severity === 'high').length;
-  const gradeCls = GRADE_CLASS[grade] || 'text-muted';
   const title = [
     `${setup} (playbook setup)`,
-    grade ? `Grade ${grade}${GRADE_MEANING[grade] ? `: ${GRADE_MEANING[grade]}` : ''}` : null,
     strategy ? `Strategy: ${strategy}` : null,
-    ...violations.map(v => `${v.severity === 'high' ? '✕' : '!'} ${v.msg}`),
   ].filter(Boolean).join('\n');
 
   return (
     <span className="trade-setup-badge" title={title}>
       <span>{setup}</span>
-      {grade && (
-        <span className={`chip ${gradeCls === 'pos' ? 'pos' : gradeCls === 'caution' ? 'caution' : ''}`}>
-          {grade}
-        </span>
-      )}
-      {highs > 0 && <span className="neg">✕{highs}</span>}
     </span>
-  );
-}
-
-function ProcessStatus({ trade }) {
-  const grade = String(trade.setup_grade || '').toUpperCase();
-  let label = 'Unscored';
-  let state = 'unscored';
-
-  if (['A++', 'A+', 'A'].includes(grade)) {
-    label = 'Followed';
-    state = 'followed';
-  } else if (grade === 'B') {
-    label = 'Minor drift';
-    state = 'minor';
-  } else if (['C', 'D', 'F'].includes(grade)) {
-    label = 'Violation';
-    state = 'violation';
-  }
-
-  return (
-    <div className={`trade-process-status ${state}`} title={grade ? `Process status derived from setup grade ${grade}.` : 'No setup grade yet.'}>
-      <span className="trade-process-dot" aria-hidden="true" />
-      <span>{label}</span>
-    </div>
   );
 }
 
@@ -188,8 +128,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
     const [saving, setSaving] = useState(false);
     const [local, setLocal] = useState({
       setup: rowTrade.setup,
-      grade: rowTrade.setup_grade,
-      notes: rowTrade.setup_notes,
       source: rowTrade.setup_source,
     });
 
@@ -199,8 +137,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
       return (
         <SetupBadge
           setup={null}
-          grade={rowTrade.setup_grade}
-          notes={rowTrade.setup_notes}
           strategy={rowTrade.strategy}
         />
       );
@@ -231,8 +167,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
         const { data } = await tradesApi.setSetup(rowTrade.id, value === '' ? null : value);
         setLocal({
           setup: data.setup,
-          grade: data.setup_grade !== undefined ? data.setup_grade : local.grade,
-          notes: null,
           source: data.setup_source,
         });
         setEditing(false);
@@ -283,8 +217,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
       >
         <SetupBadge
           setup={local.setup}
-          grade={local.grade}
-          notes={local.notes}
           strategy={rowTrade.strategy}
         />
         {local.source === 'manual' && <span className="text-faint trade-manual-mark" title="Manually tagged">✎</span>}
@@ -350,9 +282,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
         </div>
       </td>
 
-      <td className="trade-process-cell">
-        <ProcessStatus trade={trade} />
-      </td>
 
       <td className="trade-excursion-col"><ExcursionCell trade={trade} /></td>
       <td className="trade-exit-col"><ExitQuality trade={trade} /></td>
