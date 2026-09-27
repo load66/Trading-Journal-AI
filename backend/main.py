@@ -1110,7 +1110,13 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         raise ValueError(f"Account {data.account_id} not found")
 
     gross_pnl, net_pnl = compute_manual_pnl(
-        data.side, data.entry_price, data.exit_price, data.quantity, data.commissions
+        data.side,
+        data.entry_price,
+        data.exit_price,
+        data.quantity,
+        data.commissions,
+        data.instrument_type,
+        data.ticker,
     )
 
     # Build a manual trade group key
@@ -1171,8 +1177,10 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
 
     trade = row_to_dict(row)
     # Only update allowed fields
-    allowed = {'ticker', 'side', 'gross_pnl', 'net_pnl', 'commissions', 'date',
-               'instrument_type', 'option_expiry', 'option_strike', 'option_type'}
+    # Financial values are execution-derived and cannot be edited independently.
+    # Correct a fill through the execution editor so every surface stays reconciled.
+    allowed = {'ticker', 'side', 'date', 'instrument_type',
+               'option_expiry', 'option_strike', 'option_type'}
     updates = {k: v for k, v in data.items() if k in allowed}
 
     if trade.get('source') == 'imported':
@@ -1191,48 +1199,41 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
 
 
 def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
-    """Recalculate P&L from executions and persist. Returns updated trade row dict."""
-    side = trade['side']
-    instrument = trade['instrument_type']
-    ticker = trade['ticker']
+    """Recalculate execution-derived fields and invalidate dependent analytics."""
+    probe = dict(trade)
+    probe["executions"] = execs
+    financials = execution_financials(probe, execs)
+    if financials["multiplier"] is None:
+        raise HTTPException(status_code=422, detail=f"Unsupported futures multiplier for {trade.get('ticker') or 'symbol'}")
 
-    entry_fills = [e for e in execs if e['action'] == ('BOT' if side == 'LONG' else 'SOLD')]
-    exit_fills  = [e for e in execs if e['action'] == ('SOLD' if side == 'LONG' else 'BOT')]
+    side = str(trade.get("side") or "LONG").upper()
+    exit_action = "SOLD" if side == "LONG" else "BOT"
+    exit_fills = [e for e in execs if str(e.get("action") or "").upper() == exit_action]
 
-    entry_qty = sum(e['qty'] for e in entry_fills)
-    exit_qty  = sum(e['qty'] for e in exit_fills)
-    is_open   = (entry_qty != exit_qty) or exit_qty == 0
-
-    if is_open:
-        gross_pnl, net_pnl = 0.0, 0.0
-    else:
-        avg_entry = sum(e['qty'] * e['price'] for e in entry_fills) / entry_qty
-        avg_exit  = sum(e['qty'] * e['price'] for e in exit_fills)  / exit_qty
-        if instrument == 'OPTION':
-            multiplier = 100
-        elif instrument == 'FUTURE':
-            multiplier = next(
-                (v for k, v in FUTURES_MULTIPLIERS.items() if ticker.upper().startswith(k.upper())), 1
-            )
-        else:
-            multiplier = 1
-        gross_pnl = (avg_entry - avg_exit if side == 'SHORT' else avg_exit - avg_entry) * entry_qty * multiplier
-        commissions_total = sum(e.get('commission', 0) for e in execs)
-        net_pnl   = round(gross_pnl - commissions_total, 2)
-        gross_pnl = round(gross_pnl, 2)
-
-    commissions = round(sum(e.get('commission', 0) for e in execs), 2)
-
-    # Attribute closed trade to the last exit fill's date
-    trade_date = trade['date']
-    if not is_open and exit_fills:
-        sorted_exits = sorted(exit_fills, key=lambda e: (e.get('date', ''), e.get('time', '')))
-        trade_date = sorted_exits[-1].get('date', trade['date'])
+    old_date = str(trade.get("date") or "")
+    trade_date = old_date
+    if financials["closed"] and exit_fills:
+        sorted_exits = sorted(exit_fills, key=lambda e: (str(e.get("date") or old_date), str(e.get("time") or "")))
+        trade_date = str(sorted_exits[-1].get("date") or old_date)
 
     conn.execute(
-        "UPDATE trades SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=? WHERE id=?",
-        (json.dumps(execs), gross_pnl, net_pnl, commissions, trade_date, trade_id)
+        """UPDATE trades
+           SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=?,
+               mfe_pct=NULL, mae_pct=NULL, exit_efficiency=NULL,
+               excursion_basis=NULL, excursion_calculated_at=NULL, excursion_version=NULL
+           WHERE id=?""",
+        (
+            json.dumps(execs),
+            financials["gross_pnl"],
+            financials["net_pnl"],
+            financials["commissions"],
+            trade_date,
+            trade_id,
+        ),
     )
+    for day in {old_date, trade_date}:
+        if day:
+            conn.execute("DELETE FROM daily_summaries WHERE summary_date=?", (day,))
     conn.commit()
     return row_to_dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone())
 
