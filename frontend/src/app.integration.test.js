@@ -614,7 +614,11 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   await renderApp();
 
   expect(await screen.findByRole('heading', { name: /Trade management/i })).toBeVisible();
+  expect(screen.getByText('Total net P&L')).toBeVisible();
+  expect(screen.getByText(/How well do you manage trades after you enter/i)).toBeVisible();
   expect(screen.getByText('Profit capture')).toBeVisible();
+  expect(screen.getByText('ABOVE GOAL')).toBeVisible();
+  expect(screen.getAllByText('What it means:').length).toBeGreaterThanOrEqual(3);
   // The dense dashboard presents each decision-making value once. Repeating
   // headline P&L and capture percentages made the old view harder to scan.
   expect(screen.getAllByText('+$4340.34')).toHaveLength(1);
