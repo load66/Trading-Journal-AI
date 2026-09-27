@@ -3116,7 +3116,7 @@ def get_reports(
                t.instrument_type, t.executions, t.setup,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
                t.excursion_basis, t.excursion_version, t.excursion_calculated_at,
-               ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
+               ta.strategy, ta.r_multiple, ta.risk_per_trade, ta.emotional_state, ta.mistakes,
                ta.idea_source
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
@@ -3229,24 +3229,77 @@ def get_reports(
         else:
             cur = 0
 
-    # Tags per trade (strategy and source tags mirror their fields, so they are left out).
-    # A trade with several tags counts once under each of them.
-    tags_by_group = {}
-    for tr in conn.execute(
-        "SELECT DISTINCT trade_group, tag_type, tag_value FROM trade_tags "
-        "WHERE tag_type NOT IN ('strategy', 'source') AND TRIM(tag_value) <> ''"
-    ).fetchall():
-        tags_by_group.setdefault(tr['trade_group'], []).append((tr['tag_type'], tr['tag_value']))
+    # Structured context is authoritative, but the newer Tags workflow can
+    # explicitly record setup/source/strategy/emotion when the legacy structured
+    # field is empty. Use one manual-first fallback label for the single-value
+    # report dimensions, while preserving every tag in the multi-tag breakdown.
+    tags_by_group: dict[str, list[tuple[str, str]]] = {}
+    fallback_context: dict[str, dict[str, str]] = {}
+    tag_rows = conn.execute(
+        """SELECT id, trade_group, tag_type, tag_value, source
+           FROM trade_tags
+           WHERE TRIM(tag_value) <> ''
+           ORDER BY CASE WHEN source='manual' THEN 0 ELSE 1 END, id"""
+    ).fetchall()
+    for tr in tag_rows:
+        group = str(tr['trade_group'] or '')
+        tag_type = str(tr['tag_type'] or '').lower().strip()
+        value = _edge_clean_label(tr['tag_value'])
+        if not group or not tag_type or not value:
+            continue
+        tags_by_group.setdefault(group, []).append((tag_type, value))
+        if tag_type in {'strategy', 'source', 'setup', 'emotion'}:
+            fallback_context.setdefault(group, {}).setdefault(tag_type, value)
+
+    for r in raw:
+        group = str(r.get('trade_group') or '')
+        fallback = fallback_context.get(group, {})
+        r['_setup_label'] = _edge_clean_label(r.get('setup')) or fallback.get('setup')
+        r['_strategy_label'] = _edge_clean_label(r.get('strategy')) or fallback.get('strategy')
+        r['_source_label'] = _edge_clean_label(r.get('idea_source')) or fallback.get('source')
+        r['_emotion_label'] = _edge_clean_label(r.get('emotional_state')) or fallback.get('emotion')
+
+    # A trade with several tags counts once under each tag. This is intentionally
+    # different from the single-value dimensions above.
     by_tag = {}
+    tag_trade_counts = {}
     for tag_type in ('setup', 'execution', 'mistake', 'emotion', 'outcome'):
         rows_for_type = [
             dict(r, _tag=value)
             for r in raw
-            for (t, value) in tags_by_group.get(r['trade_group'], [])
+            for (t, value) in tags_by_group.get(str(r['trade_group']), [])
             if t == tag_type
         ]
+        tag_trade_counts[tag_type] = len({str(r['trade_group']) for r in rows_for_type})
         if rows_for_type:
             by_tag[tag_type] = _bucket_stats(rows_for_type, lambda r: r['_tag'])
+
+    total_trades = len(raw)
+    def coverage_count(field):
+        return sum(1 for r in raw if r.get(field))
+
+    realized_r_count = sum(
+        1 for r in raw
+        if r.get('r_multiple') is not None
+        or (r.get('risk_per_trade') is not None and float(r.get('risk_per_trade') or 0) > 0)
+    )
+    coverage = {
+        "total_trades": total_trades,
+        "setup": coverage_count('_setup_label'),
+        "strategy": coverage_count('_strategy_label'),
+        "source": coverage_count('_source_label'),
+        "emotion": coverage_count('_emotion_label'),
+        "setup_context": tag_trade_counts.get('setup', 0),
+        "execution_tags": tag_trade_counts.get('execution', 0),
+        "mistake_tags": tag_trade_counts.get('mistake', 0),
+        "outcome_tags": tag_trade_counts.get('outcome', 0),
+        "entry_time": sum(1 for r in raw if r.get('entry_min') is not None),
+        "hold_time": sum(1 for r in raw if r.get('hold_min') is not None),
+        "management": sum(1 for r in raw if r.get('n_exits', 0) > 0),
+        "realized_r": realized_r_count,
+        "mfe_mae": sum(1 for r in raw if r.get('mfe_pct') is not None and r.get('mae_pct') is not None),
+        "exit_efficiency": sum(1 for r in raw if r.get('exit_efficiency') is not None),
+    }
 
     day_pnls = list(by_day.values())
     green = [p for p in day_pnls if p > 0]
@@ -3278,16 +3331,20 @@ def get_reports(
         "by_hold_time": _ordered(_bucket_stats(raw, hold_bucket), _HOLD_ORDER),
         "by_month": sorted(_bucket_stats(raw, lambda r: r['date'][:7]),
                            key=lambda b: b['key']),
-        "by_setup": _bucket_stats(raw, lambda r: r['setup'],
+        "by_setup": _bucket_stats(raw, lambda r: r['_setup_label'],
                                   lambda k: _SETUP_LABEL_MAP.get(k, k)),
-        "by_strategy": _bucket_stats(raw, lambda r: r['strategy']),
-        "by_symbol": _bucket_stats(raw, lambda r: r['ticker'])[:40],
+        "by_strategy": _bucket_stats(raw, lambda r: r['_strategy_label']),
+        "by_symbol": sorted(
+            _bucket_stats(raw, lambda r: r['ticker']),
+            key=lambda b: (-b['net_pnl'], -b['trades'], b['label'])
+        )[:40],
         "by_side": _bucket_stats(raw, lambda r: r['side']),
         "by_instrument": _bucket_stats(raw, lambda r: r['instrument_type']),
         "by_management": _bucket_stats(raw, management_bucket),
-        "by_emotion": _bucket_stats(raw, lambda r: r['emotional_state']),
-        "by_source": _bucket_stats(raw, lambda r: r['idea_source']),
+        "by_emotion": _bucket_stats(raw, lambda r: r['_emotion_label']),
+        "by_source": _bucket_stats(raw, lambda r: r['_source_label']),
         "by_tag": by_tag,
+        "coverage": coverage,
     }
 
 
@@ -3300,7 +3357,7 @@ def get_edge_report(
 ):
     sql = """
         SELECT t.trade_group, t.ticker, t.side, t.net_pnl, t.date, t.executions,
-               ta.r_multiple, ta.emotional_state, ta.mistakes
+               ta.r_multiple, ta.risk_per_trade, ta.emotional_state, ta.mistakes
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
         WHERE 1=1
@@ -3384,10 +3441,23 @@ def get_edge_report(
     for i in range(-7, 8):
         r_bucket_counts[round(i * 0.5, 1)] = 0
 
-    EMOTIONS = ["calm", "anxious", "overconfident", "disciplined", "frustrated", "revenge"]
-    emo_data: dict[str, dict] = {
-        e: {"count": 0, "wins": 0, "total_pnl": 0.0, "r_vals": []} for e in EMOTIONS
-    }
+    # Preserve any recorded emotion instead of silently dropping values that are
+    # not in an old hard-coded list (for example "Focused"). Explicit emotion
+    # tags are a fallback when the structured analysis field is blank.
+    trade_groups = {str(t.get("trade_group") or "") for t in trades if t.get("trade_group")}
+    emotion_tag_by_group: dict[str, str] = {}
+    if trade_groups:
+        for row in conn.execute(
+            """SELECT id, trade_group, tag_value, source
+               FROM trade_tags
+               WHERE lower(tag_type)='emotion' AND TRIM(tag_value) <> ''
+               ORDER BY CASE WHEN source='manual' THEN 0 ELSE 1 END, id"""
+        ).fetchall():
+            group = str(row["trade_group"] or "")
+            if group in trade_groups:
+                emotion_tag_by_group.setdefault(group, _edge_clean_label(row["tag_value"]))
+
+    emo_data: dict[str, dict] = {}
 
     for trade in trades:
         pnl = trade.get("net_pnl") or 0.0
@@ -3425,8 +3495,17 @@ def get_edge_report(
             elif pnl < 0:
                 loser_hold.append(hold)
 
-        # R-multiple distribution
+        # R-multiple distribution. Prefer explicitly recorded R; when it is
+        # absent, derive realized R from the saved planned-risk basis.
         r = trade.get("r_multiple")
+        if r is None:
+            risk = trade.get("risk_per_trade")
+            try:
+                risk = float(risk) if risk is not None else None
+            except (TypeError, ValueError):
+                risk = None
+            if risk and risk > 0:
+                r = float(pnl) / risk
         if r is not None:
             r_clipped = max(-3.5, min(3.5, float(r)))
             bucket_key = round(round(r_clipped * 2) / 2, 1)
@@ -3437,14 +3516,19 @@ def get_edge_report(
                 r_bucket_counts[closest] += 1
 
         # Emotion outcomes
-        emo = (trade.get("emotional_state") or "").lower().strip()
-        if emo in emo_data:
-            emo_data[emo]["count"] += 1
-            emo_data[emo]["total_pnl"] += pnl
+        group = str(trade.get("trade_group") or "")
+        emo = _edge_clean_label(trade.get("emotional_state")) or emotion_tag_by_group.get(group)
+        if emo:
+            d = emo_data.setdefault(
+                emo,
+                {"count": 0, "wins": 0, "total_pnl": 0.0, "r_vals": []},
+            )
+            d["count"] += 1
+            d["total_pnl"] += pnl
             if pnl > 0:
-                emo_data[emo]["wins"] += 1
+                d["wins"] += 1
             if r is not None:
-                emo_data[emo]["r_vals"].append(float(r))
+                d["r_vals"].append(float(r))
 
     time_of_day = [
         {"bucket": b, "net_pnl": round(bucket_pnl[b], 2), "trade_count": bucket_counts[b]}
@@ -3459,10 +3543,10 @@ def get_edge_report(
         for k, v in sorted(r_bucket_counts.items())
     ]
     emotion_outcomes = []
-    for emo in EMOTIONS:
-        d = emo_data[emo]
-        if d["count"] == 0:
-            continue
+    for emo, d in sorted(
+        emo_data.items(),
+        key=lambda item: (-item[1]["count"], item[0].lower()),
+    ):
         r_vals = d["r_vals"]
         emotion_outcomes.append({
             "state": emo,
@@ -3506,6 +3590,11 @@ def get_edge_report(
         "mistake_frequency": mistake_freq,
         "expectancy": er_expectancy,
         "total_trades": total_er,
+        "coverage": {
+            "realized_r": sum(d["count"] for d in r_multiple_dist if d["count"] > 0),
+            "emotion": sum(d["trade_count"] for d in emotion_outcomes),
+            "hold_time": hold_n,
+        },
     }
 
 
