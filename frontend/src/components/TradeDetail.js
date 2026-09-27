@@ -2193,41 +2193,16 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             alignItems: 'center',
             justifyContent: 'center',
             boxSizing: 'border-box',
-            padding: '64px 72px 48px',
-            background: 'rgba(0, 7, 12, 0.94)',
-            cursor: 'zoom-out',
           }}
         >
           {chartScreenshotUrl && (
             <img
               src={chartScreenshotUrl}
               alt={`${trade.ticker} TradingView review screenshot full screen`}
-              style={{
-                display: 'block',
-                width: 'auto',
-                height: 'auto',
-                maxWidth: '94vw',
-                maxHeight: '88vh',
-                margin: 'auto',
-                objectFit: 'contain',
-                borderRadius: 10,
-                background: '#020c13',
-                boxShadow: '0 30px 100px rgba(0, 0, 0, 0.58)',
-                cursor: 'default',
-              }}
             />
           )}
         </div>
-        <div
-          className="td-image-modal-hint"
-          style={{
-            position: 'fixed',
-            top: 20,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 2,
-          }}
-        >
+        <div className="td-image-modal-hint">
           Click outside the chart or press Esc to close
         </div>
         <button
@@ -2235,19 +2210,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           className="td-image-modal-close"
           aria-label="Close screenshot"
           onClick={closeChartScreenshot}
-          style={{
-            position: 'fixed',
-            top: 20,
-            right: 24,
-            zIndex: 2,
-            width: 44,
-            height: 44,
-            display: 'grid',
-            placeItems: 'center',
-            padding: 0,
-            borderRadius: '50%',
-            cursor: 'pointer',
-          }}
         >
           ×
         </button>
