@@ -1618,6 +1618,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   className="td-chart-preview"
                   onClick={() => setChartScreenshotExpanded(true)}
                   title="Open screenshot full screen"
+                  aria-label="Open chart screenshot full screen"
                   aria-haspopup="dialog"
                   style={{
                     width: 800,
@@ -1636,7 +1637,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       objectFit: 'contain',
                     }}
                   />
-                  <span><Maximize2 size={13} /> Open full screen</span>
                 </button>
                 <div
                   className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
