@@ -454,6 +454,7 @@ test('Trade View surfaces option strategy, review status, excursion and planned 
       ],
       pl_pct: 38.13,
       strategy: 'LE E-Entry — 10m 8 EMA Retest + VWAP Reclaim',
+      setup_grade: 'A',
       emotional_state: 'Focused',
       entry_reason: 'Confirmed reclaim entry.',
       exit_reason: null,
@@ -474,10 +475,13 @@ test('Trade View surfaces option strategy, review status, excursion and planned 
 
   expect(await screen.findByText('QCOM')).toBeVisible();
   expect(screen.getByText(/LE E-Entry — 10m 8 EMA Retest/)).toBeVisible();
-  expect(screen.getByText('2/3 documented')).toBeVisible();
-  expect(screen.getByText('Held first trim too long.')).toBeVisible();
-  expect(screen.getByText('+103.7%')).toBeVisible();
-  expect(screen.getByText('-72.2%')).toBeVisible();
+  expect(screen.getByText('A')).toBeVisible();
+  expect(screen.getByText('Followed')).toBeVisible();
+  expect(screen.getByRole('img', { name: /2\/3 review fields documented/ })).toBeVisible();
+  expect(screen.queryByText('2/3 documented')).not.toBeInTheDocument();
+  expect(screen.queryByText('Held first trim too long.')).not.toBeInTheDocument();
+  expect(screen.getByText('+103.7')).toBeVisible();
+  expect(screen.getByText('-72.2')).toBeVisible();
   expect(screen.getByText('71.8%')).toBeVisible();
   expect(screen.getByText('1:3.54')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Set R:R' })).not.toBeInTheDocument();
@@ -502,7 +506,7 @@ test('Trade View surfaces option strategy, review status, excursion and planned 
   expect(stopDistanceInput).toBeVisible();
   expect(screen.getByLabelText('Target Distance ($)')).toBeVisible();
   expect(screen.getByText(/Planned R:R:/)).toBeVisible();
-  expect(screen.getByLabelText('Planned Risk ($)')).toHaveValue(540);
+  expect(screen.getByLabelText('Max Premium Risk ($)')).toHaveValue(540);
   expect(screen.getByText(/Auto-filled from total entry premium:/)).toBeVisible();
   expect(stopDistanceInput).toHaveValue(1.17);
 });
