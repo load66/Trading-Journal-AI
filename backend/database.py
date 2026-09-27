@@ -11,7 +11,8 @@ from config import Settings
 
 load_dotenv()
 
-APPLICATION_SCHEMA_VERSION = '20260927_005_excursion_engine_version'
+APPLICATION_SCHEMA_VERSION = '20260927_006_mixed_trading_account_type'
+ACCOUNTS_MIXED_TYPE_MIGRATION_ID = '016_accounts_mixed_trading_type'
 
 
 class DBAPIRow(Mapping[str, Any]):
@@ -184,7 +185,7 @@ SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('day_trading','swing_trading','investment')),
+        type TEXT NOT NULL CHECK(type IN ('day_trading','swing_trading','mixed_trading','investment')),
         color TEXT NOT NULL DEFAULT '#6366f1',
         broker TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -366,6 +367,47 @@ def _column_names(conn, table: str) -> set[str]:
     return columns
 
 
+def _apply_accounts_mixed_type_migration(conn) -> None:
+    """Expand the SQLite account-type CHECK without losing account references."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts'"
+    ).fetchone()
+    table_sql = str(row['sql'] if row is not None else '')
+
+    conn.commit()
+    conn.execute('PRAGMA foreign_keys=OFF')
+    try:
+        conn.execute('BEGIN')
+        if table_sql and "'mixed_trading'" not in table_sql:
+            conn.execute("""CREATE TABLE accounts_mixed_type_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL CHECK(type IN ('day_trading','swing_trading','mixed_trading','investment')),
+                color TEXT NOT NULL DEFAULT '#6366f1',
+                broker TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )""")
+            conn.execute("""INSERT INTO accounts_mixed_type_new
+                (id, name, type, color, broker, created_at)
+                SELECT id, name, type, color, broker, created_at FROM accounts""")
+            conn.execute('DROP TABLE accounts')
+            conn.execute('ALTER TABLE accounts_mixed_type_new RENAME TO accounts')
+
+        conn.execute(
+            'INSERT INTO schema_migrations (migration_id) VALUES (?)',
+            (ACCOUNTS_MIXED_TYPE_MIGRATION_ID,),
+        )
+        violations = conn.execute('PRAGMA foreign_key_check').fetchall()
+        if violations:
+            raise sqlite3.IntegrityError('Account type migration introduced foreign-key violations')
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys=ON')
+
+
 def apply_migrations(conn) -> None:
     conn.execute("""CREATE TABLE IF NOT EXISTS schema_migrations (
         migration_id TEXT PRIMARY KEY,
@@ -376,6 +418,9 @@ def apply_migrations(conn) -> None:
         row[0]
         for row in conn.execute('SELECT migration_id FROM schema_migrations').fetchall()
     }
+    if ACCOUNTS_MIXED_TYPE_MIGRATION_ID not in applied:
+        _apply_accounts_mixed_type_migration(conn)
+        applied.add(ACCOUNTS_MIXED_TYPE_MIGRATION_ID)
     for migration in MIGRATIONS:
         if migration.migration_id in applied:
             continue
