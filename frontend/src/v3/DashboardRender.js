@@ -225,6 +225,11 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const captureEvidence = captureN + '/' + captureWinnerTotal + ' winning trades · ' + captureCoverage.toFixed(0) + '% coverage · ' + captureConfidence;
   const riskEvidence = excursionN + '/' + totalTrades + ' trades · ' + managementCoverage.toFixed(0) + '% coverage · ' + excursionConfidence;
   const holdEvidence = holdN + '/' + totalTrades + ' trades · ' + holdCoverage.toFixed(0) + '% broker timestamp coverage';
+  const bottomTone = holdLeak
+    ? 'bad'
+    : (!captureUsable && !riskUsable) || captureConfidence === 'DEVELOPING' || excursionConfidence === 'DEVELOPING'
+      ? 'caution'
+      : 'good';
 
   return (
     <div className="v3-ref-management">
@@ -374,7 +379,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <div className="v3-ref-evidence-line">{riskEvidence}</div>
 
           <div className="v3-ref-risk-notes">
-            <p className={riskUsable && !riskLeak ? 'good' : 'bad'}><span>{riskUsable && !riskLeak ? '✓' : '!'}</span> {riskSummary}</p>
+            <p className={!riskUsable ? 'neutral' : riskLeak ? 'bad' : 'good'}><span>{riskUsable && !riskLeak ? '✓' : '!'}</span> {riskSummary}</p>
             <p className="good"><span>✓</span> Realized P&amp;L and fills remain broker-authoritative.</p>
           </div>
         </article>
@@ -390,7 +395,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           </div>
         </div>
         <div className="v3-ref-bottom-copy">
-          <span className="v3-ref-bottom-check">✓</span>
+          <span className={'v3-ref-bottom-check ' + bottomTone}>{bottomTone === 'good' ? '✓' : '!'}</span>
           <p>{bottomCopy}</p>
         </div>
       </div>
