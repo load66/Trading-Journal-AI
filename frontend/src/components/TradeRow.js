@@ -80,6 +80,7 @@ function ExcursionCell({ trade }) {
 }
 
 function ExitQuality({ trade }) {
+  if (Number(trade.net_pnl || 0) <= 0) return <span className="text-faint">—</span>;
   const value = Number(trade.exit_efficiency);
   if (!Number.isFinite(value)) return <span className="text-faint">—</span>;
   const cls = value >= 60 ? 'pos' : value >= 35 ? 'caution' : 'neg';
