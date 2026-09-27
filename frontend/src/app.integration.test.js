@@ -656,8 +656,8 @@ test('Risk During Trade turns winner-vs-loser excursion into actionable coaching
   await renderApp();
 
   expect(await screen.findByText(/Main improvement: tighten entry quality and invalidate failed trades sooner/i)).toBeVisible();
-  expect(screen.getByText(/Loser median heat is -33\.8% vs\. -14\.6% for winners/i)).toBeVisible();
-  expect(screen.getByText(/67% of losers never reach \+5% MFE/i)).toBeVisible();
+  expect(screen.getByText(/Typical winner: \+22\.9% MFE \/ -14\.6% MAE\. Typical loser: \+0\.9% MFE \/ -33\.8% MAE/i)).toBeVisible();
+  expect(screen.getByText(/67% of losers never reach \+5% MFE, 72% never reach \+10%, and 67% reach at least -25% MAE/i)).toBeVisible();
   expect(screen.getByText(/41% of winners exceeded -20% MAE, so avoid a blanket -20% stop/i)).toBeVisible();
   expect(screen.queryByText(/Mean and median excursion disagree/i)).not.toBeInTheDocument();
 });
