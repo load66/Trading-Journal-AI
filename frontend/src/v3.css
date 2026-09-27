@@ -3272,3 +3272,185 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   .v3-ref-bottom-line { grid-template-columns: 1fr; }
   .v3-ref-bottom-label { border-right: 0; border-bottom: 1px solid rgba(27, 105, 146, .35); }
 }
+
+
+/* ---------- readability: Smoking Gun + calendar ---------- */
+/* Keep the compact dashboard hierarchy, but make the saved audit comfortable
+   to read at normal desktop viewing distance. */
+.v3-smoking-band .v3-h {
+  font-size: 20px;
+  line-height: 1.2;
+}
+.v3-smoking-band .v3-h-sub {
+  margin-top: 5px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.v3-smoking-summary-head {
+  margin-bottom: 10px;
+}
+.v3-smoking-clean {
+  gap: 10px;
+}
+.v3-smoking-clean > article {
+  padding: 14px 15px;
+}
+.v3-smoking-panel-title {
+  gap: 11px;
+}
+.v3-smoking-panel-title > svg {
+  width: 19px;
+  height: 19px;
+}
+.v3-smoking-panel-title .v3-lab {
+  font-size: 11.5px;
+  letter-spacing: .13em;
+}
+.v3-smoking-panel-title strong {
+  margin-top: 5px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.v3-diagnosis-rows,
+.v3-action-plan-list {
+  margin-top: 12px;
+}
+.v3-diagnosis-row {
+  grid-template-columns: 138px minmax(0, 1fr);
+  gap: 14px;
+  padding: 11px 12px;
+}
+.v3-diagnosis-row > span {
+  font-size: 10px;
+  line-height: 1.4;
+}
+.v3-diagnosis-row p {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.v3-action-plan-list {
+  gap: 7px;
+}
+.v3-action-plan-list li {
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 11px;
+  padding: 10px 12px;
+}
+.v3-action-plan-list li > b {
+  width: 25px;
+  height: 25px;
+  font-size: 10px;
+}
+.v3-action-plan-list li strong {
+  font-size: 12.25px;
+  line-height: 1.42;
+}
+.v3-action-plan-list li p,
+.v3-smoking-empty-copy {
+  margin-top: 5px;
+  font-size: 10.75px;
+  line-height: 1.5;
+}
+.v3-smoking-band .v3-evidence {
+  font-size: 9px;
+}
+.v3-smoking-band .btn-sm {
+  min-height: 30px;
+  font-size: 11px;
+}
+
+/* Give the calendar a little more visual weight without changing its role. */
+@media (min-width: 1261px) {
+  .v3-dashboard-core {
+    grid-template-columns: minmax(0, 1fr) minmax(420px, 470px);
+  }
+}
+.v3-dashboard-side .v3-side-section {
+  padding: 17px 16px 19px;
+}
+.v3-dashboard-side .v3-cal-month {
+  font-size: 24px;
+}
+.v3-dashboard-side .v3-cal-tot {
+  font-size: 12.5px;
+}
+.v3-dashboard-side .v3-cal-tot b {
+  font-size: 19px;
+}
+.v3-dashboard-side .v3-cal-five {
+  grid-auto-rows: minmax(72px, 1fr);
+}
+.v3-dashboard-side .v3-day {
+  min-height: 72px;
+  padding: 9px 9px 10px;
+}
+.v3-dashboard-side .v3-day .d {
+  font-size: 11px;
+}
+.v3-dashboard-side .v3-day .v {
+  font-size: 17px;
+}
+.v3-dashboard-side .v3-day .c {
+  font-size: 10px;
+  line-height: 1.3;
+}
+.v3-dashboard-side .v3-dow {
+  font-size: 10px;
+}
+
+@media (min-width: 1121px) and (max-width: 1260px) {
+  .v3-dashboard-core {
+    grid-template-columns: minmax(0, 1fr) minmax(385px, 420px);
+  }
+  .v3-dashboard-side .v3-cal-five {
+    grid-auto-rows: minmax(68px, 1fr);
+  }
+  .v3-dashboard-side .v3-day {
+    min-height: 68px;
+  }
+}
+
+@media (max-width: 760px) {
+  .v3-smoking-band .v3-h {
+    font-size: 18px;
+  }
+  .v3-smoking-band .v3-h-sub {
+    font-size: 11.5px;
+  }
+  .v3-smoking-clean > article {
+    padding: 13px 12px;
+  }
+  .v3-smoking-panel-title strong {
+    font-size: 12.5px;
+  }
+  .v3-diagnosis-row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  .v3-diagnosis-row p {
+    font-size: 11.5px;
+  }
+  .v3-action-plan-list li strong {
+    font-size: 11.75px;
+  }
+  .v3-action-plan-list li p,
+  .v3-smoking-empty-copy {
+    font-size: 10.5px;
+  }
+}
+
+@media (max-width: 600px) {
+  .v3-dashboard-side .v3-cal-five {
+    grid-auto-rows: minmax(62px, 1fr);
+  }
+  .v3-dashboard-side .v3-day {
+    min-height: 62px;
+    padding: 7px 6px 8px;
+  }
+  .v3-dashboard-side .v3-day .v {
+    font-size: 15px;
+  }
+  .v3-dashboard-side .v3-day .c {
+    font-size: 8.5px;
+  }
+}
