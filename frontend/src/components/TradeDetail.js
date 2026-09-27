@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, BookOpen, ClipboardCheck, FileText, ShieldCheck } from 'lucide-react';
 import { tradesApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
@@ -238,13 +238,13 @@ function QuickPickGroup({ title, subtitle, suggestions, value, onToggle, tone = 
   );
 }
 
-function TradeReviewSummary({ trade, entryReason, exitReason, mistakes }) {
-  const completion = reviewCompletion(entryReason, exitReason, mistakes);
+function TradeReviewSummary({ trade, entryReason, exitReason, mistakes, notes }) {
+  const completion = reviewCompletion(entryReason, exitReason, mistakes, notes);
   const selectedMistakes = selectedSuggestions(mistakes, MISTAKE_REVIEW_SUGGESTIONS);
   const primary = selectedMistakes[0] || null;
   const pnl = Number(trade?.net_pnl || 0);
 
-  const fallbackFocus = completion < 3
+  const fallbackFocus = completion < 4
     ? 'Complete the entry, exit, and mistake review so this trade can contribute to your pattern analysis.'
     : pnl < 0
       ? 'Convert the loss into one specific rule you can recognize and execute earlier next time.'
@@ -256,10 +256,10 @@ function TradeReviewSummary({ trade, entryReason, exitReason, mistakes }) {
         <div className="trade-review-summary-icon"><Target size={19} /></div>
         <div>
           <div className="trade-review-summary-title">Review summary</div>
-          <div className="trade-review-summary-subtitle">{completion}/3 review areas documented</div>
+          <div className="trade-review-summary-subtitle">{completion}/4 review areas documented</div>
         </div>
         <div className={`trade-review-completion c${completion}`}>
-          {completion === 3 ? 'Complete' : 'In progress'}
+          {completion === 4 ? 'Complete' : 'In progress'}
         </div>
       </div>
 
@@ -267,7 +267,7 @@ function TradeReviewSummary({ trade, entryReason, exitReason, mistakes }) {
         <div className="trade-review-summary-cell">
           <span>Primary improvement</span>
           <strong className={primary ? 'neg' : ''}>
-            {primary ? primary.label : completion === 3 ? 'No tagged rule violation' : 'Finish the review'}
+            {primary ? primary.label : completion === 4 ? 'No tagged rule violation' : 'Finish the review'}
           </strong>
           {primary && <small>{primary.category} execution</small>}
         </div>
@@ -336,6 +336,206 @@ const MISTAKE_REVIEW_SUGGESTIONS = [
   { label: 'Overtraded', category: 'Discipline', text: 'Took an extra trade that did not meet the normal quality threshold.', correction: 'Respect the daily trade limit and only take qualified setups.' },
 ];
 
+const REVIEW_TEMPLATES = [
+  {
+    id: 'le-complete',
+    title: 'LE Complete Review',
+    badge: 'Full playbook',
+    description: 'The complete LE workflow: setup, 13-point pre-trade audit, plan vs. execution, 3-2-1 management, psychology, and the five journal questions.',
+    icon: 'book',
+  },
+  {
+    id: 'le-quick',
+    title: 'LE Quick Review',
+    badge: 'Fast recap',
+    description: 'A compact LE recap for routine trades: Flag + Line + Sign, plan, management, rule breaks, and one next-trade lesson.',
+    icon: 'check',
+  },
+];
+
+function journalMoney(value) {
+  if (value == null || value === '' || !Number.isFinite(Number(value))) return '—';
+  return `$${Number(value).toFixed(2)}`;
+}
+
+function journalRr(analysis) {
+  const stop = Number(analysis?.stop_loss);
+  const target = Number(analysis?.target_price);
+  if (!(stop > 0) || !(target > 0)) return '—';
+  return `1:${(target / stop).toFixed(2)}`;
+}
+
+function buildLeCompleteReviewTemplate(trade, analysis) {
+  const s = computeStats(trade);
+  const setup = analysis?.strategy || '[L / E / Purple Profits / Other]';
+  const risk = analysis?.risk_per_trade ? journalMoney(analysis.risk_per_trade) : '[planned $ risk]';
+  const result = trade?.net_pnl == null ? '—' : fmtSigned$(trade.net_pnl);
+  return [
+    `LE COMPLETE TRADE REVIEW · ${trade?.ticker || 'TRADE'} · ${trade?.date || ''}`,
+    '',
+    '01 · SETUP + MARKET CONTEXT',
+    `Direction: ${trade?.side || '—'}    Strategy: ${setup}`,
+    'LE entry type: [L level retest / E EMA retest / Purple Profits / other]',
+    'Key level in play: [PDH / PDL / PMH / PML / other]',
+    'Flag quality / pullback structure: ',
+    'SPY + QQQ confirmation: ',
+    'VIX / volatility context: ',
+    'Trading window: [9:40–11:30 prime / 11:30–1:30 chop exception / 1:30–3:00 selective]',
+    'Trade thesis — what had to happen for this trade to work? ',
+    '',
+    '02 · 13-POINT LE PRE-TRADE AUDIT — mark [x] or [ ]',
+    '[ ] A key level was clearly broken with a close, not only a wick',
+    '[ ] Trend was established after the level break',
+    '[ ] Price was aligned with the 10-minute 8 EMA',
+    '[ ] Price was snug to the 8 EMA, not extended / airgapped',
+    '[ ] SPY and QQQ confirmed the same direction',
+    '[ ] A flag / consolidation / controlled pullback formed',
+    '[ ] Hard stop was entered before the trade',
+    '[ ] Position size matched the planned risk',
+    '[ ] Realistic reward-to-risk was at least 2:1',
+    '[ ] Daily trade count and the two-red rule allowed another trade',
+    '[ ] Entry was not a HOD / LOD chase',
+    '[ ] Entry was outside chop hour, or I had a specific A+ exception',
+    '[ ] VIX was checked and size was reduced when volatility was elevated',
+    '',
+    '03 · PLAN VS. EXECUTION',
+    `Average entry: ${journalMoney(s.avgEntry)}`,
+    `Stop distance recorded: ${journalMoney(analysis?.stop_loss)}`,
+    `Target distance recorded: ${journalMoney(analysis?.target_price)}`,
+    `Planned R:R: ${journalRr(analysis)}    Planned risk: ${risk}`,
+    `Result: ${result}    Hold time: ${s.fmtHold(s.holdMinutes)}`,
+    'Stop reference used: [previous 10m candle / setup candle / level / other]',
+    'Did I enter where the setup called for it, or did I anticipate / chase? ',
+    'Did I honor the original hard stop without widening it? ',
+    '',
+    '04 · MANAGEMENT + EXIT',
+    '[ ] Took the first trim at the planned target / next key level',
+    '[ ] Scaled out instead of dumping the full position at once',
+    '[ ] Moved the runner stop to break-even after the planned trim',
+    '[ ] Managed the runner against the 10-minute 8 EMA',
+    '[ ] Used 30-minute structure as hold confirmation when relevant',
+    '[ ] Never widened the stop to give the trade more room',
+    'What specifically triggered my exit? ',
+    'What did the 10-minute 8 EMA do after I exited? ',
+    'Would the runner have paid if I followed the plan exactly? ',
+    '',
+    '05 · RULE + PSYCHOLOGY REVIEW',
+    'Emotion before entry: ',
+    'Emotion while managing: ',
+    'Rule broken, if any: ',
+    'Was this a system trade or an impulse / revenge / FOMO trade? ',
+    'Did I focus on chart structure, or did P&L influence my decisions? ',
+    '',
+    '06 · LE END-OF-TRADE JOURNAL',
+    '1. What setup did I take, and did Flag + Line + Sign truly align? ',
+    '2. What were my entry, stop, and target, and did I follow that plan? ',
+    '3. Did I exit too early, and what happened around the 8 EMA afterward? ',
+    '4. Which rule did I break, if any, and what caused the break? ',
+    '5. What specific lesson will I apply to the next trade? ',
+    '',
+    'NEXT-TRADE RULE',
+    'One sentence I can execute next time: ',
+  ].join('\n');
+}
+
+function buildLeQuickReviewTemplate(trade, analysis) {
+  const s = computeStats(trade);
+  return [
+    `LE QUICK REVIEW · ${trade?.ticker || 'TRADE'} · ${trade?.date || ''}`,
+    '',
+    `Setup: ${analysis?.strategy || '[L / E / Purple Profits / Other]'}`,
+    'Flag: [pass / fail] — ',
+    'Line (key level): [pass / fail] — ',
+    'Sign (SPY/QQQ + 10m 8 EMA): [pass / fail] — ',
+    'Entry quality: [snug / early / chased / ideal] — ',
+    `Plan: stop ${journalMoney(analysis?.stop_loss)} · target ${journalMoney(analysis?.target_price)} · R:R ${journalRr(analysis)}`,
+    `Result: ${trade?.net_pnl == null ? '—' : fmtSigned$(trade.net_pnl)} · Hold ${s.fmtHold(s.holdMinutes)}`,
+    'Management: [trim / break-even / runner / 8 EMA exit] — ',
+    'Rule break or emotion: ',
+    'Best decision: ',
+    'One improvement: ',
+    'Next-trade rule: ',
+  ].join('\n');
+}
+
+function buildReviewTemplate(templateId, trade, analysis) {
+  if (templateId === 'le-quick') return buildLeQuickReviewTemplate(trade, analysis);
+  return buildLeCompleteReviewTemplate(trade, analysis);
+}
+
+function ReviewTemplateShelf({ hasNote, onUseTemplate }) {
+  return (
+    <section className="trade-review-templates" aria-label="Review templates">
+      <div className="trade-review-templates-head">
+        <div>
+          <span className="trade-review-eyebrow">Templates</span>
+          <h3>Start from a repeatable process</h3>
+          <p>Built from the complete LE Trading System. Templates write only to the free-form trade note; your structured analytics stay separate.</p>
+        </div>
+        <span className="trade-review-template-source"><ShieldCheck size={13} /> LE playbook</span>
+      </div>
+      <div className="trade-review-template-grid">
+        {REVIEW_TEMPLATES.map(template => (
+          <button
+            key={template.id}
+            type="button"
+            className={`trade-review-template-card ${template.id === 'le-complete' ? 'featured' : ''}`}
+            onClick={() => onUseTemplate(template.id)}
+          >
+            <span className="trade-review-template-icon">
+              {template.icon === 'check' ? <ClipboardCheck size={18} /> : <BookOpen size={18} />}
+            </span>
+            <span className="trade-review-template-copy">
+              <span className="trade-review-template-title-row">
+                <strong>{template.title}</strong>
+                <small>{template.badge}</small>
+              </span>
+              <span>{template.description}</span>
+              <b>{hasNote ? 'Replace journal note with template' : 'Use template'}</b>
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TradeJournalNote({ value, editing, onChange }) {
+  const text = String(value || '');
+  return (
+    <section className="trade-review-journal">
+      <div className="trade-review-journal-head">
+        <div>
+          <span className="trade-review-eyebrow"><FileText size={12} /> Trade note</span>
+          <h3>Post-trade journal</h3>
+        </div>
+        <span className={`trade-review-note-state ${text.trim() ? 'saved' : 'empty'}`}>
+          {text.trim() ? 'Documented' : 'Not started'}
+        </span>
+      </div>
+      {editing ? (
+        <>
+          <textarea
+            className="trade-review-journal-editor"
+            value={text}
+            onChange={e => onChange(e.target.value)}
+            placeholder="Write what happened, what you saw, how you managed the trade, and what you will repeat or change next time…"
+            spellCheck
+          />
+          <div className="trade-review-journal-meta">
+            <span>Plain-text journal · export safe</span>
+            <span>{text.length.toLocaleString()} characters</span>
+          </div>
+        </>
+      ) : (
+        <div className={`trade-review-journal-readonly ${text.trim() ? '' : 'empty'}`}>
+          {text.trim() || 'Choose an LE template above or start a blank review. This note is saved with the trade and does not affect Strategy / Setup / Emotion analytics.'}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function phraseLine(text) {
   return `• ${text}`;
 }
@@ -359,8 +559,8 @@ function selectedSuggestions(value, suggestions) {
   return suggestions.filter(item => hasSuggestedPhrase(value, item.text));
 }
 
-function reviewCompletion(entryReason, exitReason, mistakes) {
-  return [entryReason, exitReason, mistakes].filter(value => String(value || '').trim()).length;
+function reviewCompletion(entryReason, exitReason, mistakes, notes) {
+  return [notes, entryReason, exitReason, mistakes].filter(value => String(value || '').trim()).length;
 }
 
 
@@ -786,6 +986,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         entry_reason: strategyForm.entry_reason || null,
         exit_reason:  strategyForm.exit_reason  || null,
         mistakes:     strategyForm.mistakes     || null,
+        notes:        strategyForm.notes        || null,
       });
       setAnalysis(res.data);
       setEditingStrategy(false);
@@ -801,6 +1002,35 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       ...prev,
       [field]: toggleSuggestedPhrase(prev?.[field] || '', item.text),
     }));
+  };
+
+  const startReview = () => {
+    setStrategyForm({
+      entry_reason: analysis?.entry_reason || '',
+      exit_reason: analysis?.exit_reason || '',
+      mistakes: analysis?.mistakes || '',
+      notes: analysis?.notes || '',
+    });
+    setEditingStrategy(true);
+  };
+
+  const applyReviewTemplate = (templateId) => {
+    const currentNote = editingStrategy ? strategyForm?.notes : analysis?.notes;
+    if (String(currentNote || '').trim()) {
+      const replace = window.confirm('Replace the current trade note with this template? Entry, exit, and mistake analytics will not be changed.');
+      if (!replace) return;
+    }
+    const base = editingStrategy ? strategyForm : {
+      entry_reason: analysis?.entry_reason || '',
+      exit_reason: analysis?.exit_reason || '',
+      mistakes: analysis?.mistakes || '',
+      notes: analysis?.notes || '',
+    };
+    setStrategyForm({
+      ...base,
+      notes: buildReviewTemplate(templateId, trade, analysis),
+    });
+    setEditingStrategy(true);
   };
 
   // ── Tag handlers ──────────────────────────────────────────────────────────
@@ -1235,117 +1465,129 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               </div>
             )}
 
-            {/* ── Guided trade review tab ─────────────────────────────── */}
+            {/* ── Professional trade review workspace ─────────────────── */}
             {tab === 'Review' && (
               <div className="trade-review-shell">
                 <div className="trade-review-toolbar">
                   <div>
-                    <div className="trade-review-kicker"><Sparkles size={14} /> Guided journal</div>
-                    <div className="trade-review-toolbar-copy">Use quick picks to document the trade consistently, then add any detail that matters.</div>
+                    <div className="trade-review-kicker"><Sparkles size={14} /> Professional review workspace</div>
+                    <div className="trade-review-toolbar-copy">Journal the trade in detail, then keep Entry / Exit / Mistake fields clean for analytics and pattern detection.</div>
                   </div>
-                  {!editingStrategy ? (
-                    <button
-                      onClick={() => {
-                        setStrategyForm({
-                          entry_reason: analysis?.entry_reason || '',
-                          exit_reason:  analysis?.exit_reason  || '',
-                          mistakes:     analysis?.mistakes     || '',
-                        });
-                        setEditingStrategy(true);
-                      }}
-                      className="btn btn-primary btn-sm"
-                      type="button"
-                    >
-                      <Pencil size={13} /> {(analysis?.entry_reason || analysis?.exit_reason || analysis?.mistakes) ? 'Edit review' : 'Start review'}
+                  <div className="trade-review-toolbar-actions">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setTab('LE Review')}>
+                      <ShieldCheck size={13} /> LE evidence
                     </button>
-                  ) : (
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">{savingStrategy ? 'Saving…' : 'Save review'}</button>
-                      <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost btn-sm">Cancel</button>
-                    </div>
-                  )}
+                    {!editingStrategy ? (
+                      <button onClick={startReview} className="btn btn-primary btn-sm" type="button">
+                        <Pencil size={13} /> {(analysis?.notes || analysis?.entry_reason || analysis?.exit_reason || analysis?.mistakes) ? 'Edit review' : 'Start blank review'}
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">
+                          {savingStrategy ? 'Saving…' : 'Save review'}
+                        </button>
+                        <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost btn-sm">Cancel</button>
+                      </>
+                    )}
+                  </div>
                 </div>
 
-                <TradeReviewSummary
-                  trade={trade}
-                  entryReason={editingStrategy ? strategyForm.entry_reason : analysis?.entry_reason}
-                  exitReason={editingStrategy ? strategyForm.exit_reason : analysis?.exit_reason}
-                  mistakes={editingStrategy ? strategyForm.mistakes : analysis?.mistakes}
+                <ReviewTemplateShelf
+                  hasNote={Boolean((editingStrategy ? strategyForm?.notes : analysis?.notes)?.trim?.())}
+                  onUseTemplate={applyReviewTemplate}
                 />
 
-                {editingStrategy ? (
-                  <div className="trade-review-editor">
-                    <div className="trade-review-editor-head">
-                      <div>
-                        <h3>Build the review</h3>
-                        <p>Click any suggestion to add it. Click it again to remove it. You can still type your own notes.</p>
-                      </div>
+                <div className="trade-review-workspace-grid">
+                  <TradeJournalNote
+                    value={editingStrategy ? strategyForm?.notes : analysis?.notes}
+                    editing={editingStrategy}
+                    onChange={value => setStrategyForm(prev => ({ ...prev, notes: value }))}
+                  />
+                  <TradeReviewSummary
+                    trade={trade}
+                    notes={editingStrategy ? strategyForm?.notes : analysis?.notes}
+                    entryReason={editingStrategy ? strategyForm.entry_reason : analysis?.entry_reason}
+                    exitReason={editingStrategy ? strategyForm.exit_reason : analysis?.exit_reason}
+                    mistakes={editingStrategy ? strategyForm.mistakes : analysis?.mistakes}
+                  />
+                </div>
+
+                <section className="trade-review-structured">
+                  <div className="trade-review-structured-head">
+                    <div>
+                      <span className="trade-review-eyebrow">Structured analytics</span>
+                      <h3>Keep the fields that power your reports concise</h3>
+                      <p>These three fields feed your repeatable pattern analysis. Use the journal above for the full story.</p>
                     </div>
-
-                    <QuickPickGroup
-                      title="Entry"
-                      subtitle="What justified the entry?"
-                      suggestions={ENTRY_REVIEW_SUGGESTIONS}
-                      value={strategyForm.entry_reason}
-                      onToggle={item => handleReviewSuggestion('entry_reason', item)}
-                      tone="entry"
-                    />
-                    <EditTextarea label="Entry notes" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
-
-                    <QuickPickGroup
-                      title="Exit"
-                      subtitle="How did you manage or close the trade?"
-                      suggestions={EXIT_REVIEW_SUGGESTIONS}
-                      value={strategyForm.exit_reason}
-                      onToggle={item => handleReviewSuggestion('exit_reason', item)}
-                      tone="exit"
-                    />
-                    <EditTextarea label="Exit notes" value={strategyForm.exit_reason} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
-
-                    <QuickPickGroup
-                      title="Mistake / improvement"
-                      subtitle="What should change next time?"
-                      suggestions={MISTAKE_REVIEW_SUGGESTIONS}
-                      value={strategyForm.mistakes}
-                      onToggle={item => handleReviewSuggestion('mistakes', item)}
-                      tone="mistake"
-                    />
-                    <EditTextarea label="Mistake / improvement notes" value={strategyForm.mistakes} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
+                    <span className="trade-review-analytics-badge">Report inputs</span>
                   </div>
-                ) : (
-                  <div className="trade-review-readonly">
-                    {(analysis?.strategy || analysis?.idea_source) && (
-                      <div className="trade-review-context">
-                        {analysis?.strategy && <div><span>Strategy</span><strong>{analysis.strategy}</strong></div>}
-                        {analysis?.idea_source && <div><span>Source</span><strong>{analysis.idea_source}</strong></div>}
-                      </div>
-                    )}
 
-                    <div className="trade-review-note-grid">
-                      <article>
-                        <div className="trade-review-note-title"><Target size={15} /> Entry</div>
-                        <div className="trade-review-note-copy">{analysis?.entry_reason || 'Not documented yet.'}</div>
-                      </article>
-                      <article>
-                        <div className="trade-review-note-title"><CheckCircle2 size={15} /> Exit</div>
-                        <div className="trade-review-note-copy">{analysis?.exit_reason || 'Not documented yet.'}</div>
-                      </article>
-                      <article className={analysis?.mistakes ? 'has-mistake' : ''}>
-                        <div className="trade-review-note-title"><AlertTriangle size={15} /> Mistake / improvement</div>
-                        <div className="trade-review-note-copy">{analysis?.mistakes || 'No improvement note documented yet.'}</div>
-                      </article>
+                  {editingStrategy ? (
+                    <div className="trade-review-editor">
+                      <QuickPickGroup
+                        title="Entry"
+                        subtitle="What justified the entry?"
+                        suggestions={ENTRY_REVIEW_SUGGESTIONS}
+                        value={strategyForm.entry_reason}
+                        onToggle={item => handleReviewSuggestion('entry_reason', item)}
+                        tone="entry"
+                      />
+                      <EditTextarea label="Entry notes" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
+
+                      <QuickPickGroup
+                        title="Exit"
+                        subtitle="How did you manage or close the trade?"
+                        suggestions={EXIT_REVIEW_SUGGESTIONS}
+                        value={strategyForm.exit_reason}
+                        onToggle={item => handleReviewSuggestion('exit_reason', item)}
+                        tone="exit"
+                      />
+                      <EditTextarea label="Exit notes" value={strategyForm.exit_reason} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
+
+                      <QuickPickGroup
+                        title="Mistake / improvement"
+                        subtitle="What should change next time?"
+                        suggestions={MISTAKE_REVIEW_SUGGESTIONS}
+                        value={strategyForm.mistakes}
+                        onToggle={item => handleReviewSuggestion('mistakes', item)}
+                        tone="mistake"
+                      />
+                      <EditTextarea label="Mistake / improvement notes" value={strategyForm.mistakes} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
                     </div>
+                  ) : (
+                    <div className="trade-review-readonly">
+                      {(analysis?.strategy || analysis?.idea_source) && (
+                        <div className="trade-review-context">
+                          {analysis?.strategy && <div><span>Strategy</span><strong>{analysis.strategy}</strong></div>}
+                          {analysis?.idea_source && <div><span>Source</span><strong>{analysis.idea_source}</strong></div>}
+                        </div>
+                      )}
 
-                    {analysis?.ai_feedback && (
-                      <div className="notice accent">
-                        {analysis.ai_feedback}
+                      <div className="trade-review-note-grid">
+                        <article>
+                          <div className="trade-review-note-title"><Target size={15} /> Entry</div>
+                          <div className="trade-review-note-copy">{analysis?.entry_reason || 'Not documented yet.'}</div>
+                        </article>
+                        <article>
+                          <div className="trade-review-note-title"><CheckCircle2 size={15} /> Exit</div>
+                          <div className="trade-review-note-copy">{analysis?.exit_reason || 'Not documented yet.'}</div>
+                        </article>
+                        <article className={analysis?.mistakes ? 'has-mistake' : ''}>
+                          <div className="trade-review-note-title"><AlertTriangle size={15} /> Mistake / improvement</div>
+                          <div className="trade-review-note-copy">{analysis?.mistakes || 'No improvement note documented yet.'}</div>
+                        </article>
                       </div>
-                    )}
-                  </div>
-                )}
+
+                      {analysis?.ai_feedback && (
+                        <div className="notice accent">
+                          {analysis.ai_feedback}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
               </div>
             )}
-
             {/* ── Tags tab ──────────────────────────────────────────────── */}
             {tab === 'Tags' && (
               <div style={{ paddingTop: 8 }}>
