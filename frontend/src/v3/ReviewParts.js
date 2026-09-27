@@ -115,6 +115,7 @@ export function DayCurve({ trades, onPick }) {
             aria-label={`${m.trade.ticker} at ${m.at ? `${Math.floor(m.at)}:${String(Math.round((m.at % 1) * 60)).padStart(2, '0')}` : ''}, ${money2(m.pnl)}`}
             onPointerEnter={() => setHover(i)}
             onFocus={() => setHover(i)}
+            onBlur={() => setHover(null)}
             onClick={() => onPick && onPick(m.trade)}
           />
         );
@@ -395,8 +396,11 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
           <h2 className="v3-h">Coaching</h2>
           <p className="v3-h-sub">
             Written against your trades and your diary together, and graded on process
-            {summary.ai_provider ? ` · ${summary.ai_provider === 'groq' ? 'Groq' : 'Anthropic'} · ${summary.ai_model || ''}` : ''}
-                        {summary.cached && summary.cache_reason === 'evidence_unchanged' ? ' · Saved diagnosis · evidence unchanged' : ''}
+            {summary.ai_provider ? <>
+              {' · '}{summary.ai_provider === 'groq' ? 'Groq' : 'Anthropic'}
+              {summary.ai_model ? <span className="day-review-model-meta"> · {summary.ai_model}</span> : null}
+            </> : ''}
+            {summary.cached && summary.cache_reason === 'evidence_unchanged' ? ' · Saved diagnosis · evidence unchanged' : ''}
             {!summary.cached && summary.regeneration_reason === 'manual_override' ? ' · Manually refreshed' : ''}
           </p>
         </div>
@@ -534,15 +538,14 @@ export function DayTrades({ trades, gradeMap, loading, onOpen }) {
           const side = t.side === 'LONG' ? 'Long' : t.side === 'SHORT' ? 'Short' : t.side;
 
           return (
-            <button
-              type="button"
-              role="listitem"
-              key={t.id}
-              className="v3-trade-card"
-              onClick={open}
-              aria-label={`Open ${t.ticker} trade, ${money2(pnl)}`}
-            >
-              <span className="v3-trade-card-top">
+            <div role="listitem" key={t.id} className="v3-trade-card-shell">
+              <button
+                type="button"
+                className="v3-trade-card"
+                onClick={open}
+                aria-label={`Open ${t.ticker} trade, ${money2(pnl)}`}
+              >
+                <span className="v3-trade-card-top">
                 <span>
                   <strong className="v3-trade-card-ticker">{t.ticker}</strong>
                   <span className="v3-trade-card-meta">{t.instrument_type} · {side}</span>
@@ -573,8 +576,9 @@ export function DayTrades({ trades, gradeMap, loading, onOpen }) {
                 </span>
               </span>
 
-              {g?.one_line && <span className="v3-trade-card-reason">{g.one_line}</span>}
-            </button>
+                {g?.one_line && <span className="v3-trade-card-reason">{g.one_line}</span>}
+              </button>
+            </div>
           );
         })}
       </div>
