@@ -461,6 +461,8 @@ test('Trade View surfaces option strategy, review status, excursion and missing-
       mfe_pct: 103.7,
       mae_pct: 72.22,
       exit_efficiency: 71.8,
+      stop_loss: 1.17,
+      target_price: 4.14,
       risk_per_trade: null,
       realized_r: null,
     }],
@@ -477,20 +479,24 @@ test('Trade View surfaces option strategy, review status, excursion and missing-
   expect(screen.getByText('+103.7%')).toBeVisible();
   expect(screen.getByText('-72.2%')).toBeVisible();
   expect(screen.getByText('71.8%')).toBeVisible();
-  const setRisk = screen.getByRole('button', { name: 'Set R:R' });
-  expect(setRisk).toBeVisible();
+  expect(screen.getByText('1:3.54')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Set R:R' })).not.toBeInTheDocument();
   expect(screen.queryByText('Not tagged')).not.toBeInTheDocument();
 
   tradesApi.getAnalysis.mockResolvedValueOnce({
     data: {
       analysis: {
         strategy: 'LE E-Entry — 10m 8 EMA Retest + VWAP Reclaim',
+        stop_loss: 1.17,
+        target_price: 4.14,
         risk_per_trade: null,
       },
       tags: [],
     },
   });
-  fireEvent.click(setRisk);
+  fireEvent.click(screen.getByText('QCOM'));
+  const panel = await screen.findByRole('tabpanel');
+  fireEvent.click(within(panel).getByRole('button', { name: /^Edit$/ }));
 
   const stopDistanceInput = await screen.findByLabelText('Stop Distance ($)');
   expect(stopDistanceInput).toBeVisible();
