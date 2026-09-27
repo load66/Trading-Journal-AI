@@ -91,12 +91,12 @@ def test_second_import_adds_to_the_day_instead_of_overwriting(client):
     assert stored(client) == before
 
 
-GENERIC = "date,time,symbol,side,quantity,price,commission\n"
+GENERIC = "date,time,symbol,side,quantity,price,commission,timezone\n"
 GROWS = [
-    "2026-09-15,09:46:16,TSLA,BUY,400,250.00,0",
-    "2026-09-15,09:57:47,TSLA,SELL,400,249.00,3.00",
-    "2026-09-15,10:55:12,TSLA,BUY,200,248.00,0",
-    "2026-09-15,11:00:35,TSLA,SELL,200,249.00,1.50",
+    "2026-09-15,09:46:16,TSLA,BUY,400,250.00,0,America/Chicago",
+    "2026-09-15,09:57:47,TSLA,SELL,400,249.00,3.00,America/Chicago",
+    "2026-09-15,10:55:12,TSLA,BUY,200,248.00,0,America/Chicago",
+    "2026-09-15,11:00:35,TSLA,SELL,200,249.00,1.50,America/Chicago",
 ]
 
 
@@ -124,10 +124,10 @@ def test_reimport_preserves_legitimate_identical_split_fills(client):
         conn.commit()
 
     rows = [
-        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
-        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
-        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
-        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0,America/Chicago",
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0,America/Chicago",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0,America/Chicago",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0,America/Chicago",
     ]
     payload = GENERIC + "\n".join(rows) + "\n"
 
@@ -161,14 +161,14 @@ def test_incremental_reimport_adds_only_excess_identical_fill_occurrences(client
         conn.commit()
 
     first_rows = [
-        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
-        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
-        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
-        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0,America/Chicago",
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0,America/Chicago",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0,America/Chicago",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0,America/Chicago",
     ]
     full_rows = first_rows + [
-        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0",
-        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0",
+        "2026-09-25,10:11:00,QCOM,BUY,5,160.00,0,America/Chicago",
+        "2026-09-25,10:15:00,QCOM,SELL,5,161.00,0,America/Chicago",
     ]
 
     for rows in (first_rows, full_rows):
