@@ -281,9 +281,61 @@ function EvidenceBadge({ level }) {
 }
 
 /* ── coaching: the report, with the lists behind tabs ───────────────────── */
-export function Coaching({ summary, loading, onRegenerate }) {
+export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
   const [tab, setTab] = useState('strengths');
-  if (loading) return <div className="v3-empty">Reading the session…</div>;
+
+  if (loading) {
+    return (
+      <div role="status" aria-live="polite">
+        <div className="v3-sec-head">
+          <div>
+            <h2 className="v3-h">Coaching</h2>
+            <p className="v3-h-sub">Analyzing the session and checking the current evidence…</p>
+          </div>
+        </div>
+        <div className="skeleton" style={{ height: 15, width: '92%', marginBottom: 10 }} />
+        <div className="skeleton" style={{ height: 15, width: '84%', marginBottom: 10 }} />
+        <div className="skeleton" style={{ height: 15, width: '67%', marginBottom: 22 }} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div className="skeleton" style={{ height: 30, width: 92 }} />
+          <div className="skeleton" style={{ height: 30, width: 74 }} />
+          <div className="skeleton" style={{ height: 30, width: 116 }} />
+        </div>
+        <span className="sr-only">Generating AI diagnosis.</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="v3-notice" role="alert">
+        <div style={{ flex: 1 }}>
+          <b>AI diagnosis could not be generated.</b>
+          <p>{error}</p>
+        </div>
+        {onRetry && (
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
+            Retry
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (summary?.no_trades) {
+    return (
+      <>
+        <div className="v3-sec-head">
+          <div>
+            <h2 className="v3-h">Coaching</h2>
+            <p className="v3-h-sub">AI diagnosis starts automatically when this day has completed trades.</p>
+          </div>
+        </div>
+        <div className="v3-empty">No completed trades to diagnose for this date.</div>
+      </>
+    );
+  }
+
   if (!summary) return <div className="v3-empty">No review for this day yet.</div>;
 
   const obs = summary.observations || {};
@@ -319,7 +371,7 @@ export function Coaching({ summary, loading, onRegenerate }) {
         </div>
         <div className="v3-acts">
           {onRegenerate && (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={onRegenerate}>Regenerate</button>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={onRegenerate}>Re-run</button>
           )}
         </div>
       </div>
