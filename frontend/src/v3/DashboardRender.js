@@ -82,7 +82,7 @@ function MonthPanel({ accountId, onDayClick, latestDate }) {
             onPick={onDayClick}
             showWeek={false}
           />
-          <div className="v3-cal-share-foot">Net P&amp;L · broker-recorded sessions</div>
+          <div className="v3-cal-share-foot">Net P&amp;L · recorded sessions</div>
         </div>
       ) : (
         <div className="v3-scroll">
@@ -206,7 +206,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
         : 'Covered winning trades are giving back too much of the favorable move before exit.';
 
   const holdSummary = !holdReliable
-    ? 'More broker-timestamped winners and losers are needed before comparing holding behavior.'
+    ? 'More timestamped winners and losers are needed before comparing holding behavior.'
     : holdMixed
       ? 'Average and median hold times point in different directions, so no strong holding-time leak is diagnosed.'
       : holdLeak
@@ -287,7 +287,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       : medianMfe != null && medianMae != null
         ? ' · medians +' + medianMfe.toFixed(2) + '% / -' + medianMae.toFixed(2) + '%'
         : '');
-  const holdEvidence = holdN + '/' + totalTrades + ' trades · ' + holdCoverage.toFixed(0) + '% broker timestamp coverage';
+  const holdEvidence = holdN + '/' + totalTrades + ' trades · ' + holdCoverage.toFixed(0) + '% timestamp coverage';
   const bottomTone = holdLeak
     ? 'bad'
     : earlyFailurePattern || riskMixed || (!captureUsable && !riskUsable)
