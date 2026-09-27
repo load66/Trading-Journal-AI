@@ -336,15 +336,45 @@ def test_vwap_snapshot_uses_only_completed_regular_session_bars():
     assert snap["position_vs_vwap"] == "above"
 
 
-def test_market_sign_is_removed_from_le_review():
+def test_market_sign_requires_spy_and_qqq_to_confirm_on_10m_8ema():
     bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
     review = review_context(base_trade("CALL"), bars)
-    names = tag_names(review)
+    sign = review["evidence"]["market_sign"]
 
-    assert "market_sign" not in review["evidence"]
-    assert "spy" not in review["evidence"]
-    assert "qqq" not in review["evidence"]
-    assert ("mistake", "No Market Sign") not in names
+    assert sign["verified"] is True
+    assert sign["status"] == "confirmed"
+    assert sign["spy"]["ema_aligned"] is True
+    assert sign["qqq"]["ema_aligned"] is True
+    assert review["evidence"]["entry_checks"]["market_sign"]["status"] == "pass"
+    assert ("mistake", "No Market Sign") not in tag_names(review)
+
+
+def test_market_sign_fails_when_spy_and_qqq_do_not_both_agree():
+    underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    spy = minute_run((2026, 9, 25), 9, 30, 30, 102.0)
+    qqq = minute_run((2026, 9, 25), 9, 30, 30, 98.0)
+    trade = base_trade("CALL", entry="08:47:04")
+
+    review = review_context(trade, underlying, spy=spy, qqq=qqq)
+    sign = review["evidence"]["market_sign"]
+
+    assert sign["verified"] is True
+    assert sign["status"] == "mixed"
+    assert sign["spy"]["ema_aligned"] is True
+    assert sign["qqq"]["ema_aligned"] is False
+    assert review["evidence"]["entry_checks"]["market_sign"]["status"] == "fail"
+    assert ("mistake", "No Market Sign") in tag_names(review)
+
+
+def test_market_sign_is_unverified_on_limited_iex_data():
+    bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    review = review_context(base_trade("CALL"), bars, feed="iex")
+
+    sign = review["evidence"]["market_sign"]
+    assert sign["verified"] is False
+    assert sign["status"] == "unknown"
+    assert review["evidence"]["entry_checks"]["market_sign"]["status"] == "unverified"
+    assert ("mistake", "No Market Sign") not in tag_names(review)
 
 
 def test_outside_day_requires_both_directional_levels_before_entry():
