@@ -18,11 +18,11 @@ const TEMPLATE_URL = '/templates/generic_trades_template.csv';
 const EXAMPLE_URL = '/templates/generic_trades_example.csv';
 
 const BROKER_HELP = {
-  auto: 'Leave Auto-detect on and the importer will recognise Thinkorswim account statements, Schwab transaction-history exports, or IBKR Activity Statements.',
+  auto: 'Leave Auto-detect on. The importer identifies the broker and source timezone, normalizes every fill to UTC, and stops if timestamp provenance is unsafe.',
   thinkorswim: <>Export from Thinkorswim desktop: <em>Monitor → Account Statement → export icon → Export to File (CSV)</em>.</>,
   schwab_transactions: <>Schwab transaction-history CSV with Date, Type, Description, Ref Num, fees, Amount and Balance. These exports have minute-level timestamps.</>,
   ibkr: <>Export from IBKR Client Portal: <em>Performance &amp; Reports → Statements → Activity → pick the period → Download as CSV</em></>,
-  generic: <>Copy your fills into the template, one row per execution. Buys and sells of the same symbol are grouped into round-trip trades automatically, the same way as a broker import.</>,
+  generic: <>Copy your fills into the template, one row per execution. Include the <strong>timezone</strong> column (for example <code>America/Chicago</code>); ambiguous generic timestamps are rejected instead of guessed.</>,
 };
 
 const BROKER_DROP_LABEL = {
@@ -57,6 +57,7 @@ const TEMPLATE_COLUMNS = [
   ['asset_type', 'Optional', 'STOCK (default), OPTION or FUTURE'],
   ['expiry, strike, put_call', 'Options', '2026-08-28, 765, CALL or PUT'],
   ['multiplier', 'Optional', 'Point value for a future the app does not know'],
+  ['timezone', 'Required', 'IANA zone preferred: America/Chicago. CT/CST/CDT also accepted'],
 ];
 
 function GenericTemplateTip({ open, onUse }) {
@@ -249,6 +250,12 @@ export default function Import({ accounts, accountId }) {
             icon={FileText}
           />
 
+          <div className="notice" style={{ marginTop: 12, display: 'block', fontSize: 12.5, lineHeight: 1.5 }}>
+            <strong style={{ color: 'var(--text-primary)' }}>Timezone safeguard:</strong>{' '}
+            broker timezone is detected before import, the original broker timestamp is preserved,
+            and every fill is normalized to UTC. Ambiguous timestamps are rejected rather than guessed.
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginTop: 16 }}>
             <div>
               <label className="field-label" htmlFor="imp-csv-broker">Broker</label>
@@ -333,8 +340,15 @@ export default function Import({ accounts, accountId }) {
                   {csvResult.execution_integrity.canonical_timestamp_count}/{csvResult.execution_integrity.execution_count}
                   {' '}fills stored with canonical timestamps
                   {csvResult.execution_integrity.source_timezones?.length > 0
-                    ? ` · ${csvResult.execution_integrity.source_timezones.join(', ')}`
+                    ? ` · timezone ${csvResult.execution_integrity.source_timezones.join(', ')}`
                     : ''}
+                  {csvResult.execution_integrity.timezone_detection_methods?.length > 0
+                    ? ` · ${csvResult.execution_integrity.timezone_detection_methods.join(', ').replaceAll('_', ' ')}`
+                    : ''}
+                  {csvResult.execution_integrity.timezone_confidences?.length > 0
+                    ? ` · ${csvResult.execution_integrity.timezone_confidences.join(', ')} confidence`
+                    : ''}
+                  {csvResult.execution_integrity.timezone_verified ? ' · timezone verified' : ''}
                   {csvResult.broker_detected ? ` · ${csvResult.broker_detected}` : ''}
                 </div>
               )}
