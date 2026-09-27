@@ -412,6 +412,83 @@ test('Smoking Gun saved report back navigation preserves the loaded library stat
   expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(callsBeforeOpen);
 });
 
+test('Trade View surfaces option strategy, review status, excursion and missing-risk guidance', async () => {
+  tradesApi.list.mockResolvedValue({
+    data: [{
+      id: 565,
+      account_id: 1,
+      trade_group: '2026-09-25_QCOM_OPTION_0922',
+      date: '2026-09-25',
+      ticker: 'QCOM',
+      instrument_type: 'OPTION',
+      side: 'LONG',
+      gross_pnl: 211,
+      net_pnl: 205.89,
+      commissions: 5.11,
+      executions: [
+        { date: '2026-09-25', time: '09:22:00', action: 'BOT', qty: 5, price: 1.08 },
+        { date: '2026-09-25', time: '09:41:00', action: 'SOLD', qty: 5, price: 1.50 },
+      ],
+      pl_pct: 38.13,
+      strategy: 'LE E-Entry — 10m 8 EMA Retest + VWAP Reclaim',
+      emotional_state: 'Focused',
+      entry_reason: 'Confirmed reclaim entry.',
+      exit_reason: null,
+      mistakes: 'Held first trim too long.',
+      mfe_pct: 103.7,
+      mae_pct: 72.22,
+      exit_efficiency: 71.8,
+      risk_per_trade: null,
+      realized_r: null,
+    }],
+  });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+
+  expect(await screen.findByText('QCOM')).toBeVisible();
+  expect(screen.getByText(/LE E-Entry — 10m 8 EMA Retest/)).toBeVisible();
+  expect(screen.getByText('2/3 documented')).toBeVisible();
+  expect(screen.getByText('Held first trim too long.')).toBeVisible();
+  expect(screen.getByText('+103.7%')).toBeVisible();
+  expect(screen.getByText('-72.2%')).toBeVisible();
+  expect(screen.getByText('71%')).toBeVisible();
+  expect(screen.getByText('Set risk')).toBeVisible();
+  expect(screen.queryByText('Not tagged')).not.toBeInTheDocument();
+});
+
+test('Stats planned risk is explicit and is sent with the saved trade analysis', async () => {
+  tradesApi.getAnalysis.mockResolvedValue({
+    data: {
+      analysis: {
+        strategy: 'Test Strategy',
+        stop_loss: 360,
+        target_price: 380,
+        risk_per_trade: null,
+        emotional_state: 'Focused',
+      },
+      tags: [],
+    },
+  });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
+  fireEvent.click(row);
+
+  const panel = await screen.findByRole('tabpanel');
+  fireEvent.click(within(panel).getByRole('button', { name: /^Edit$/ }));
+  const riskInput = within(panel).getByLabelText('Planned Risk ($)');
+  fireEvent.change(riskInput, { target: { value: '150' } });
+  fireEvent.click(within(panel).getByRole('button', { name: /^Save$/ }));
+
+  await waitFor(() => expect(tradesApi.updateAnalysis).toHaveBeenCalled());
+  const [, payload] = tradesApi.updateAnalysis.mock.calls.at(-1);
+  expect(payload.risk_per_trade).toBe(150);
+});
+
 test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
