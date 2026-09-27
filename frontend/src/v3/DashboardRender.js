@@ -628,14 +628,14 @@ export default function DashboardRender(p) {
   const net = Number(k.total_net_pnl || 0);
 
   const goalValue = (key, fallback) => Number(goals?.[key] ?? fallback);
-  const pctGoalItem = (label, value, goal, read) => {
+  const pctGoalItem = (label, value, goal, read, amberBelow = false) => {
     const numeric = Number(value || 0);
     const target = Number(goal || 0);
     return {
       label,
       value: numeric.toFixed(1) + '%',
       tone: numeric >= target ? 'pos' : undefined,
-      amber: numeric < target,
+      amber: amberBelow && numeric < target,
       read,
       goal: target.toFixed(0) + '%',
       goalPct: Math.max(5, Math.min(95, target)),
@@ -651,7 +651,6 @@ export default function DashboardRender(p) {
       label,
       value: formatter(numeric),
       tone: numeric >= target ? 'pos' : numeric < 0 ? 'neg' : undefined,
-      amber: numeric >= 0 && numeric < target,
       read,
       goal: formatter(target),
       goalPct: Math.max(8, Math.min(92, target / scaleMax * 100)),
@@ -817,7 +816,8 @@ export default function DashboardRender(p) {
           'Exit efficiency',
           exitEfficiency,
           goalValue('exit_efficiency', 60),
-          <>You capture <b>{exitEfficiency.toFixed(0)}%</b> of the favorable move on covered winning trades.</>
+          <>You capture <b>{exitEfficiency.toFixed(0)}%</b> of the favorable move on covered winning trades.</>,
+          true
         )
       : {
           label: 'Exit efficiency',
