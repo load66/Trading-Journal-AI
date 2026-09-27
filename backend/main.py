@@ -725,6 +725,7 @@ async def import_csv(
     file: UploadFile = File(...),
     broker: str = Form('auto'),   # 'thinkorswim' | 'schwab_transactions' | 'ibkr' | 'auto'
     reconcile: bool = Form(False),
+    timezone_override: str = Form(''),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     if not file.filename.lower().endswith('.csv'):
@@ -744,7 +745,11 @@ async def import_csv(
     # broker export is authoritative for its covered dates. Normal mode keeps
     # the incremental/idempotent import path.
     trades, skipped = parse_broker_csv(
-        content, broker, account_id, None if reconcile else conn
+        content,
+        broker,
+        account_id,
+        None if reconcile else conn,
+        timezone_override=timezone_override.strip() or None,
     )
 
     detected_broker = detect_broker(content) if broker == "auto" else broker
@@ -895,6 +900,7 @@ async def import_csv(
         "reconciled": reconciled,
         "reconcile": reconcile,
         "broker_detected": detected_broker,
+        "timezone_override": timezone_override.strip() or None,
         "execution_integrity": execution_integrity,
         "errors": errors,
         "message": (
