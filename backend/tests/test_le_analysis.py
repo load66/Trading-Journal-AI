@@ -15,6 +15,7 @@ from le_analysis import (
     analyze_context,
     build_le_levels,
     entry_datetime,
+    exit_datetime,
     market_direction,
 )
 
@@ -216,6 +217,76 @@ def test_execution_time_is_converted_from_central_to_eastern():
     assert dt.hour == 9
     assert dt.minute == 47
     assert dt.tzinfo == ET
+
+
+def test_execution_time_prefers_canonical_timestamp_provenance():
+    trade = base_trade("CALL", entry="01:00:00")
+    trade["executions"][0]["timestamp_utc"] = "2026-09-25T14:47:04Z"
+    trade["executions"][0]["source_timezone"] = "America/Los_Angeles"
+    trade["executions"][1]["timestamp_utc"] = "2026-09-25T15:08:24Z"
+
+    entry = entry_datetime(trade)
+    exit_ = exit_datetime(trade)
+
+    assert entry is not None and entry.hour == 10 and entry.minute == 47
+    assert exit_ is not None and exit_.hour == 11 and exit_.minute == 8
+
+
+def test_10m_ema_cross_of_broken_level_is_reported_separately_from_price_break():
+    bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    review = review_context(base_trade("CALL", entry="08:47:04"), bars)
+
+    assert review["evidence"]["level_breaks_before_entry"]["PDH"] is True
+    assert review["evidence"]["ema_alignment_valid"] is True
+    # Price broke the level, but the slower 10m 8 EMA has not crossed the nearest
+    # broken level yet. LE treats that as a different structural requirement.
+    assert review["evidence"]["ema_vs_broken_level"]["level"] in {"PDH", "PMH"}
+    assert review["evidence"]["ema_vs_broken_level"]["valid"] is False
+    assert review["evidence"]["entry_checks"]["ema_beyond_broken_level"]["status"] == "fail"
+    assert review["evidence"]["entry_structure_status"] == "conflicted"
+
+
+def test_10m_ema_can_confirm_broken_level_after_trend_has_time_to_establish():
+    prev = minute_run(
+        (2026, 9, 24), 9, 30, 90, 98.0,
+        high=lambda i: 100.0 if i == 10 else 99.0,
+        low=lambda i: 95.0 if i == 20 else 97.0,
+    )
+    pre = [
+        bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 98.0, 99.5, 96.0, 98.5),
+        bar(datetime(2026, 9, 25, 9, 29, tzinfo=ET), 98.5, 99.0, 97.0, 98.8),
+    ]
+    rth = minute_run((2026, 9, 25), 9, 30, 70, 101.5)
+    trade = base_trade("CALL", entry="09:27:04")  # 10:27:04 ET
+    trade["executions"][1]["time"] = "10:00:00"  # 11:00 ET
+
+    review = review_context(trade, prev + pre + rth)
+
+    assert review["evidence"]["ema_vs_broken_level"]["level"] == "PDH"
+    assert review["evidence"]["ema_vs_broken_level"]["valid"] is True
+    assert review["evidence"]["entry_checks"]["ema_beyond_broken_level"]["status"] == "pass"
+    assert review["evidence"]["ema_slope_direction"] == "rising"
+
+
+def test_management_review_detects_final_exit_before_first_confirmed_10m_ema_break():
+    prev = minute_run(
+        (2026, 9, 24), 9, 30, 90, 98.0,
+        high=lambda i: 100.0 if i == 10 else 99.0,
+        low=lambda i: 95.0 if i == 20 else 97.0,
+    )
+    pre = [
+        bar(datetime(2026, 9, 25, 4, 0, tzinfo=ET), 98.0, 101.0, 96.0, 98.5),
+        bar(datetime(2026, 9, 25, 9, 29, tzinfo=ET), 98.5, 100.0, 97.0, 99.0),
+    ]
+    trend = minute_run((2026, 9, 25), 9, 30, 50, 102.0)
+    reversal = minute_run((2026, 9, 25), 10, 20, 20, 95.0)
+    review = review_context(base_trade("CALL", entry="08:47:04"), prev + pre + trend + reversal)
+
+    management = review["evidence"]["management_10m8ema"]
+    assert management["exit_time_et"] is not None
+    assert management["first_confirmed_ema_break_et"] is not None
+    assert management["exit_relation_to_ema_break"] == "before_confirmed_break"
+    assert management["post_exit_favorable_move_pct_30m"] is not None
 
 
 def test_entry_snapshot_uses_only_completed_one_minute_bar():
