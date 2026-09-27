@@ -1322,24 +1322,24 @@ button.month-card:active { transform: translateY(1px); }
 /* ---------- Professional Trade View ---------- */
 .trade-view-table {
   width: 100%;
-  min-width: 1180px;
+  min-width: 1040px;
   table-layout: fixed;
 }
 .trade-view-table th,
 .trade-view-table td {
-  padding: 11px 10px;
+  padding: 9px 8px;
 }
-.trade-view-table th:nth-child(1) { width: 96px; }
-.trade-view-table th:nth-child(2) { width: 108px; }
-.trade-view-table th:nth-child(3) { width: 104px; text-align: right; }
-.trade-view-table th:nth-child(4) { width: 500px; }
-.trade-view-table th:nth-child(5) { width: 104px; text-align: right; }
-.trade-view-table th:nth-child(6) { width: 126px; text-align: right; }
+.trade-view-table th:nth-child(1) { width: 88px; }
+.trade-view-table th:nth-child(2) { width: 94px; }
+.trade-view-table th:nth-child(3) { width: 454px; }
+.trade-view-table th:nth-child(4) { width: 92px; text-align: right; }
+.trade-view-table th:nth-child(5) { width: 112px; text-align: right; }
+.trade-view-table th:nth-child(6) { width: 82px; text-align: right; }
 .trade-view-table th:nth-child(7) { width: 92px; text-align: right; }
-.trade-view-table th:nth-child(8) { width: 32px; }
+.trade-view-table th:nth-child(8) { width: 26px; }
 
 .trade-view-row td {
-  height: 66px;
+  height: 62px;
 }
 .trade-date-cell .num:first-child {
   color: var(--text-primary);
@@ -1527,11 +1527,13 @@ button.month-card:active { transform: translateY(1px); }
 }
 @media (max-width: 920px) {
   .trade-view-table {
-    min-width: 1050px;
+    min-width: 960px;
   }
-  .trade-view-table th:nth-child(1) { width: 92px; }
-  .trade-view-table th:nth-child(2) { width: 104px; }
-  .trade-view-table th:nth-child(3) { width: 100px; }
-  .trade-view-table th:nth-child(4) { width: 300px; }
-  .trade-view-table th:nth-child(6) { width: 100px; }
+  .trade-view-table th:nth-child(1) { width: 84px; }
+  .trade-view-table th:nth-child(2) { width: 90px; }
+  .trade-view-table th:nth-child(3) { width: 360px; }
+  .trade-view-table th:nth-child(4) { width: 88px; }
+  .trade-view-table th:nth-child(5) { width: 106px; }
+  .trade-view-table th:nth-child(6) { width: 80px; }
+  .trade-view-table th:nth-child(7) { width: 88px; }
 }
