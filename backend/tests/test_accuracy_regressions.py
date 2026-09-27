@@ -1248,3 +1248,124 @@ def test_reports_endpoint_uses_canonical_hold_time_without_name_error(monkeypatc
     finally:
         conn.close()
 
+
+
+def test_reports_recover_setup_context_and_coverage_from_new_tag_workflow(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Reports Context", "day_trading", "schwab"),
+        )
+        executions = __import__("json").dumps([
+            {"action": "BOT", "qty": 1, "price": 1.00, "date": "2026-09-25", "time": "09:40:00"},
+            {"action": "SOLD", "qty": 1, "price": 1.50, "date": "2026-09-25", "time": "10:05:00"},
+        ])
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                account_id, "report-context-1", "2026-09-25", "NVDA", "OPTION", "LONG",
+                50.0, 50.0, 0.0, executions, "imported",
+            ),
+        )
+        conn.execute(
+            """INSERT INTO trade_analysis
+               (trade_group, ticker, date, strategy, risk_per_trade, emotional_state)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                "report-context-1", "NVDA", "2026-09-25",
+                "LE E-Entry", 100.0, "Focused",
+            ),
+        )
+        for tag_type, value in (
+            ("setup", "Outside Day"),
+            ("setup", "PDH Break"),
+            ("mistake", "Entered Too Close to Resistance"),
+        ):
+            conn.execute(
+                """INSERT INTO trade_tags (trade_group, tag_type, tag_value, source)
+                   VALUES (?,?,?,'manual')""",
+                ("report-context-1", tag_type, value),
+            )
+        conn.commit()
+
+        result = main.get_reports(
+            account_id=account_id,
+            date_from="2026-09-01",
+            date_to="2026-09-30",
+            conn=conn,
+        )
+
+        assert result["has_data"] is True
+        assert result["coverage"]["setup"] == 1
+        assert result["coverage"]["setup_context"] == 1
+        assert result["coverage"]["strategy"] == 1
+        assert result["coverage"]["emotion"] == 1
+        assert result["coverage"]["mistake_tags"] == 1
+        assert result["coverage"]["realized_r"] == 1
+
+        assert [row["label"] for row in result["by_setup"]] == ["Outside Day"]
+        assert [row["label"] for row in result["by_strategy"]] == ["LE E-Entry"]
+        assert [row["label"] for row in result["by_emotion"]] == ["Focused"]
+        setup_context = {row["label"] for row in result["by_tag"]["setup"]}
+        assert setup_context == {"Outside Day", "PDH Break"}
+    finally:
+        conn.close()
+
+
+def test_edge_report_accepts_custom_emotion_and_derives_realized_r_from_saved_risk(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Edge Context", "day_trading", "schwab"),
+        )
+        executions = __import__("json").dumps([
+            {"action": "BOT", "qty": 1, "price": 1.00, "date": "2026-09-25", "time": "09:40:00"},
+            {"action": "SOLD", "qty": 1, "price": 1.50, "date": "2026-09-25", "time": "10:05:00"},
+        ])
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                account_id, "edge-context-1", "2026-09-25", "NVDA", "OPTION", "LONG",
+                50.0, 50.0, 0.0, executions, "imported",
+            ),
+        )
+        conn.execute(
+            """INSERT INTO trade_analysis
+               (trade_group, ticker, date, risk_per_trade, emotional_state)
+               VALUES (?,?,?,?,?)""",
+            ("edge-context-1", "NVDA", "2026-09-25", 100.0, "Focused"),
+        )
+        conn.commit()
+
+        result = main.get_edge_report(
+            account_id=account_id,
+            date_from="2026-09-01",
+            date_to="2026-09-30",
+            conn=conn,
+        )
+
+        focused = next(row for row in result["emotion_outcomes"] if row["state"] == "Focused")
+        assert focused["trade_count"] == 1
+        assert focused["avg_pnl"] == 50.0
+        assert focused["avg_r"] == 0.5
+
+        half_r = next(row for row in result["r_multiple_dist"] if row["bucket"] == "0.5")
+        assert half_r["count"] == 1
+        assert result["coverage"]["realized_r"] == 1
+        assert result["coverage"]["emotion"] == 1
+    finally:
+        conn.close()
