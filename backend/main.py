@@ -1408,10 +1408,10 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         n = len(vals)
         return round(vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2, 2)
 
-    def confidence(n, coverage):
-        if n >= 15 and coverage >= 60:
+    def confidence(n, coverage, days):
+        if n >= 15 and coverage >= 60 and days >= 3:
             return "RELIABLE"
-        if n >= 5 and coverage >= 30:
+        if n >= 5 and coverage >= 30 and days >= 2:
             return "DEVELOPING"
         return "LOW"
 
@@ -1421,6 +1421,7 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     management_coverage = round(excursion_n / total_n * 100, 1) if total_n else 0.0
     capture_coverage = round(capture_n / len(wins_all) * 100, 1) if wins_all else 0.0
     excursion_dates = sorted({r["date"] for r in rows if r["date"]})
+    capture_dates = sorted({r["date"] for r in capture_rows if r["date"]})
 
     return {
         "exit_efficiency": avg([r["exit_efficiency"] for r in capture_rows]),
@@ -1435,9 +1436,10 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         "capture_n": capture_n,
         "capture_winner_total": len(wins_all),
         "capture_coverage_pct": capture_coverage,
-        "excursion_confidence": confidence(excursion_n, management_coverage),
-        "capture_confidence": confidence(capture_n, capture_coverage),
+        "excursion_confidence": confidence(excursion_n, management_coverage, len(excursion_dates)),
+        "capture_confidence": confidence(capture_n, capture_coverage, len(capture_dates)),
         "excursion_days": len(excursion_dates),
+        "capture_days": len(capture_dates),
         "excursion_first_date": excursion_dates[0] if excursion_dates else None,
         "excursion_last_date": excursion_dates[-1] if excursion_dates else None,
         "excursion_stock_n": sum(1 for r in rows if r["instrument_type"] == "STOCK"),
