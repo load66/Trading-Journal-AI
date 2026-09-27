@@ -107,6 +107,10 @@ export const goalsApi = {
   put: (data) => api.put('/api/goals', data),
 };
 
+export const storageApi = {
+  health: () => api.get('/api/storage-health'),
+};
+
 export const reportsApi = {
   get: (params) => api.get('/api/reports', { params }),
 };
