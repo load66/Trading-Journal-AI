@@ -1119,7 +1119,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     setCopySourceGroup('');
 
     try {
-      const response = await tradesApi.list({ limit: 300 });
+      const response = await tradesApi.list({ account_id: trade.account_id, limit: 1000 });
       const currentStrategy = String(analysis?.strategy || trade.strategy || '').trim().toLowerCase();
       const currentSetup = String(trade.setup || '').trim().toLowerCase();
       const rows = (response.data || [])
