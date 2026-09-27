@@ -842,6 +842,18 @@ def test_excursion_confidence_requires_multiple_days(monkeypatch, tmp_path):
                         10.0, 3.0, 70.0, "option_premium_1m",
                     ),
                 )
+        conn.execute(
+            """UPDATE trades
+               SET excursion_version=?, excursion_calculated_at=?
+               WHERE account_id=? AND date IN (?, ?)""",
+            (
+                main.EXCURSION_ENGINE_VERSION,
+                "2026-09-27T12:00:00Z",
+                account_id,
+                "2026-09-23",
+                "2026-09-24",
+            ),
+        )
         conn.commit()
 
         multi_day = main._excursion_kpis(conn, account_id=account_id)
