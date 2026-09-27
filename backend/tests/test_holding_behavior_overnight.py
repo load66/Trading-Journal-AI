@@ -136,11 +136,13 @@ def test_day_trading_holding_behavior_excludes_overnight_only(monkeypatch, tmp_p
     try:
         day_id = seed_account(main, conn, "day_trading", "day")
         swing_id = seed_account(main, conn, "swing_trading", "swing")
+        mixed_id = seed_account(main, conn, "mixed_trading", "mixed")
         investment_id = seed_account(main, conn, "investment", "investment")
         conn.commit()
 
         day = edge_report(main, conn, day_id)
         swing = edge_report(main, conn, swing_id)
+        mixed = edge_report(main, conn, mixed_id)
         investment = edge_report(main, conn, investment_id)
 
         assert day["hold_time"] == {
@@ -165,7 +167,7 @@ def test_day_trading_holding_behavior_excludes_overnight_only(monkeypatch, tmp_p
             }],
         }
 
-        for unchanged in (swing, investment):
+        for unchanged in (swing, mixed, investment):
             assert unchanged["hold_time"]["winners_avg_min"] == 262.0
             assert unchanged["hold_time"]["winners_median_min"] == 18.0
             assert unchanged["hold_time"]["sample_count"] == 9
@@ -178,6 +180,7 @@ def test_day_trading_holding_behavior_excludes_overnight_only(monkeypatch, tmp_p
             "mistake_frequency", "expectancy", "total_trades",
         ):
             assert day[key] == swing[key]
+            assert day[key] == mixed[key]
             assert day[key] == investment[key]
         assert day["total_trades"] == 9
         assert day["expectancy"] == 55.56
