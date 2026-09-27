@@ -89,7 +89,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   // so a slow reply cannot overwrite a newer account or date selection.
   const kpiRun = useRef(0);
   const recentRun = useRef(0);
-  const managementRun = useRef(0);
+  const managementActiveKey = useRef(null);
   const managementBackfillKey = useRef(null);
   const smokingGunRun = useRef(0);
 
@@ -141,8 +141,6 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
 
 
   useEffect(() => {
-    const run = ++managementRun.current;
-    const current = () => run === managementRun.current;
     const params = {};
     if (accountId != null) params.account_id = accountId;
 
@@ -159,43 +157,50 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       params.date_to = latestTradeDate;
     }
 
+    const requestKey = [
+      accountId == null ? 'all' : accountId,
+      managementRange,
+      params.date_from || '',
+      params.date_to || '',
+      reloadKey,
+    ].join('|');
+    managementActiveKey.current = requestKey;
+
     const loadManagement = () => Promise.all([
       kpisApi.get(params).then(r => r.data),
       edgeReportApi.get(params).then(r => r.data),
     ]);
 
-    // Broker-derived metrics render immediately. Market-path backfill is
-    // supplemental and refreshes MFE/MAE/capture when it finishes.
-    loadManagement().then(([nextKpis, nextEdge]) => {
-      if (!current()) return;
+    const applyIfActive = ([nextKpis, nextEdge]) => {
+      if (managementActiveKey.current !== requestKey) return;
       setManagementKpis(nextKpis);
       setManagementEdge(nextEdge);
-    }).catch(() => {
-      if (!current()) return;
-      setManagementKpis(null);
-      setManagementEdge(null);
-    });
+    };
+
+    // Broker-derived metrics render immediately. Market-path backfill is
+    // supplemental and refreshes MFE/MAE/capture when it finishes.
+    loadManagement()
+      .then(applyIfActive)
+      .catch(() => {
+        if (managementActiveKey.current !== requestKey) return;
+        setManagementKpis(null);
+        setManagementEdge(null);
+      });
 
     if (params.date_from && params.date_to) {
-      const backfillKey = [
-        accountId == null ? 'all' : accountId,
-        params.date_from,
-        params.date_to,
-        reloadKey,
-      ].join('|');
+      const backfillKey = requestKey;
 
       if (managementBackfillKey.current !== backfillKey) {
         managementBackfillKey.current = backfillKey;
         excursionApi.calculateRange(params)
           .then(() => loadManagement())
-          .then(([nextKpis, nextEdge]) => {
-            if (!current()) return;
-            setManagementKpis(nextKpis);
-            setManagementEdge(nextEdge);
-          })
+          .then(applyIfActive)
           .catch(() => {
-            // CSV-first management metrics remain valid even if supplemental
-            // market-path data is unavailable.
+            // Allow a later render/retry to attempt the supplemental backfill
+            // again if this request failed.
+            if (managementBackfillKey.current === backfillKey) {
+              managementBackfillKey.current = null;
+            }
           });
       }
     }
