@@ -464,7 +464,7 @@ summary:focus-visible {
   flex: 1;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(110px, 0.8fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(110px, 0.8fr) auto;
   align-items: center;
   gap: 6px;
   padding: 6px var(--space-2) 6px var(--space-3);
