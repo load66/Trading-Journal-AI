@@ -1614,8 +1614,9 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     Profit Capture / Risk During Trade diagnosis.
     """
     sql = (
-        "SELECT instrument_type, net_pnl, mfe_pct, mae_pct, exit_efficiency, "
-        "excursion_basis, date FROM trades WHERE net_pnl IS NOT NULL"
+        "SELECT instrument_type, side, net_pnl, executions, mfe_pct, mae_pct, exit_efficiency, "
+        "excursion_basis, excursion_version, excursion_calculated_at, date "
+        "FROM trades WHERE net_pnl IS NOT NULL"
     )
     params = []
     if account_id is not None:
@@ -1624,7 +1625,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         sql += " AND date >= ?"; params.append(date_from)
     if date_to:
         sql += " AND date <= ?"; params.append(date_to)
-    all_rows = conn.execute(sql, params).fetchall()
+    all_rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    all_rows = [r for r in all_rows if trade_is_closed(r)]
     if not all_rows:
         return {
             "excursion_n": 0,
@@ -1639,6 +1641,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     rows = [
         r for r in all_rows
         if r["excursion_basis"] in valid_bases
+        and str(r.get("excursion_version") or "") == EXCURSION_ENGINE_VERSION
+        and r.get("excursion_calculated_at") is not None
         and r["mfe_pct"] is not None
         and r["mae_pct"] is not None
     ]
@@ -2485,12 +2489,25 @@ def _excursion_is_stale(trade: dict) -> bool:
         "OPTION": "option_premium_1m",
         "FUTURE": "proxy_1m",
     }.get(inst)
-    return (
+    if not trade_is_closed(trade):
+        return True
+    if (
         trade.get("mfe_pct") is None
         or trade.get("mae_pct") is None
         or not expected
         or str(trade.get("excursion_basis") or "") != expected
-    )
+        or str(trade.get("excursion_version") or "") != EXCURSION_ENGINE_VERSION
+        or trade.get("excursion_calculated_at") is None
+    ):
+        return True
+
+    # Losing trades never have profit-capture efficiency.
+    if float(trade.get("net_pnl") or 0) <= 0 and trade.get("exit_efficiency") is not None:
+        return True
+    efficiency = trade.get("exit_efficiency")
+    if efficiency is not None and not (0 <= float(efficiency) <= 100):
+        return True
+    return False
 
 
 async def _calculate_excursions_for_date(
@@ -2502,7 +2519,8 @@ async def _calculate_excursions_for_date(
     sql = """
         SELECT id, account_id, trade_group, date, ticker, instrument_type, side,
                net_pnl, executions, option_type, option_expiry, option_strike,
-               mfe_pct, mae_pct, exit_efficiency, excursion_basis
+               mfe_pct, mae_pct, exit_efficiency, excursion_basis,
+               excursion_version, excursion_calculated_at
         FROM trades
         WHERE date = ?
     """
@@ -2565,7 +2583,7 @@ async def _calculate_excursions_for_date(
             conn.execute(
                 """UPDATE trades
                    SET mfe_pct=?, mae_pct=?, exit_efficiency=?,
-                       excursion_basis=?, excursion_calculated_at=?
+                       excursion_basis=?, excursion_calculated_at=?, excursion_version=?
                    WHERE id=?""",
                 (
                     metric["mfe_pct"],
@@ -2573,6 +2591,7 @@ async def _calculate_excursions_for_date(
                     metric["exit_efficiency"],
                     metric["basis"],
                     calculated_at,
+                    EXCURSION_ENGINE_VERSION,
                     trade["id"],
                 ),
             )
@@ -2609,7 +2628,7 @@ async def _calculate_excursions_for_date(
             conn.execute(
                 """UPDATE trades
                    SET mfe_pct=?, mae_pct=?, exit_efficiency=?,
-                       excursion_basis=?, excursion_calculated_at=?
+                       excursion_basis=?, excursion_calculated_at=?, excursion_version=?
                    WHERE id=?""",
                 (
                     metric["mfe_pct"],
@@ -2617,6 +2636,7 @@ async def _calculate_excursions_for_date(
                     metric["exit_efficiency"],
                     metric["basis"],
                     calculated_at,
+                    EXCURSION_ENGINE_VERSION,
                     trade["id"],
                 ),
             )
