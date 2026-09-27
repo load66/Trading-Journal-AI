@@ -37,7 +37,7 @@ from ai_analysis import (
     generate_performance_diagnosis,
     performance_ai_is_configured,
 )
-from daily_summary import build_daily_context, daily_context_signature, generate_daily_summary
+from daily_summary import build_daily_context, daily_context_signature, daily_cache_matches, generate_daily_summary
 from trade_management_ai import (
     build_management_evidence,
     management_context_signature,
@@ -3921,34 +3921,40 @@ def get_daily_summary(
 
     input_signature = daily_context_signature(context)
 
-    # Check cache after the evidence fingerprint is known. Older summaries that
-    # predate input_signature are intentionally refreshed once, then become
-    # cacheable like any new diagnosis.
-    if not force:
-        if account_id is None:
-            row = conn.execute(
-                "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
-                (date,),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id = ?",
-                (date, account_id),
-            ).fetchone()
-        if row:
-            try:
-                content = json.loads(row['ai_content'])
-                if (
-                    int(content.get('evidence_version') or 0) >= 4
-                    and content.get('analytics_engine_version') == ANALYTICS_ENGINE_VERSION
-                    and content.get('input_signature') == input_signature
-                ):
-                    content['date'] = date
-                    content['cached'] = True
-                    content['generated_at'] = row['generated_at']
-                    return content
-            except Exception:
-                pass
+    # A saved Day Review is immutable while this date's evidence fingerprint is
+    # unchanged. Code/version bumps alone do not justify another paid AI call.
+    # Only changed evidence or an explicit force=true request regenerates it.
+    if account_id is None:
+        row = conn.execute(
+            "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
+            (date,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id = ?",
+            (date, account_id),
+        ).fetchone()
+
+    cache_miss_reason = "no_saved_diagnosis"
+    if row:
+        try:
+            content = json.loads(row['ai_content'])
+            if not force and daily_cache_matches(content, input_signature):
+                content['date'] = date
+                content['cached'] = True
+                content['cache_reason'] = "evidence_unchanged"
+                content['generated_at'] = row['generated_at']
+                return content
+            if force:
+                cache_miss_reason = "manual_override"
+            elif content.get("input_signature"):
+                cache_miss_reason = "evidence_changed"
+            else:
+                cache_miss_reason = "legacy_cache_missing_signature"
+        except Exception:
+            cache_miss_reason = "invalid_saved_diagnosis"
+    elif force:
+        cache_miss_reason = "manual_override"
 
     try:
         summary = generate_daily_summary(context)
@@ -3968,6 +3974,7 @@ def get_daily_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
     summary['input_signature'] = input_signature
+    summary['regeneration_reason'] = cache_miss_reason
 
     conn.execute(
         """INSERT INTO daily_summaries (summary_date, account_id, ai_content, generated_at)
