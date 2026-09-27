@@ -83,6 +83,20 @@ def daily_context_signature(context: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def daily_cache_matches(content: dict, input_signature: str) -> bool:
+    """Return True when a saved diagnosis was generated from identical day evidence.
+
+    Cache validity follows the evidence fingerprint only. Engine/evidence version
+    bumps must not spend AI tokens by themselves; if a code change alters the
+    actual derived evidence, daily_context_signature changes naturally.
+    """
+    return bool(
+        isinstance(content, dict)
+        and content.get("input_signature")
+        and content.get("input_signature") == input_signature
+    )
+
+
 def build_daily_context(conn, date: str, account_id) -> dict:
     """Fetch all data needed to generate a daily summary."""
 
