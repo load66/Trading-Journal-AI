@@ -115,7 +115,11 @@ def test_copy_journal_merge_only_reuses_safe_context(monkeypatch, tmp_path):
         # Trade-specific fields must remain destination-specific.
         assert analysis["risk_per_trade"] == 55.0
         assert analysis["emotional_state"] == "Anxious"
+        assert analysis["stop_loss"] is None
+        assert analysis["target_price"] is None
         assert result["trade"]["net_pnl"] == -35.0
+        assert result["trade"]["gross_pnl"] == -35.0
+        assert json.loads(result["trade"]["executions"])[0]["price"] == 1.0
         assert result["trade"]["setup"] == "A+ Pivot"
 
         tags = {(tag["tag_type"], tag["tag_value"]) for tag in result["tags"]}
