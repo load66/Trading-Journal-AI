@@ -464,8 +464,8 @@ test('Trade View surfaces option strategy, review status, excursion and planned 
       exit_efficiency: 71.8,
       stop_loss: 1.17,
       target_price: 4.14,
-      risk_per_trade: null,
-      realized_r: null,
+      risk_per_trade: 540,
+      realized_r: 0.3813,
     }],
   });
 
@@ -484,6 +484,8 @@ test('Trade View surfaces option strategy, review status, excursion and planned 
   expect(screen.getByText('-72.2')).toBeVisible();
   expect(screen.getByText('71.8%')).toBeVisible();
   expect(screen.getByText('1:3.54')).toBeVisible();
+  expect(screen.getByText('+0.38R realized')).toBeVisible();
+  expect(screen.queryByText('R pending')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Set R:R' })).not.toBeInTheDocument();
   expect(screen.queryByText('Not tagged')).not.toBeInTheDocument();
 
