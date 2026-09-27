@@ -59,6 +59,12 @@ FIXED_ZONE_ALIASES = {
     "PST": "UTC-08:00",
     "PDT": "UTC-07:00",
 }
+METADATA_REGION_ALIASES = {
+    "EST": "America/New_York", "EDT": "America/New_York",
+    "CST": "America/Chicago", "CDT": "America/Chicago",
+    "MST": "America/Denver", "MDT": "America/Denver",
+    "PST": "America/Los_Angeles", "PDT": "America/Los_Angeles",
+}
 
 
 def _offset_label(value: str | None) -> str | None:
@@ -111,18 +117,26 @@ def _timezone_object(label: str):
     return ZoneInfo(normalized)
 
 
-def _timezone_info(value: str, method: str, confidence: str) -> dict:
-    label = _timezone_label(value)
+def _timezone_info(
+    value: str,
+    method: str,
+    confidence: str,
+    *,
+    metadata_context: bool = False,
+) -> dict:
+    raw_value = str(value).strip()
+    normalized_value = METADATA_REGION_ALIASES.get(raw_value.upper(), raw_value) if metadata_context else raw_value
+    label = _timezone_label(normalized_value)
     if not label:
         raise ValueError(
-            f"Unsupported timezone '{value}'. Use an IANA zone such as America/New_York, "
+            f"Unsupported timezone '{raw_value}'. Use an IANA zone such as America/New_York, "
             "a region label such as ET/CT, or an explicit UTC offset such as -04:00."
         )
     return {
         "timezone": label,
         "method": method,
         "confidence": confidence,
-        "evidence": str(value).strip(),
+        "evidence": raw_value,
     }
 
 
@@ -147,7 +161,9 @@ def _metadata_timezone_candidates(content: str) -> list[dict]:
             for probe in probes:
                 label = _timezone_label(probe)
                 if label:
-                    candidates.append(_timezone_info(probe, "csv_timezone_metadata", "authoritative"))
+                    candidates.append(_timezone_info(
+                        probe, "csv_timezone_metadata", "authoritative", metadata_context=True
+                    ))
                     break
 
         # IANA zones count only when the row itself looks like metadata.
@@ -163,7 +179,9 @@ def _metadata_timezone_candidates(content: str) -> list[dict]:
                 text,
             ):
                 if _timezone_label(token):
-                    candidates.append(_timezone_info(token, "report_timezone_metadata", "high"))
+                    candidates.append(_timezone_info(
+                        token, "report_timezone_metadata", "high", metadata_context=True
+                    ))
 
     # Preserve first evidence for a zone/method pair.
     unique = []
@@ -2100,15 +2118,15 @@ def parse_generic_rows(content, timezone_override: str | None = None):
         if not symbol:
             why.append("symbol is empty")
         if not date:
-            source_value = raw_timestamp or raw_date
-            why.append(
-                f"timestamp/date '{source_value}' is not a supported execution date/time"
-            )
+            if raw_timestamp:
+                why.append(f"timestamp '{raw_timestamp}' is not a supported execution date/time")
+            else:
+                why.append(f"date '{raw_date}' is not YYYY-MM-DD or MM/DD/YYYY")
         if not time_:
-            source_value = raw_timestamp or raw_time
-            why.append(
-                f"timestamp/time '{source_value}' is not a supported execution time"
-            )
+            if raw_timestamp:
+                why.append(f"timestamp '{raw_timestamp}' is not a supported execution time")
+            else:
+                why.append(f"time '{raw_time}' is not HH:MM or HH:MM:SS")
         if not action:
             why.append(f"side '{cell(cells, 'side')}' is not BUY or SELL")
         if qty is None:
