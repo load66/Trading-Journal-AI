@@ -1250,7 +1250,7 @@ def get_trade_analysis(trade_group: str, conn: sqlite3.Connection = Depends(get_
 
 
 ALLOWED_TRADE_SCREENSHOT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
-MAX_TRADE_SCREENSHOT_BYTES = 12 * 1024 * 1024
+MAX_TRADE_SCREENSHOT_BYTES = 3 * 1024 * 1024
 
 
 def _ensure_trade_analysis_row(conn, trade_group: str):
@@ -1291,7 +1291,7 @@ async def upload_trade_chart_screenshot(
     if not raw:
         raise ValueError("Chart screenshot is empty.")
     if len(raw) > MAX_TRADE_SCREENSHOT_BYTES:
-        raise ValueError("Chart screenshot must be 12 MB or smaller.")
+        raise ValueError("Chart screenshot must be 3 MB or smaller after compression.")
 
     _ensure_trade_analysis_row(conn, trade_group)
     current = conn.execute(
