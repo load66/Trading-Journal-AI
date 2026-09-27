@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { tradesApi, chartApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
@@ -115,7 +115,84 @@ function EditTextarea({ label, value, onChange }) {
 
 const EMOTIONAL_STATES = ['Focused', 'Confident', 'Calm', 'Anxious', 'FOMO', 'Frustrated', 'Greedy', 'Fearful', 'Undisciplined', 'Overconfident'];
 const DEFAULT_SOURCES   = ['Watchlist', 'Scanner', 'Alert', 'News', 'Social Media', 'Own Research'];
+
 const TAG_TYPES = ['strategy', 'setup', 'execution', 'mistake', 'emotion', 'outcome', 'source'];
+
+const ENTRY_REVIEW_SUGGESTIONS = [
+  { label: 'Key level breakout', text: 'Entered on a confirmed break of a key level with momentum and follow-through.' },
+  { label: 'PDH / PMH breakout', text: 'Entered on a confirmed break of the prior-day or premarket high.' },
+  { label: 'Break + retest', text: 'Entered after the breakout level held on a retest.' },
+  { label: 'VWAP reclaim', text: 'Entered after VWAP was reclaimed and held with confirmation.' },
+  { label: '8 EMA pullback · 10m', text: 'Entered on a controlled pullback into the 8 EMA on the 10-minute timeframe.' },
+  { label: 'Opening range breakout', text: 'Entered on an opening-range breakout with confirmation.' },
+  { label: 'Trend continuation', text: 'Entered with the established intraday trend after consolidation.' },
+  { label: 'Reversal at key level', text: 'Entered on a confirmed reversal from a defined support or resistance level.' },
+  { label: 'Waited for confirmation', text: 'Waited for confirmation before entering instead of anticipating the move.' },
+];
+
+const EXIT_REVIEW_SUGGESTIONS = [
+  { label: 'HOD trim + 8 EMA trail', text: 'Trimmed into the high of day, then trailed the remainder using the 8 EMA on the 10-minute timeframe.' },
+  { label: 'Key-level trim + trail', text: 'Trimmed at the next key level, then trailed the remaining position.' },
+  { label: 'Partial at 1R + trail', text: 'Took a partial at 1R, then managed the remainder with a trailing stop.' },
+  { label: 'Technical invalidation', text: 'Exited when the original technical thesis was invalidated.' },
+  { label: 'Lost 8 EMA · 10m', text: 'Exited after price lost the 8 EMA on the 10-minute timeframe and failed to reclaim it.' },
+  { label: 'Lost VWAP', text: 'Exited after VWAP was lost and the reclaim failed.' },
+  { label: 'Momentum stalled', text: 'Exited when momentum stalled and follow-through failed to develop.' },
+  { label: 'Target reached', text: 'Exited into the planned target area.' },
+  { label: 'Time-based exit', text: 'Exited because the trade failed to progress within the planned time window.' },
+];
+
+const MISTAKE_REVIEW_SUGGESTIONS = [
+  { label: 'Entered before confirmation', category: 'Entry', text: 'Entered before confirmation and anticipated the setup.', correction: 'Wait for the setup to confirm before committing risk.' },
+  { label: 'Chased extended move', category: 'Entry', text: 'Chased an extended move instead of waiting for a cleaner entry.', correction: 'Wait for a pullback, retest, or fresh base instead of chasing extension.' },
+  { label: 'Entered into key level', category: 'Entry', text: 'Entered too close to opposing support or resistance.', correction: 'Require enough room to the next key level before entering.' },
+  { label: 'No volume confirmation', category: 'Entry', text: 'Entered without sufficient volume or momentum confirmation.', correction: 'Require volume and momentum confirmation before entry.' },
+  { label: 'Poor risk/reward', category: 'Entry', text: 'Accepted a trade with poor reward relative to the planned risk.', correction: 'Skip trades that do not offer enough reward to the next realistic target.' },
+  { label: 'Oversized position', category: 'Risk', text: 'Position size was too large for the setup quality or stop distance.', correction: 'Size from the invalidation level and planned dollar risk before entry.' },
+  { label: 'Added to loser', category: 'Risk', text: 'Added to a losing position after the original entry was already under pressure.', correction: 'Do not add risk after the original setup begins failing unless a separate planned add condition is met.' },
+  { label: 'Moved / ignored stop', category: 'Risk', text: 'Moved or ignored the planned stop after the trade invalidated.', correction: 'Honor the predefined invalidation without widening risk after entry.' },
+  { label: 'Held loser too long', category: 'Exit', text: 'Held a losing trade too long after the setup stopped working.', correction: 'Exit sooner when favorable progress fails and technical invalidation begins.' },
+  { label: 'Cut winner too early', category: 'Exit', text: 'Exited a winning trade too early before the planned management signal triggered.', correction: 'Let the planned trailing rule manage the remainder instead of exiting from noise.' },
+  { label: 'Skipped partials', category: 'Exit', text: 'Failed to take planned partial profits into strength.', correction: 'Use the planned partial level and trail the remaining position mechanically.' },
+  { label: 'No exit plan', category: 'Exit', text: 'Entered without a clearly defined profit-taking and invalidation plan.', correction: 'Define the initial stop, first trim, and trailing rule before entering.' },
+  { label: 'FOMO entry', category: 'Discipline', text: 'Entered because of FOMO instead of waiting for the planned setup.', correction: 'If the planned entry is missed, wait for a new setup instead of chasing.' },
+  { label: 'Revenge trade', category: 'Discipline', text: 'Took the trade to recover a prior loss rather than because the setup qualified.', correction: 'Reset after a loss and require the full checklist before the next trade.' },
+  { label: 'Overtraded', category: 'Discipline', text: 'Took an extra trade that did not meet the normal quality threshold.', correction: 'Respect the daily trade limit and only take qualified setups.' },
+];
+
+const REVIEW_MANAGED_TAGS = [
+  ...ENTRY_REVIEW_SUGGESTIONS.map(item => ({ tag_type: 'setup', tag_value: item.label })),
+  ...EXIT_REVIEW_SUGGESTIONS.map(item => ({ tag_type: 'execution', tag_value: item.label })),
+  ...MISTAKE_REVIEW_SUGGESTIONS.map(item => ({ tag_type: 'mistake', tag_value: item.label })),
+];
+
+function phraseLine(text) {
+  return `• ${text}`;
+}
+
+function hasSuggestedPhrase(value, text) {
+  const lines = String(value || '').split('\n').map(line => line.trim());
+  return lines.includes(text) || lines.includes(phraseLine(text));
+}
+
+function toggleSuggestedPhrase(value, text) {
+  const bullet = phraseLine(text);
+  const lines = String(value || '').split('\n').map(line => line.trim()).filter(Boolean);
+  const exists = lines.some(line => line === text || line === bullet);
+  const next = exists
+    ? lines.filter(line => line !== text && line !== bullet)
+    : [...lines, bullet];
+  return next.join('\n');
+}
+
+function selectedSuggestions(value, suggestions) {
+  return suggestions.filter(item => hasSuggestedPhrase(value, item.text));
+}
+
+function reviewCompletion(entryReason, exitReason, mistakes) {
+  return [entryReason, exitReason, mistakes].filter(value => String(value || '').trim()).length;
+}
+
 
 // ── Dropdown with add-new option ──────────────────────────────────────────────
 
