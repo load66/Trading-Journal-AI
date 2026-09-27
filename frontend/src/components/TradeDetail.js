@@ -129,14 +129,26 @@ function computeStats(trade) {
     : adjustedCost ? (trade.net_pnl / adjustedCost * 100) : null;
 
   const sortedTimes = [...execs].map(e => e.time).filter(Boolean).sort();
-  const openTime  = sortedTimes[0];
-  const closeTime = sortedTimes[sortedTimes.length - 1];
+  const openTime  = entryFills.map(e => e.time).filter(Boolean).sort()[0] || sortedTimes[0];
+  const closeTimes = exitFills.map(e => e.time).filter(Boolean).sort();
+  const closeTime = closeTimes[closeTimes.length - 1] || null;
 
-  let holdMinutes = null;
-  if (openTime && closeTime && exitFills.length > 0) {
-    const [oh, om] = openTime.split(':').map(Number);
-    const [ch, cm] = closeTime.split(':').map(Number);
-    holdMinutes = (ch * 60 + cm) - (oh * 60 + om);
+  const boughtQty = execs
+    .filter(e => String(e.action || '').toUpperCase() === 'BOT')
+    .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+  const soldQty = execs
+    .filter(e => String(e.action || '').toUpperCase() === 'SOLD')
+    .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+  const isClosed = boughtQty > 0 && soldQty > 0 && Math.abs(boughtQty - soldQty) < 1e-6;
+
+  let holdMinutes = Number.isFinite(Number(trade.hold_seconds))
+    ? Number(trade.hold_seconds) / 60
+    : null;
+  if (holdMinutes == null && openTime && closeTime && isClosed) {
+    const [oh, om, os = 0] = openTime.split(':').map(Number);
+    const [ch, cm, cs = 0] = closeTime.split(':').map(Number);
+    const fallback = (ch * 60 + cm + cs / 60) - (oh * 60 + om + os / 60);
+    holdMinutes = fallback >= 0 ? fallback : null;
   }
 
   const fmtHold = (m) => {
@@ -145,7 +157,6 @@ function computeStats(trade) {
     return `${Math.floor(m / 60)}h ${m % 60}m`;
   };
 
-  const isClosed = exitFills.length > 0;
   const isWin = (trade.net_pnl || 0) > 0;
 
   return { avgEntry, avgExit, totalQty, adjustedCost, plPercent, openTime, closeTime, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };

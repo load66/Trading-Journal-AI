@@ -70,7 +70,7 @@ function ExcursionCell({ trade }) {
   if (!hasMfe && !hasMae) return <span className="text-faint">No path data</span>;
 
   return (
-    <div className="trade-excursion-cell" title="Maximum favorable / adverse excursion while the trade was open">
+    <div className="trade-excursion-cell" title="Maximum favorable / adverse net P&L excursion while the trade was open, measured against entry premium/notional">
       <span className="pos">{hasMfe ? `+${Math.abs(mfe).toFixed(1)}` : '—'}</span>
       <span className="trade-excursion-sep">/</span>
       <span className="neg">{hasMae ? `-${Math.abs(mae).toFixed(1)}` : '—'}</span>
@@ -80,6 +80,7 @@ function ExcursionCell({ trade }) {
 }
 
 function ExitQuality({ trade }) {
+  if (Number(trade.net_pnl || 0) <= 0) return <span className="text-faint">—</span>;
   const value = Number(trade.exit_efficiency);
   if (!Number.isFinite(value)) return <span className="text-faint">—</span>;
   const cls = value >= 60 ? 'pos' : value >= 35 ? 'caution' : 'neg';

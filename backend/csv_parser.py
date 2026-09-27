@@ -7,19 +7,14 @@ from collections import Counter
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from trade_metrics import FUTURES_MULTIPLIERS
+
 
 MONTH_MAP = {
     'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4,
     'MAY': 5, 'JUN': 6, 'JUL': 7, 'AUG': 8,
     'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
 }
-
-# Futures multipliers ($ per point)
-FUTURES_MULTIPLIERS = {
-    '/ES': 50, '/MES': 5, '/NQ': 20, '/MNQ': 2,
-    '/YM': 5, '/MYM': 0.5, '/RTY': 50, '/M2K': 5,
-}
-
 
 DEFAULT_EXECUTION_TIMEZONE = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 

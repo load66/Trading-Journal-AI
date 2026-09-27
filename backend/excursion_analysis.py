@@ -14,7 +14,45 @@ import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from trade_metrics import execution_datetime, instrument_multiplier
+
 ET = ZoneInfo("America/New_York")
+EXCURSION_ENGINE_VERSION = "2026.09.27.2"
+
+
+def expected_excursion_basis(trade: dict) -> str | None:
+    return {
+        "STOCK": "stock_1m",
+        "OPTION": "option_premium_1m",
+        "FUTURE": "proxy_1m",
+    }.get(str(trade.get("instrument_type") or "STOCK").upper())
+
+
+def excursion_metrics_are_current(trade: dict) -> bool:
+    expected = expected_excursion_basis(trade)
+    return bool(
+        expected
+        and str(trade.get("excursion_basis") or "") == expected
+        and str(trade.get("excursion_version") or "") == EXCURSION_ENGINE_VERSION
+        and trade.get("mfe_pct") is not None
+        and trade.get("mae_pct") is not None
+    )
+
+
+def sanitize_excursion_metrics(trade: dict) -> dict:
+    """Never expose stale or provenance-less excursion values as verified data."""
+    row = dict(trade)
+    current = excursion_metrics_are_current(row)
+    if not current:
+        row["mfe_pct"] = None
+        row["mae_pct"] = None
+        row["exit_efficiency"] = None
+    elif float(row.get("net_pnl") or 0) <= 0:
+        # Profit capture is undefined for a losing/flat realized trade.
+        row["exit_efficiency"] = None
+    row["excursion_current"] = current
+    row["excursion_engine_version"] = EXCURSION_ENGINE_VERSION
+    return row
 
 
 def _execs(trade: dict) -> list[dict]:
@@ -28,14 +66,8 @@ def _execs(trade: dict) -> list[dict]:
 
 
 def _exec_dt(e: dict) -> datetime | None:
-    date = str(e.get("date") or "").strip()
-    time = str(e.get("time") or "").strip()
-    if not date or not time:
-        return None
-    try:
-        return datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=ET)
-    except Exception:
-        return None
+    """Resolve broker execution time into ET without assuming the source clock is ET."""
+    return execution_datetime(e, target_timezone="America/New_York")
 
 
 def _weighted_price(rows: list[dict]) -> float | None:
@@ -102,23 +134,35 @@ def _bar_for_minute(bars: list[dict], dt: datetime) -> dict | None:
     return None
 
 
-def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | None, float, float]:
-    """Capture efficiency from broker executions plus the in-trade market path.
+def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | None, float, float, float | None, float | None, float | None]:
+    """Execution-aware net P&L excursion for the actual traded instrument.
 
-    Broker fills define every cash flow and position-size change. Market bars
-    only mark the quantity that remained open between fills. This supports
-    scale-ins and partial exits without replacing any broker execution.
-
-    To avoid impossible look-ahead inside a one-minute bar, full bar high/low
-    is used only when no execution occurred during that minute. In a minute
-    containing fills, actual fill prices plus the bar close are used.
+    Broker fills define cash flows and position-size changes. Market bars mark
+    only the quantity that was actually open between fills. Commissions are
+    included, so the final marked P&L reconciles to net_pnl and the resulting
+    MFE/MAE percentages use the same entry-notional denominator as Trade View
+    P/L %. This makes scale-ins/partial exits comparable without look-ahead.
     """
     executions = sorted(
         [e for e in _execs(trade) if _exec_dt(e)],
         key=_exec_dt,
     )
     if not executions:
-        return None, 0.0, 0.0
+        return None, 0.0, 0.0, None, None, None
+
+    multiplier = instrument_multiplier(trade.get("instrument_type"), trade.get("ticker"))
+    if multiplier is None:
+        return None, 0.0, 0.0, None, None, None
+
+    side = str(trade.get("side") or "LONG").upper()
+    entry_action = "BOT" if side == "LONG" else "SOLD"
+    entry_notional = sum(
+        float(e.get("qty") or 0) * float(e.get("price") or 0) * multiplier
+        for e in executions
+        if str(e.get("action") or "").upper() == entry_action
+    )
+    if entry_notional <= 0:
+        return None, 0.0, 0.0, None, None, None
 
     cashflow = 0.0
     signed_qty = 0.0
@@ -130,7 +174,7 @@ def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | N
         nonlocal max_pnl, min_pnl
         if price is None or price <= 0:
             return
-        pnl = cashflow + signed_qty * float(price)
+        pnl = cashflow + signed_qty * float(price) * multiplier
         max_pnl = max(max_pnl, pnl)
         min_pnl = min(min_pnl, pnl)
 
@@ -138,14 +182,16 @@ def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | N
         nonlocal cashflow, signed_qty
         qty = float(execution.get("qty") or 0)
         price = float(execution.get("price") or 0)
+        fee = abs(float(execution.get("commission") or 0))
         action = str(execution.get("action") or "").upper()
         if qty <= 0 or price <= 0:
             return
+        notional = qty * price * multiplier
         if action == "BOT":
-            cashflow -= qty * price
+            cashflow -= notional + fee
             signed_qty += qty
         elif action == "SOLD":
-            cashflow += qty * price
+            cashflow += notional - fee
             signed_qty -= qty
         mark(price)
 
@@ -193,13 +239,15 @@ def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | N
     max_pnl = max(max_pnl, realized_pnl)
     min_pnl = min(min_pnl, realized_pnl)
 
+    mfe_pct = max(0.0, max_pnl) / entry_notional * 100
+    mae_pct = max(0.0, -min_pnl) / entry_notional * 100
+
     net_pnl = float(trade.get("net_pnl") or 0)
     efficiency = None
     if net_pnl > 0 and realized_pnl > 0 and max_pnl > 1e-12:
         efficiency = max(0.0, min(100.0, realized_pnl / max_pnl * 100))
 
-    return efficiency, max_pnl, min_pnl
-
+    return efficiency, max_pnl, min_pnl, entry_notional, mfe_pct, mae_pct
 
 def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str | None = None) -> dict:
     """Calculate market excursion while the trade was open.
@@ -292,12 +340,28 @@ def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str |
     efficiency = None
     path_max_pnl = None
     path_min_pnl = None
+    path_entry_notional = None
+    position_mfe_pct = None
+    position_mae_pct = None
+    price_mfe_pct = mfe_pct
+    price_mae_pct = mae_pct
     if actual_instrument_path:
-        efficiency, path_max_pnl, path_min_pnl = _execution_path_efficiency(trade, held)
+        (
+            efficiency,
+            path_max_pnl,
+            path_min_pnl,
+            path_entry_notional,
+            position_mfe_pct,
+            position_mae_pct,
+        ) = _execution_path_efficiency(trade, held)
+        if position_mfe_pct is not None:
+            mfe_pct = position_mfe_pct
+        if position_mae_pct is not None:
+            mae_pct = position_mae_pct
 
     notes = {
-        "stock_1m": "Stock excursion uses Alpaca 1-minute stock bars with actual Schwab fills as entry/exit anchors.",
-        "option_premium_1m": "Option excursion uses Alpaca 1-minute OCC option-premium bars with actual Schwab option fills as entry/exit anchors.",
+        "stock_1m": "Stock excursion uses Alpaca 1-minute stock bars plus actual broker execution cash flows and fees.",
+        "option_premium_1m": "Option excursion uses Alpaca 1-minute OCC option-premium bars plus actual broker execution cash flows and fees.",
         "proxy_1m": "Futures excursion uses the configured ETF proxy and should be interpreted as market context.",
     }
     note = notes.get(basis, "Excursion uses 1-minute market bars and broker execution timestamps.")
@@ -308,8 +372,14 @@ def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str |
         "mae_pct": round(mae_pct, 4),
         "exit_efficiency": round(efficiency, 2) if efficiency is not None else None,
         "captured_directional_pct": round(captured_pct, 4),
-        "path_max_pnl_per_unit": round(path_max_pnl, 6) if path_max_pnl is not None else None,
-        "path_min_pnl_per_unit": round(path_min_pnl, 6) if path_min_pnl is not None else None,
+        "path_max_pnl_per_unit": round(path_max_pnl / (instrument_multiplier(trade.get("instrument_type"), trade.get("ticker")) or 1), 6) if path_max_pnl is not None else None,
+        "path_min_pnl_per_unit": round(path_min_pnl / (instrument_multiplier(trade.get("instrument_type"), trade.get("ticker")) or 1), 6) if path_min_pnl is not None else None,
+        "path_max_pnl_dollars": round(path_max_pnl, 2) if path_max_pnl is not None else None,
+        "path_min_pnl_dollars": round(path_min_pnl, 2) if path_min_pnl is not None else None,
+        "entry_notional": round(path_entry_notional, 2) if path_entry_notional is not None else None,
+        "price_mfe_pct": round(price_mfe_pct, 4),
+        "price_mae_pct": round(price_mae_pct, 4),
+        "engine_version": EXCURSION_ENGINE_VERSION,
         "entry_reference": round(entry_ref, 6),
         "exit_reference": round(exit_ref, 6),
         "favorable_price": round(favorable_price, 6),

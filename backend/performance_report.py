@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from math import inf
 from statistics import mean, median
 
 from behavior_rules import detect_daily_flags
+from trade_metrics import (
+    entry_exit_actions,
+    entry_notional,
+    execution_datetime,
+    first_entry_minutes,
+    hold_seconds,
+    parse_executions,
+    trade_is_closed,
+    weighted_price,
+)
 
 from smoking_gun_library import (
     ANALYTICS_ENGINE_VERSION,
@@ -46,55 +56,38 @@ DAY_COUNT_BUCKETS = [
 ]
 
 
-def _parse_time(date_str: str, time_str: str):
-    if not date_str or not time_str:
-        return None
-    raw = time_str.strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %I:%M %p"):
-        try:
-            return datetime.strptime(f"{date_str} {raw}", fmt)
-        except ValueError:
-            continue
-    return None
+_AWARE_MAX = datetime.max.replace(tzinfo=timezone.utc)
 
 
-def _load_execs(trade):
-    try:
-        return json.loads(trade.get("executions") or "[]")
-    except Exception:
-        return []
-
-
-def _entry_exit_actions(side):
-    return ("BOT", "SOLD") if str(side).upper() == "LONG" else ("SOLD", "BOT")
+def _sort_dt(value):
+    return value if value is not None else _AWARE_MAX
 
 
 def enrich_trade(trade):
+    """Add canonical execution-derived dimensions used by every report cohort."""
     t = dict(trade)
-    execs = _load_execs(t)
-    entry_action, exit_action = _entry_exit_actions(t.get("side"))
-    entries = [e for e in execs if e.get("action") == entry_action]
-    exits = [e for e in execs if e.get("action") == exit_action]
+    execs = parse_executions(t)
+    entry_action, exit_action = entry_exit_actions(t.get("side"))
+    entries = [e for e in execs if str(e.get("action") or "").upper() == entry_action]
+    exits = [e for e in execs if str(e.get("action") or "").upper() == exit_action]
 
-    def dt(e):
-        return _parse_time(e.get("date") or t.get("date"), e.get("time"))
-
-    entries = sorted(entries, key=lambda e: dt(e) or datetime.max)
-    exits = sorted(exits, key=lambda e: dt(e) or datetime.max)
-    entry_dt = dt(entries[0]) if entries else None
-    exit_dt = dt(exits[-1]) if exits else None
-    hold_sec = (exit_dt - entry_dt).total_seconds() if entry_dt and exit_dt else None
-    if hold_sec is not None and hold_sec < 0:
-        hold_sec = None
+    fallback = str(t.get("date") or "")
+    entries = sorted(
+        entries,
+        key=lambda e: execution_datetime(e, fallback) or _AWARE_MAX,
+    )
+    exits = sorted(
+        exits,
+        key=lambda e: execution_datetime(e, fallback) or _AWARE_MAX,
+    )
+    entry_dt = execution_datetime(entries[0], fallback) if entries else None
+    exit_dt = execution_datetime(exits[-1], fallback) if exits else None
 
     entry_qty = sum(float(e.get("qty") or 0) for e in entries)
-    avg_entry = None
-    if entry_qty > 0:
-        avg_entry = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries) / entry_qty
-
-    qty_bot = sum(float(e.get("qty") or 0) for e in execs if e.get("action") == "BOT")
-    qty_sold = sum(float(e.get("qty") or 0) for e in execs if e.get("action") == "SOLD")
-    is_open = abs(qty_bot - qty_sold) > 1e-6
+    avg_entry = weighted_price(entries)
+    qty_bot = sum(float(e.get("qty") or 0) for e in execs if str(e.get("action") or "").upper() == "BOT")
+    qty_sold = sum(float(e.get("qty") or 0) for e in execs if str(e.get("action") or "").upper() == "SOLD")
+    is_open = not trade_is_closed(t)
 
     t.update({
         "execs": execs,
@@ -102,10 +95,11 @@ def enrich_trade(trade):
         "exits": exits,
         "entry_dt": entry_dt,
         "exit_dt": exit_dt,
-        "hold_sec": hold_sec,
+        "entry_market_minute": first_entry_minutes(t, "America/New_York"),
+        "hold_sec": hold_seconds(t),
         "entry_qty": entry_qty,
         "avg_entry": avg_entry,
-        "entry_notional": entry_qty * (avg_entry or 0),
+        "entry_notional": entry_notional(t),
         "pnl": float(t.get("net_pnl") or 0),
         "is_open": is_open,
         "open_quantity": round(abs(qty_bot - qty_sold), 6),
@@ -192,7 +186,7 @@ def _daily_rows(trades):
     running = 0.0
     out = []
     for day in sorted(k for k in by_day if k):
-        rows = sorted(by_day[day], key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(by_day[day], key=lambda r: _sort_dt(r.get("entry_dt")))
         options = sum(r["pnl"] for r in rows if r.get("instrument_type") == "OPTION")
         shares = sum(r["pnl"] for r in rows if r.get("instrument_type") == "STOCK")
         futures = sum(r["pnl"] for r in rows if r.get("instrument_type") == "FUTURE")
@@ -231,7 +225,7 @@ def _stop_model(trades):
         adjusted_total = 0.0
         breaches = []
         for day, rows in by_day.items():
-            rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+            rows = sorted(rows, key=lambda r: _sort_dt(r.get("entry_dt")))
             actual = sum(r["pnl"] for r in rows)
             cum = 0.0
             stopped = False
@@ -291,7 +285,7 @@ def _revenge_and_chase(trades):
     revenge = defaultdict(list)
     chase = []
     for _, rows in by_day_ticker.items():
-        rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(rows, key=lambda r: _sort_dt(r.get("entry_dt")))
         has_loss = False
         reentry_depth = 0
         prev = None
@@ -343,11 +337,10 @@ def _averaging_down(t):
 
 
 def _time_bucket(t):
-    dt = t.get("entry_dt")
-    if not dt:
+    mins = t.get("entry_market_minute")
+    if mins is None:
         return None
-    mins = dt.hour * 60 + dt.minute
-    start = (mins // 30) * 30
+    start = (int(mins) // 30) * 30
     h, m = divmod(start, 60)
     return f"{h:02d}:{m:02d}"
 
@@ -385,13 +378,13 @@ def _behavior_analysis(trades):
     size_medians = _instrument_size_medians(trades)
     first_sizes, after_loss_sizes, after_loss_rows = [], [], []
     for rows in by_day.values():
-        rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(rows, key=lambda r: _sort_dt(r.get("entry_dt")))
         first_sizes += [v for v in (_size_multiple(r, size_medians) for r in rows[:3]) if v is not None]
         cum = 0.0
         for r in rows:
             cum += r["pnl"]
             if threshold and cum <= -threshold:
-                after = [x for x in rows if (x.get("entry_dt") or datetime.max) > (r.get("entry_dt") or datetime.max)]
+                after = [x for x in rows if (_sort_dt(x.get("entry_dt"))) > (_sort_dt(r.get("entry_dt")))]
                 after_loss_rows += after
                 after_loss_sizes += [v for v in (_size_multiple(x, size_medians) for x in after) if v is not None]
                 break
@@ -440,12 +433,14 @@ def _behavior_analysis(trades):
         add_flaw(f"High-volume trading days ({label} trades)", cohort)
 
     opening_rows = [
-        t for t in trades if t.get("entry_dt")
-        and 570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 600
+        t for t in trades
+        if t.get("entry_market_minute") is not None
+        and 570 <= t["entry_market_minute"] < 600
     ]
     closing_rows = [
-        t for t in trades if t.get("entry_dt")
-        and 930 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 960
+        t for t in trades
+        if t.get("entry_market_minute") is not None
+        and 930 <= t["entry_market_minute"] < 960
     ]
     add_flaw("First 30 minutes", opening_rows)
     add_flaw("Last 30 minutes", closing_rows)
@@ -486,7 +481,7 @@ def by_day_ticker_sorted(trades):
     groups = defaultdict(list)
     for t in trades:
         groups[(t.get("date"), t.get("ticker"))].append(t)
-    return {k: sorted(v, key=lambda r: r.get("entry_dt") or datetime.max) for k, v in groups.items()}
+    return {k: sorted(v, key=lambda r: _sort_dt(r.get("entry_dt"))) for k, v in groups.items()}
 
 
 def _scoreboard(trades, daily):
@@ -554,7 +549,7 @@ def _compact_trade_ledger(trades):
 def build_performance_report(trades):
     enriched = [enrich_trade(t) for t in trades]
     open_positions = [t for t in enriched if t.get("is_open")]
-    rows = [t for t in enriched if not t.get("is_open") and t.get("net_pnl") is not None]
+    rows = [t for t in enriched if trade_is_closed(t) and t.get("net_pnl") is not None]
     hold_order = [x[0] for x in HOLD_BUCKETS]
     option_order = [x[0] for x in OPTION_SIZE_BUCKETS]
     share_order = [x[0] for x in SHARE_NOTIONAL_BUCKETS]
@@ -593,11 +588,11 @@ def build_performance_report(trades):
     behavior["verified_rule_flags"] = verified_rule_flags
     time_blocks = _group_stats(rows, _time_bucket)
     dow = _group_stats(rows, _dow, ["Mon", "Tue", "Wed", "Thu", "Fri"])
-    first10 = _stats([t for t in rows if t.get("entry_dt") and 570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 580])
-    rest = _stats([t for t in rows if t.get("entry_dt") and not (570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 580)])
-    first30 = _stats([t for t in rows if t.get("entry_dt") and 570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 600])
-    last30 = _stats([t for t in rows if t.get("entry_dt") and 930 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 960])
-    middle = _stats([t for t in rows if t.get("entry_dt") and 600 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 930])
+    first10 = _stats([t for t in rows if t.get("entry_market_minute") is not None and 570 <= t["entry_market_minute"] < 580])
+    rest = _stats([t for t in rows if t.get("entry_market_minute") is not None and not (570 <= t["entry_market_minute"] < 580)])
+    first30 = _stats([t for t in rows if t.get("entry_market_minute") is not None and 570 <= t["entry_market_minute"] < 600])
+    last30 = _stats([t for t in rows if t.get("entry_market_minute") is not None and 930 <= t["entry_market_minute"] < 960])
+    middle = _stats([t for t in rows if t.get("entry_market_minute") is not None and 600 <= t["entry_market_minute"] < 930])
 
     size_multiples = sorted(t["size_multiple"] for t in rows if t.get("size_multiple") is not None)
     lo = size_multiples[max(0, int(len(size_multiples) * .10) - 1)] if size_multiples else None

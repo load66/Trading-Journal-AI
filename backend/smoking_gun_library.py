@@ -6,7 +6,7 @@ from typing import Any
 
 
 REPORT_SCHEMA_VERSION = "1"
-ANALYTICS_ENGINE_VERSION = "2026.09.26.1"
+ANALYTICS_ENGINE_VERSION = "2026.09.27.2"
 BEHAVIOR_VERSION = "2026.09.26.1"
 
 _FINGERPRINT_FIELDS = (
@@ -360,7 +360,10 @@ def decorate_stale_status(conn, reports: list[dict]) -> list[dict]:
             filters,
         )
         row = dict(report)
-        if current == report.get("data_fingerprint"):
+        if str(report.get("analytics_engine_version") or "") != ANALYTICS_ENGINE_VERSION:
+            row["is_stale"] = True
+            row["stale_reason"] = "analytics-engine-updated"
+        elif current == report.get("data_fingerprint"):
             row["is_stale"] = False
             row["stale_reason"] = None
         elif current == empty_fingerprint:
