@@ -40,7 +40,7 @@ from ai_analysis import (
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
 from excursion_analysis import calculate_trade_excursion
-from library import router as library_router, init_library_tables, apply_aliases, library_names
+from library import router as library_router, init_library_tables, apply_aliases, library_names, TAG_TYPES as LIBRARY_TAG_TYPES
 from smoking_gun_routes import router as smoking_gun_router
 from le_analysis import build_le_levels, build_le_review
 
@@ -1458,10 +1458,28 @@ def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = 
     trade = conn.execute("SELECT trade_group FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
+
+    tag_type = (data.tag_type or "").strip().lower()
+    tag_value = (data.tag_value or "").strip()
+    allowed_types = set(LIBRARY_TAG_TYPES) | {"strategy", "source"}
+    if tag_type not in allowed_types:
+        raise HTTPException(status_code=400, detail=f"Unknown tag type '{tag_type}'")
+    if not tag_value:
+        raise HTTPException(status_code=400, detail="Tag value is required")
+
+    duplicate = conn.execute(
+        """SELECT id FROM trade_tags
+           WHERE trade_group=? AND lower(tag_type)=lower(?) AND lower(tag_value)=lower(?)
+           LIMIT 1""",
+        (trade_group, tag_type, tag_value),
+    ).fetchone()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="That tag is already applied to this trade.")
+
     tag_id = insert_and_get_id(
         conn,
         "INSERT INTO trade_tags (trade_group, tag_type, tag_value, source) VALUES (?,?,?,'manual')",
-        (trade_group, data.tag_type, data.tag_value),
+        (trade_group, tag_type, tag_value),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM trade_tags WHERE id=?", (tag_id,)).fetchone()
