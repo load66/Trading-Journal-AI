@@ -25,6 +25,15 @@ KINDS = ("strategy", "source", "tag")
 MIRRORED_TAG_TYPES = {"strategy": "strategy", "source": "source"}
 TAG_TYPES = ("setup", "execution", "mistake", "emotion", "outcome")
 
+DEFAULT_LIBRARY_ITEMS = (
+    (
+        "tag",
+        "mistake",
+        "Entered Too Close to Resistance",
+        "Entry had a valid local trigger, but a higher-priority resistance level remained overhead and left insufficient room for the trade to develop (for example, a PDH retest while still below PMH).",
+    ),
+)
+
 
 def get_connection():
     conn = get_db()
@@ -32,6 +41,23 @@ def get_connection():
         yield conn
     finally:
         conn.close()
+
+
+def _seed_default_library_items(conn):
+    changed = False
+    for kind, tag_type, name, description in DEFAULT_LIBRARY_ITEMS:
+        row = conn.execute(
+            "SELECT 1 FROM library_items WHERE kind=? AND tag_type=? AND name=?",
+            (kind, tag_type, name),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO library_items (kind, tag_type, name, description) VALUES (?,?,?,?)",
+                (kind, tag_type, name, description),
+            )
+            changed = True
+    if changed and hasattr(conn, "commit"):
+        conn.commit()
 
 
 def init_library_tables(conn):
@@ -45,6 +71,7 @@ def init_library_tables(conn):
             ).fetchone()
             if row is None:
                 raise RuntimeError(f'Postgres schema is missing journal.{table}')
+        _seed_default_library_items(conn)
         return
 
     conn.executescript("""
@@ -68,6 +95,7 @@ def init_library_tables(conn):
         );
     """)
     conn.commit()
+    _seed_default_library_items(conn)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

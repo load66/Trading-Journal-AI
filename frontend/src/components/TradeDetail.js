@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, BookOpen, ClipboardCheck, FileText, ShieldCheck } from 'lucide-react';
-import { tradesApi } from '../api';
+import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, BookOpen, ClipboardCheck, FileText, ShieldCheck, Tags as TagsIcon, Library, RefreshCw } from 'lucide-react';
+import { tradesApi, libraryApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
@@ -295,7 +295,39 @@ function TradeReviewSummary({ trade, entryReason, exitReason, mistakes, notes })
 const EMOTIONAL_STATES = ['Focused', 'Confident', 'Calm', 'Anxious', 'FOMO', 'Frustrated', 'Greedy', 'Fearful', 'Undisciplined', 'Overconfident'];
 const DEFAULT_SOURCES   = ['Watchlist', 'Scanner', 'Alert', 'News', 'Social Media', 'Own Research'];
 
-const TAG_TYPES = ['strategy', 'setup', 'execution', 'mistake', 'emotion', 'outcome', 'source'];
+const TAG_TYPES = ['mistake', 'execution', 'setup', 'emotion', 'outcome'];
+
+const TAG_TYPE_META = {
+  mistake: {
+    label: 'Mistake',
+    plural: 'Mistakes',
+    help: 'What reduced the quality of the trade or entry.',
+  },
+  execution: {
+    label: 'Execution',
+    plural: 'Execution',
+    help: 'How the order or management was executed.',
+  },
+  setup: {
+    label: 'Setup context',
+    plural: 'Setup context',
+    help: 'Extra setup context you want to compare later.',
+  },
+  emotion: {
+    label: 'Emotion',
+    plural: 'Emotion',
+    help: 'The emotional state that affected the trade.',
+  },
+  outcome: {
+    label: 'Outcome',
+    plural: 'Outcome',
+    help: 'A repeatable outcome pattern worth tracking.',
+  },
+};
+
+function tagLibraryItems(library, type) {
+  return library?.tags?.[type] || [];
+}
 
 const ENTRY_REVIEW_SUGGESTIONS = [
   { label: 'Key level breakout', text: 'Entered on a confirmed break of a key level with momentum and follow-through.' },
@@ -859,10 +891,29 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [savingStrategy, setSavingStrategy]   = useState(false);
 
   // Tags
-  const [addingTag, setAddingTag]   = useState(false);
-  const [tagForm, setTagForm]       = useState({ tag_type: 'strategy', tag_value: '' });
+  const [tagForm, setTagForm]       = useState({ tag_type: 'mistake', tag_value: '' });
   const [tagError, setTagError]     = useState(null);
   const [savingTag, setSavingTag]   = useState(false);
+  const [tagLibrary, setTagLibrary] = useState({ tags: {}, tag_types: [] });
+  const [tagLibraryLoading, setTagLibraryLoading] = useState(false);
+  const [tagLibraryError, setTagLibraryError] = useState(null);
+
+  const loadTagLibrary = useCallback(async () => {
+    setTagLibraryLoading(true);
+    setTagLibraryError(null);
+    try {
+      const res = await libraryApi.list();
+      setTagLibrary(res.data || { tags: {}, tag_types: [] });
+    } catch (e) {
+      setTagLibraryError(e.response?.data?.detail || e.message || 'Could not load tag library.');
+    } finally {
+      setTagLibraryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTagLibrary();
+  }, [loadTagLibrary]);
 
   // Dropdown options (fetched from DB)
   const [analysisOptions, setAnalysisOptions] = useState({ strategies: [], idea_sources: [] });
@@ -1040,16 +1091,25 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   // ── Tag handlers ──────────────────────────────────────────────────────────
 
   const handleAddTag = async () => {
-    if (!tagForm.tag_value.trim()) return;
+    const value = tagForm.tag_value.trim();
+    if (!value) return;
+
+    if (tags.some(tag => tag.tag_type === tagForm.tag_type && tag.tag_value === value)) {
+      setTagError('That tag is already applied to this trade.');
+      return;
+    }
+
     setSavingTag(true);
     setTagError(null);
     try {
-      const res = await tradesApi.addTag(trade.trade_group, tagForm);
-      setTags(prev => [...prev, res.data]);
-      setTagForm({ tag_type: 'strategy', tag_value: '' });
-      setAddingTag(false);
+      const res = await tradesApi.addTag(trade.trade_group, {
+        tag_type: tagForm.tag_type,
+        tag_value: value,
+      });
+      setTags(prev => prev.some(tag => tag.id === res.data.id) ? prev : [...prev, res.data]);
+      setTagForm(f => ({ ...f, tag_value: '' }));
     } catch (e) {
-      setTagError(e.response?.data?.error || e.message);
+      setTagError(e.response?.data?.detail || e.response?.data?.error || e.message);
     } finally {
       setSavingTag(false);
     }
@@ -1593,53 +1653,171 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               </div>
             )}
             {/* ── Tags tab ──────────────────────────────────────────────── */}
-            {tab === 'Tags' && (
-              <div style={{ paddingTop: 8 }}>
-                {tags.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-                    {tags.map(tag => (
-                      <TagBadge key={tag.id} tag={tag} onDelete={() => handleDeleteTag(tag.id)} />
-                    ))}
-                  </div>
-                )}
-                {!addingTag ? (
-                  <button type="button" onClick={() => setAddingTag(true)} className="btn btn-ghost" style={{ color: 'var(--accent-line)', paddingLeft: 6 }}>
-                    <PlusCircle size={15} /> Add Tag
-                  </button>
-                ) : (
-                  <div style={editPanelStyle}>
-                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10, color: 'var(--text-primary)' }}>Add Tag</div>
-                    <div style={editGridStyle}>
-                      <div>
-                        <div className="field-label" style={{ marginBottom: 4 }}>Type</div>
-                        <select aria-label="Tag type" value={tagForm.tag_type} onChange={e => setTagForm(f => ({ ...f, tag_type: e.target.value }))} style={inputStyle}>
-                          {TAG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <div className="field-label" style={{ marginBottom: 4 }}>Value</div>
-                        <input
-                          type="text" placeholder="tag value" aria-label="Tag value" value={tagForm.tag_value}
-                          onChange={e => setTagForm(f => ({ ...f, tag_value: e.target.value }))}
-                          onKeyDown={e => e.key === 'Enter' && handleAddTag()}
-                          style={inputStyle}
-                        />
-                      </div>
+            {tab === 'Tags' && (() => {
+              const libraryItems = tagLibraryItems(tagLibrary, tagForm.tag_type);
+              const appliedValues = new Set(
+                tags.filter(tag => tag.tag_type === tagForm.tag_type).map(tag => tag.tag_value)
+              );
+              const availableItems = libraryItems.filter(item => !appliedValues.has(item.name));
+              const selectedItem = libraryItems.find(item => item.name === tagForm.tag_value);
+              const groupedTags = TAG_TYPES
+                .map(type => ({
+                  type,
+                  meta: TAG_TYPE_META[type],
+                  items: tags.filter(tag => tag.tag_type === type),
+                }))
+                .filter(group => group.items.length > 0);
+
+              return (
+                <div className="td-tags-workspace">
+                  <div className="td-tags-toolbar">
+                    <div>
+                      <div className="td-tags-kicker"><TagsIcon size={15} /> Trade Tags</div>
+                      <div className="td-tags-subtitle">Use the same saved labels on every trade so your pattern analysis stays consistent.</div>
                     </div>
-                    {tagError && (
-                      <div className="notice neg" role="alert" style={{ marginBottom: 10 }}>{tagError}</div>
-                    )}
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" onClick={handleAddTag} disabled={savingTag} className="btn btn-primary btn-sm">{savingTag ? 'Saving…' : 'Add'}</button>
-                      <button type="button" onClick={() => { setAddingTag(false); setTagForm({ tag_type: 'strategy', tag_value: '' }); setTagError(null); }} className="btn btn-ghost btn-sm">Cancel</button>
+                    <div className="td-tags-library-state">
+                      <Library size={13} />
+                      Settings library
                     </div>
                   </div>
-                )}
-                {tags.length === 0 && !addingTag && (
-                  <div className="text-muted" style={{ fontSize: 14, marginTop: 8 }}>No tags yet.</div>
-                )}
-              </div>
-            )}
+
+                  <div className="td-tags-grid">
+                    <section className="td-tags-card" aria-label="Add trade tag">
+                      <div className="td-tags-card-head">
+                        <div>
+                          <h3>Add a tag</h3>
+                          <p>Choose from the labels saved in Settings.</p>
+                        </div>
+                      </div>
+
+                      <div className="td-tags-form">
+                        <label>
+                          <span>Category</span>
+                          <select
+                            aria-label="Tag category"
+                            value={tagForm.tag_type}
+                            onChange={e => {
+                              setTagForm({ tag_type: e.target.value, tag_value: '' });
+                              setTagError(null);
+                            }}
+                            disabled={tagLibraryLoading}
+                          >
+                            {TAG_TYPES.map(type => (
+                              <option key={type} value={type}>{TAG_TYPE_META[type].label}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          <span>Saved tag</span>
+                          <select
+                            aria-label="Saved tag"
+                            value={tagForm.tag_value}
+                            onChange={e => {
+                              setTagForm(f => ({ ...f, tag_value: e.target.value }));
+                              setTagError(null);
+                            }}
+                            disabled={tagLibraryLoading || availableItems.length === 0}
+                          >
+                            <option value="">
+                              {tagLibraryLoading
+                                ? 'Loading saved tags…'
+                                : availableItems.length
+                                  ? `Choose a ${TAG_TYPE_META[tagForm.tag_type].label.toLowerCase()}…`
+                                  : 'No unused saved tags'}
+                            </option>
+                            {availableItems.map(item => (
+                              <option key={item.name} value={item.name}>{item.name}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <div className="td-tags-category-help">
+                          {TAG_TYPE_META[tagForm.tag_type].help}
+                        </div>
+
+                        {selectedItem?.description && (
+                          <div className="td-tags-description">
+                            <strong>{selectedItem.name}</strong>
+                            <span>{selectedItem.description}</span>
+                          </div>
+                        )}
+
+                        {tagLibraryError && (
+                          <div className="notice neg td-tags-error" role="alert">
+                            <span>{tagLibraryError}</span>
+                            <button type="button" className="btn btn-ghost btn-sm" onClick={loadTagLibrary}>
+                              <RefreshCw size={13} /> Retry
+                            </button>
+                          </div>
+                        )}
+
+                        {!tagLibraryLoading && !tagLibraryError && libraryItems.length === 0 && (
+                          <div className="td-tags-empty-library">
+                            No {TAG_TYPE_META[tagForm.tag_type].plural.toLowerCase()} are saved yet.
+                            Add them in <strong>Settings → Tags</strong>, then return here.
+                          </div>
+                        )}
+
+                        {!tagLibraryLoading && !tagLibraryError && libraryItems.length > 0 && availableItems.length === 0 && (
+                          <div className="td-tags-empty-library">
+                            Every saved {TAG_TYPE_META[tagForm.tag_type].label.toLowerCase()} tag is already applied to this trade.
+                          </div>
+                        )}
+
+                        {tagError && (
+                          <div className="notice neg td-tags-error" role="alert">{tagError}</div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={handleAddTag}
+                          disabled={savingTag || !tagForm.tag_value}
+                          className="btn btn-primary td-tags-add"
+                        >
+                          <PlusCircle size={15} /> {savingTag ? 'Adding…' : 'Add tag'}
+                        </button>
+                      </div>
+
+                      <div className="td-tags-settings-note">
+                        Tag names are managed in <strong>Settings → Tags</strong>. Keeping one canonical list prevents duplicate wording.
+                      </div>
+                    </section>
+
+                    <section className="td-tags-card td-tags-applied" aria-label="Tags applied to this trade">
+                      <div className="td-tags-card-head">
+                        <div>
+                          <h3>Applied to this trade</h3>
+                          <p>{tags.length ? `${tags.length} structured ${tags.length === 1 ? 'tag' : 'tags'}` : 'No tags applied yet'}</p>
+                        </div>
+                        <span className="td-tags-count">{tags.length}</span>
+                      </div>
+
+                      {groupedTags.length ? (
+                        <div className="td-tags-groups">
+                          {groupedTags.map(group => (
+                            <div className="td-tags-group" key={group.type}>
+                              <div className="td-tags-group-label">{group.meta.label}</div>
+                              <div className="td-tags-chip-row">
+                                {group.items.map(tag => (
+                                  <TagBadge key={tag.id} tag={tag} onDelete={() => handleDeleteTag(tag.id)} />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="td-tags-empty-state">
+                          <TagsIcon size={22} />
+                          <strong>No structured tags yet</strong>
+                          <span>Start with the mistake, execution, or emotion that best explains this trade.</span>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* ── LE Review tab ────────────────────────────────────────── */}
             {tab === 'LE Review' && (

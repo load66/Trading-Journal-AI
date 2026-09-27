@@ -1,5 +1,7 @@
 import asyncio
 import sys
+
+import pytest
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -876,5 +878,73 @@ def test_kpis_expose_green_and_red_day_counts(monkeypatch, tmp_path):
         assert result["positive_days"] == 2
         assert result["negative_days"] == 1
         assert result["day_win_rate"] == 66.7
+    finally:
+        conn.close()
+
+
+def test_tag_library_seeds_overhead_resistance_mistake(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        main.init_library_tables(conn)
+        row = conn.execute(
+            """SELECT description FROM library_items
+               WHERE kind='tag' AND tag_type='mistake' AND name=?""",
+            ("Entered Too Close to Resistance",),
+        ).fetchone()
+        assert row is not None
+        assert "higher-priority resistance" in row["description"]
+        assert "PDH retest" in row["description"]
+        assert "PMH" in row["description"]
+    finally:
+        conn.close()
+
+
+def test_manual_trade_tags_reject_duplicates_and_unknown_types(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Tag Test", "day_trading", "schwab"),
+        )
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                account_id, "nvda-tag-test", "2026-09-25", "NVDA", "OPTION", "LONG",
+                100.0, 100.0, 0.0, "[]", "imported",
+            ),
+        )
+        conn.commit()
+
+        created = main.add_trade_tag(
+            "nvda-tag-test",
+            main.TagCreate(tag_type="mistake", tag_value="Entered Too Close to Resistance"),
+            conn,
+        )
+        assert created["tag_type"] == "mistake"
+        assert created["tag_value"] == "Entered Too Close to Resistance"
+
+        with pytest.raises(main.HTTPException) as duplicate:
+            main.add_trade_tag(
+                "nvda-tag-test",
+                main.TagCreate(tag_type="mistake", tag_value="Entered Too Close to Resistance"),
+                conn,
+            )
+        assert duplicate.value.status_code == 409
+
+        with pytest.raises(main.HTTPException) as unknown:
+            main.add_trade_tag(
+                "nvda-tag-test",
+                main.TagCreate(tag_type="random", tag_value="Something"),
+                conn,
+            )
+        assert unknown.value.status_code == 400
     finally:
         conn.close()
