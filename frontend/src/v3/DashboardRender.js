@@ -184,7 +184,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       <div className="v3-sec-head v3-management-head">
         <div>
           <h2 className="v3-h v3-icon-title"><Target size={18} /> Trade management</h2>
-          <p className="v3-h-sub">How well do you manage trades after you enter? Each card shows the result, what it means, and the next action.</p>
+          <p className="v3-h-sub">How well do you manage trades after you enter?</p>
         </div>
         <div className="v3-management-range" role="group" aria-label="Trade management range">
           {['7D', '30D', '90D', 'ALL'].map((option) => (
@@ -202,51 +202,45 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       </div>
 
       <div className="v3-management-grid v3-management-grid-clean">
-        <article className="v3-management-card v3-management-card-feature">
+        <article className="v3-management-card v3-management-card-feature v3-management-card-capture">
           <div className="v3-management-card-top">
             <div className="v3-management-label"><Trophy size={17} /><span>Profit capture</span></div>
             <span className={'v3-management-status ' + captureState.tone}>{captureState.label}</span>
           </div>
-          <p className="v3-management-question">How much of the favorable move are you actually keeping?</p>
+          <p className="v3-management-question">How much of the available favorable move are you actually keeping?</p>
 
+          <div className="v3-capture-score">
+            <strong className={capture != null && capture >= 0 ? 'v3-pos' : 'v3-neg'}>
+              {capture == null ? 'N/A' : capture.toFixed(0) + '%'}
+            </strong>
+          </div>
           <div
-            className={`v3-capture-split v3-capture-split-clean${capture == null ? ' is-empty' : ''}`}
+            className={`v3-management-progress v3-capture-progress${capture == null ? ' is-empty' : ''}`}
             role={capture == null ? 'status' : 'meter'}
             aria-label={capture == null ? 'Profit capture unavailable' : 'Profit capture'}
             aria-valuemin={capture == null ? undefined : 0}
             aria-valuemax={capture == null ? undefined : 100}
             aria-valuenow={capture == null ? undefined : captureBar}
-            aria-valuetext={capture == null
-              ? undefined
-              : `${captureBar.toFixed(0)}% captured, ${leftOnTable.toFixed(0)}% left on table`}
+            aria-valuetext={capture == null ? undefined : `${capture.toFixed(0)}% exit efficiency; goal ${captureGoal.toFixed(0)}%`}
           >
-            <div className="captured" style={{ '--w': captureBar + '%' }} aria-hidden="true" />
-            <div className="left" aria-hidden="true" />
-          </div>
-
-          <div className="v3-capture-legend" aria-hidden={capture == null ? 'true' : undefined}>
-            <div>
-              <span><i className="captured-dot" />Captured</span>
-              <strong className="v3-pos">{capture == null ? 'N/A' : captureBar.toFixed(0) + '%'}</strong>
-            </div>
-            <div>
-              <span><i className="left-dot" />Left on table</span>
-              <strong>{leftOnTable == null ? '—' : leftOnTable.toFixed(0) + '%'}</strong>
-            </div>
+            <i style={{ '--w': captureBar + '%' }} aria-hidden="true" />
+            <span className="v3-capture-goal" style={{ '--goal': Math.max(0, Math.min(100, captureGoal)) + '%' }} aria-hidden="true" />
           </div>
 
           <div className="v3-management-meta">
-            <span>Target: ≥ {captureGoal.toFixed(0)}%</span>
+            <span>Goal ≥ {captureGoal.toFixed(0)}%</span>
             <span>{excursionN ? excursionN + ' measured trades' : 'No excursion sample'}</span>
           </div>
 
-          <div className={'v3-management-callout ' + (capture != null && capture >= captureGoal ? 'good' : 'caution')}>
+          <div className={'v3-management-callout ' + (capture != null && capture >= captureGoal ? 'good' : capture != null && capture < 0 ? 'bad' : 'caution')}>
             <b>What it means:</b>{' '}
             {capture == null
               ? 'Excursion data is required before profit capture can be scored.'
               : capture >= captureGoal
                 ? 'You are retaining enough of the favorable move to clear your current target.'
-                : 'Too much of the favorable move is being given back before exit. Improve exit structure, not prediction.'}
+                : capture < 0
+                  ? 'The favorable move was fully given back before exit on average. Exit discipline is the immediate priority.'
+                  : 'Too much of the favorable move is being given back before exit. Improve exit structure, not prediction.'}
           </div>
         </article>
 
@@ -281,6 +275,45 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
               : holdRatio > 1.05
                 ? 'Losing trades are being given more time. Faster invalidation is the clearest correction.'
                 : 'Losing trades are not being held materially longer than winners.'}
+          </div>
+        </article>
+
+        <article className="v3-management-card v3-management-card-split">
+          <div className="v3-management-card-top">
+            <div className="v3-management-label"><Target size={17} /><span>Profit vs. left on table</span></div>
+            <span className="v3-management-status neutral">MOVE SPLIT</span>
+          </div>
+          <p className="v3-management-question">On winning opportunities, how much of the move did you keep versus give back?</p>
+
+          <div
+            className={`v3-capture-split v3-capture-split-clean${capture == null ? ' is-empty' : ''}`}
+            role={capture == null ? 'status' : 'meter'}
+            aria-label={capture == null ? 'Profit versus left on table unavailable' : 'Profit versus left on table'}
+            aria-valuemin={capture == null ? undefined : 0}
+            aria-valuemax={capture == null ? undefined : 100}
+            aria-valuenow={capture == null ? undefined : captureBar}
+            aria-valuetext={capture == null
+              ? undefined
+              : `${captureBar.toFixed(0)}% retained visually; ${Math.max(0, 100 - captureBar).toFixed(0)}% of the normalized move not retained`}
+          >
+            <div className="captured" style={{ '--w': captureBar + '%' }} aria-hidden="true" />
+            <div className="left" aria-hidden="true" />
+          </div>
+
+          <div className="v3-split-key">
+            <div><i className="captured-dot" /><span>Captured</span></div>
+            <div><i className="left-dot" /><span>Left on table</span><strong>{leftOnTable == null ? '—' : leftOnTable.toFixed(0) + '%'}</strong></div>
+          </div>
+
+          <div className={'v3-management-callout ' + (capture != null && capture >= 50 ? 'good' : 'caution')}>
+            <b>What it means:</b>{' '}
+            {capture == null
+              ? 'There is not enough excursion data to compare captured versus unretained movement.'
+              : capture >= 50
+                ? 'You are keeping the larger share of the available favorable move.'
+                : capture < 0
+                  ? 'The normalized captured share is zero because exit efficiency is negative in this window.'
+                  : 'More of the favorable move is being left on the table than retained.'}
           </div>
         </article>
 
