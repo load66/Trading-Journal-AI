@@ -964,7 +964,9 @@ def parse_cash_balance_section(
 
 
 
-def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_schwab_transactions_csv(
+    content: str, account_id: int, conn=None, timezone_override: str | None = None
+) -> tuple[list[dict], int]:
     """Parse Schwab transaction-history CSV exports.
 
     Format:
@@ -974,7 +976,9 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
     "9/25/26 10:11 AM"). The importer stores ":00" seconds and explicitly marks
     timestamp_precision="minute"; it never invents sub-minute timing.
     """
-    timezone_info = detect_csv_timezone(content, "schwab_transactions")
+    timezone_info = detect_csv_timezone(
+        content, "schwab_transactions", fallback_override=timezone_override
+    )
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
     header_idx = None
     col = {}
@@ -1009,23 +1013,13 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
             continue
 
         dt_text = cell(row, 'DATE')
-        parsed_dt = None
-        timestamp_precision = "minute"
-        for fmt, precision in (
-            ('%m/%d/%y %I:%M:%S %p', 'second'),
-            ('%m/%d/%Y %I:%M:%S %p', 'second'),
-            ('%m/%d/%y %I:%M %p', 'minute'),
-            ('%m/%d/%Y %I:%M %p', 'minute'),
-        ):
-            try:
-                parsed_dt = datetime.strptime(dt_text, fmt)
-                timestamp_precision = precision
-                break
-            except ValueError:
-                pass
-        if parsed_dt is None:
+        parsed_parts = _parse_combined_datetime(dt_text)
+        if parsed_parts is None:
             problems.append(f"line {line_no}: unsupported Schwab timestamp '{dt_text}'")
             continue
+        iso_date, parsed_time, embedded_timezone = parsed_parts
+        parsed_dt = datetime.strptime(f"{iso_date} {_strip_embedded_timezone(parsed_time)}", "%Y-%m-%d %H:%M:%S")
+        timestamp_precision = _time_precision(dt_text)
 
         desc = cell(row, 'DESCRIPTION').strip('"')
         parsed = parse_cash_description(desc)
@@ -1041,7 +1035,7 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
         parsed.update({
             'date': f"{parsed_dt.month}/{parsed_dt.day}/{str(parsed_dt.year)[2:]}",
             'iso_date': parsed_dt.strftime('%Y-%m-%d'),
-            'time': parsed_dt.strftime('%H:%M:%S'),
+            'time': parsed_time,
             'amount': amount,
             'commission': abs(misc_fees) + abs(commissions),
             'raw_description': desc,
@@ -1050,8 +1044,9 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
             'source_timestamp': dt_text,
             'timestamp_precision': timestamp_precision,
         })
+        row_timezone_info = embedded_timezone or timezone_info
         executions.append(
-            attach_detected_execution_timestamp(parsed, "schwab_transactions", timezone_info)
+            attach_detected_execution_timestamp(parsed, "schwab_transactions", row_timezone_info)
         )
 
     if problems:
@@ -1463,13 +1458,17 @@ def _cross_section_key(ex: dict) -> str:
     return f"{ex.get('iso_date','')}|{ex.get('ticker','')}|{ex.get('action','')}|{ex.get('qty','')}|{ex.get('price','')}"
 
 
-def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_thinkorswim_csv(
+    content: str, account_id: int, conn=None, timezone_override: str | None = None
+) -> tuple[list[dict], int]:
     """
     Full CSV parse pipeline.
     Returns (list of trade dicts ready for DB insert, skipped_count).
     """
     content = content.lstrip('﻿')
-    timezone_info = detect_csv_timezone(content, "thinkorswim")
+    timezone_info = detect_csv_timezone(
+        content, "thinkorswim", fallback_override=timezone_override
+    )
 
     sections = split_csv_sections(content)
     cash_rows = find_cash_balance_section(sections)
@@ -1855,14 +1854,18 @@ def parse_ibkr_trades_section(records: list[dict[str, str]]) -> list[dict]:
     return executions
 
 
-def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_ibkr_csv(
+    content: str, account_id: int, conn=None, timezone_override: str | None = None
+) -> tuple[list[dict], int]:
     """
     IBKR Activity Statement CSV parse pipeline (Client Portal -> Performance &
     Reports -> Statements -> Activity -> CSV). Same output contract as
     parse_thinkorswim_csv: (trade dicts ready for DB insert, skipped_count).
     """
     content = content.lstrip('﻿')
-    timezone_info = detect_csv_timezone(content, "ibkr")
+    timezone_info = detect_csv_timezone(
+        content, "ibkr", fallback_override=timezone_override
+    )
     sections = split_ibkr_sections(content)
 
     trade_records = sections.get('Trades')
@@ -1905,9 +1908,10 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
 # are never skipped silently: the import stops and names the line, because a
 # missing fill changes every P&L number after it.
 
-GENERIC_REQUIRED = ('date', 'time', 'symbol', 'side', 'quantity', 'price')
+GENERIC_REQUIRED = ('symbol', 'side', 'quantity', 'price')
 GENERIC_OPTIONAL = (
-    'commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier', 'timezone'
+    'date', 'time', 'timestamp', 'commission', 'asset_type', 'expiry',
+    'strike', 'put_call', 'multiplier', 'timezone'
 )
 
 _GENERIC_ALIASES = {
@@ -1919,6 +1923,10 @@ _GENERIC_ALIASES = {
     'strike_price': 'strike',
     'time_zone': 'timezone', 'timezone_name': 'timezone',
     'tz': 'timezone', 'source_timezone': 'timezone',
+    'datetime': 'timestamp', 'date_time': 'timestamp', 'date_time_utc': 'timestamp',
+    'execution_time': 'timestamp', 'execution_timestamp': 'timestamp',
+    'executed_at': 'timestamp', 'filled_at': 'timestamp', 'fill_timestamp': 'timestamp',
+    'transact_time': 'timestamp', 'transaction_time': 'timestamp',
 }
 
 
@@ -1930,7 +1938,9 @@ def _generic_header(cells):
         key = _GENERIC_ALIASES.get(key, key)
         if key in GENERIC_REQUIRED or key in GENERIC_OPTIONAL:
             index.setdefault(key, i)
-    return index if all(k in index for k in GENERIC_REQUIRED) else None
+    has_identity = all(k in index for k in GENERIC_REQUIRED)
+    has_clock = 'timestamp' in index or ('date' in index and 'time' in index)
+    return index if has_identity and has_clock else None
 
 
 def _generic_date(value):
@@ -2004,9 +2014,11 @@ def _num(text):
     return float(text.replace(',', '').replace('$', '').strip())
 
 
-def parse_generic_rows(content):
-    """Read the generic template into execution dicts. Raises ValueError naming every bad line."""
-    file_timezone_info = detect_csv_timezone(content, "generic")
+def parse_generic_rows(content, timezone_override: str | None = None):
+    """Read a generic execution CSV with adaptive timestamp/timezone handling."""
+    file_timezone_info = detect_csv_timezone(
+        content, "generic", fallback_override=timezone_override
+    )
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
 
     header_at, col = None, None
@@ -2032,19 +2044,40 @@ def parse_generic_rows(content):
         why = []
 
         symbol = cell(cells, 'symbol').upper()
+        raw_timestamp = cell(cells, 'timestamp')
         raw_date = cell(cells, 'date')
         raw_time = cell(cells, 'time')
-        date = _generic_date(raw_date)
-        time_ = _generic_time(raw_time)
+        embedded_timezone = None
+
+        if raw_timestamp:
+            parsed_timestamp = _parse_combined_datetime(raw_timestamp)
+            if parsed_timestamp:
+                date, time_, embedded_timezone = parsed_timestamp
+            else:
+                date, time_ = None, None
+        else:
+            date = _generic_date(raw_date)
+            time_ = _generic_time(raw_time)
+            embedded_timezone = _extract_embedded_timezone(raw_time)
+            if embedded_timezone and time_:
+                time_ = f"{time_} {embedded_timezone.get('evidence') or embedded_timezone['timezone']}"
+
         action = _generic_side(cell(cells, 'side'))
         asset = _generic_asset(cell(cells, 'asset_type'), symbol)
         timezone_info = None
         try:
             row_timezone = cell(cells, 'timezone')
-            timezone_info = (
+            explicit_row_timezone = (
                 detect_csv_timezone("", "generic", row_timezone=row_timezone)
-                if row_timezone else file_timezone_info
+                if row_timezone else None
             )
+            if embedded_timezone and explicit_row_timezone and _timezone_evidence_conflicts(
+                embedded_timezone, explicit_row_timezone, date or "", time_ or ""
+            ):
+                raise ValueError(
+                    "timestamp UTC offset/timezone conflicts with the row timezone column"
+                )
+            timezone_info = embedded_timezone or explicit_row_timezone or file_timezone_info
         except ValueError as exc:
             why.append(str(exc))
 
@@ -2067,9 +2100,15 @@ def parse_generic_rows(content):
         if not symbol:
             why.append("symbol is empty")
         if not date:
-            why.append(f"date '{cell(cells, 'date')}' is not YYYY-MM-DD or MM/DD/YYYY")
+            source_value = raw_timestamp or raw_date
+            why.append(
+                f"timestamp/date '{source_value}' is not a supported execution date/time"
+            )
         if not time_:
-            why.append(f"time '{cell(cells, 'time')}' is not HH:MM or HH:MM:SS")
+            source_value = raw_timestamp or raw_time
+            why.append(
+                f"timestamp/time '{source_value}' is not a supported execution time"
+            )
         if not action:
             why.append(f"side '{cell(cells, 'side')}' is not BUY or SELL")
         if qty is None:
@@ -2129,7 +2168,7 @@ def parse_generic_rows(content):
             'date': date,
             'iso_date': date,
             'time': time_,
-            'source_timestamp': f"{raw_date} {raw_time}".strip(),
+            'source_timestamp': raw_timestamp or f"{raw_date} {raw_time}".strip(),
             'amount': round(amount, 2),
             'commission': round(commission, 2),
             'raw_description': f"{action} {qty} {ticker} @{price}",
@@ -2149,9 +2188,9 @@ def parse_generic_rows(content):
     return executions
 
 
-def parse_generic_csv(content, account_id, conn=None):
+def parse_generic_csv(content, account_id, conn=None, timezone_override: str | None = None):
     """Generic template pipeline with explicit timezone safety."""
-    executions = parse_generic_rows(content)
+    executions = parse_generic_rows(content, timezone_override=timezone_override)
     low_confidence = [
         ex for ex in executions
         if ex.get("timezone_detection_confidence") == "low"
@@ -2159,8 +2198,8 @@ def parse_generic_csv(content, account_id, conn=None):
     if low_confidence:
         raise ValueError(
             "Timezone could not be verified for this generic CSV. Nothing was imported. "
-            "Add a timezone column using an IANA zone such as America/Chicago "
-            "(recommended) or a supported US abbreviation such as CT/CST/CDT."
+            "Provide an embedded UTC offset/Z timestamp, a timezone column, CSV timezone metadata, "
+            "or choose a local-time fallback on the Import page."
         )
     missing_ts = [ex for ex in executions if not ex.get("timestamp_utc")]
     if missing_ts:
@@ -2223,7 +2262,13 @@ def detect_broker(content: str) -> str | None:
     return None
 
 
-def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_broker_csv(
+    content: str,
+    broker: str,
+    account_id: int,
+    conn=None,
+    timezone_override: str | None = None,
+) -> tuple[list[dict], int]:
     """
     Route a CSV to the right broker parser. broker is a BROKER_PARSERS key or
     'auto'. An explicit broker that clearly does not match the file raises a
@@ -2251,4 +2296,6 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> t
             f"{BROKER_LABELS[key]} is selected. Change the broker dropdown and try again."
         )
 
-    return BROKER_PARSERS[key](content, account_id, conn)
+    return BROKER_PARSERS[key](
+        content, account_id, conn, timezone_override=timezone_override
+    )
