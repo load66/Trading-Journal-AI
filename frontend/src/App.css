@@ -383,7 +383,6 @@
   max-height: 600px;
   object-fit: contain;
   background: #020c13;
-  pointer-events: none;
   cursor: zoom-in;
 }
 .td-chart-preview > span {
