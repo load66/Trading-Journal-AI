@@ -342,7 +342,7 @@
   cursor: pointer;
 }
 .td-chart-dropzone-compact {
-  width: min(100%, 680px);
+  width: min(100%, 520px);
   min-height: 110px;
 }
 .td-chart-dropzone:hover {
@@ -383,7 +383,7 @@
   background: #020c13;
 }
 .td-chart-preview.is-expanded {
-  width: min(100%, 560px);
+  width: min(100%, 680px);
   cursor: zoom-out;
 }
 .td-chart-preview.is-expanded img {
