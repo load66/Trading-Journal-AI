@@ -4,7 +4,7 @@ import csv
 import io
 import os
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -23,39 +23,77 @@ FUTURES_MULTIPLIERS = {
 
 DEFAULT_EXECUTION_TIMEZONE = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 
-# Broker/profile defaults are used only when the export itself does not carry
-# timezone metadata. IANA zones are intentional: they apply daylight-saving
-# rules for the execution date instead of hard-coding UTC-5/UTC-6 offsets.
+# These are fallbacks only. Explicit timezone evidence inside an export always
+# outranks a broker profile, so changing a broker/platform from CT to ET is safe
+# when the CSV carries that information.
 BROKER_TIMEZONE_DEFAULTS = {
     "thinkorswim": "America/Chicago",
     "schwab_transactions": "America/Chicago",
 }
 
-TIMEZONE_ALIASES = {
+# Region labels follow DST. Standard/daylight abbreviations are fixed offsets:
+# CST literally means UTC-06:00, while CT means America/Chicago.
+DYNAMIC_ZONE_ALIASES = {
     "UTC": "UTC",
     "GMT": "UTC",
     "ET": "America/New_York",
-    "EST": "America/New_York",
-    "EDT": "America/New_York",
+    "EASTERN": "America/New_York",
+    "EASTERN TIME": "America/New_York",
     "CT": "America/Chicago",
-    "CST": "America/Chicago",
-    "CDT": "America/Chicago",
+    "CENTRAL": "America/Chicago",
+    "CENTRAL TIME": "America/Chicago",
     "MT": "America/Denver",
-    "MST": "America/Denver",
-    "MDT": "America/Denver",
+    "MOUNTAIN": "America/Denver",
+    "MOUNTAIN TIME": "America/Denver",
     "PT": "America/Los_Angeles",
-    "PST": "America/Los_Angeles",
-    "PDT": "America/Los_Angeles",
+    "PACIFIC": "America/Los_Angeles",
+    "PACIFIC TIME": "America/Los_Angeles",
+}
+FIXED_ZONE_ALIASES = {
+    "EST": "UTC-05:00",
+    "EDT": "UTC-04:00",
+    "CST": "UTC-06:00",
+    "CDT": "UTC-05:00",
+    "MST": "UTC-07:00",
+    "MDT": "UTC-06:00",
+    "PST": "UTC-08:00",
+    "PDT": "UTC-07:00",
+}
+METADATA_REGION_ALIASES = {
+    "EST": "America/New_York", "EDT": "America/New_York",
+    "CST": "America/Chicago", "CDT": "America/Chicago",
+    "MST": "America/Denver", "MDT": "America/Denver",
+    "PST": "America/Los_Angeles", "PDT": "America/Los_Angeles",
 }
 
 
-def _valid_iana_timezone(value: str | None) -> str | None:
-    candidate = str(value or "").strip()
+def _offset_label(value: str | None) -> str | None:
+    raw = str(value or "").strip().upper().replace(" ", "")
+    if raw in {"Z", "UTC", "GMT", "+00:00", "+0000", "-00:00", "-0000"}:
+        return "UTC"
+    m = re.match(r"^(?:UTC|GMT)?([+-])(\d{1,2})(?::?(\d{2}))?$", raw)
+    if not m:
+        return None
+    sign, hh, mm = m.groups()
+    hour = int(hh)
+    minute = int(mm or 0)
+    if hour > 14 or minute > 59 or (hour == 14 and minute):
+        return None
+    return f"UTC{sign}{hour:02d}:{minute:02d}"
+
+
+def _timezone_label(value: str | None) -> str | None:
+    candidate = str(value or "").strip().strip('"').strip()
     if not candidate:
         return None
-    alias = TIMEZONE_ALIASES.get(candidate.upper())
-    if alias:
-        return alias
+    upper = re.sub(r"\s+", " ", candidate.upper())
+    if upper in DYNAMIC_ZONE_ALIASES:
+        return DYNAMIC_ZONE_ALIASES[upper]
+    if upper in FIXED_ZONE_ALIASES:
+        return FIXED_ZONE_ALIASES[upper]
+    offset = _offset_label(candidate)
+    if offset:
+        return offset
     try:
         ZoneInfo(candidate)
         return candidate
@@ -63,83 +101,140 @@ def _valid_iana_timezone(value: str | None) -> str | None:
         return None
 
 
+def _timezone_object(label: str):
+    normalized = _timezone_label(label)
+    if not normalized:
+        raise ValueError(f"Unsupported timezone '{label}'.")
+    if normalized == "UTC":
+        return timezone.utc
+    m = re.match(r"^UTC([+-])(\d{2}):(\d{2})$", normalized)
+    if m:
+        sign, hh, mm = m.groups()
+        delta = timedelta(hours=int(hh), minutes=int(mm))
+        if sign == "-":
+            delta = -delta
+        return timezone(delta, name=normalized)
+    return ZoneInfo(normalized)
+
+
+def _timezone_info(
+    value: str,
+    method: str,
+    confidence: str,
+    *,
+    metadata_context: bool = False,
+) -> dict:
+    raw_value = str(value).strip()
+    normalized_value = METADATA_REGION_ALIASES.get(raw_value.upper(), raw_value) if metadata_context else raw_value
+    label = _timezone_label(normalized_value)
+    if not label:
+        raise ValueError(
+            f"Unsupported timezone '{raw_value}'. Use an IANA zone such as America/New_York, "
+            "a region label such as ET/CT, or an explicit UTC offset such as -04:00."
+        )
+    return {
+        "timezone": label,
+        "method": method,
+        "confidence": confidence,
+        "evidence": raw_value,
+    }
+
+
+def _metadata_timezone_candidates(content: str) -> list[dict]:
+    """Extract timezone evidence only from metadata-like rows, never arbitrary cells."""
+    candidates = []
+    for line in str(content or "").lstrip("\ufeff").splitlines()[:120]:
+        text = line.strip()
+        if not text:
+            continue
+
+        # Dedicated metadata fields: Time Zone,America/New_York / TZ: -04:00.
+        m = re.search(
+            r"(?i)(?:^|[,;|])\s*(?:TIME\s*ZONE|TIMEZONE|TZ)\s*[,=:]\s*\"?([^,;|\"]+)",
+            text,
+        )
+        if m:
+            raw = m.group(1).strip()
+            # Trim trailing prose while preserving labels like "Eastern Time".
+            probes = [raw]
+            probes.extend(raw.split())
+            for probe in probes:
+                label = _timezone_label(probe)
+                if label:
+                    candidates.append(_timezone_info(
+                        probe, "csv_timezone_metadata", "authoritative", metadata_context=True
+                    ))
+                    break
+
+        # IANA zones count only when the row itself looks like metadata.
+        if re.search(r"(?i)TIME\s*ZONE|TIMEZONE|\bTZ\b|WHENGENERATED|GENERATED", text):
+            for zone in re.findall(r"\b(?:America|US)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?\b", text):
+                if _timezone_label(zone):
+                    candidates.append(_timezone_info(zone, "csv_iana_timezone", "authoritative"))
+
+        # IBKR and similar generated-at records often end with a zone token.
+        if re.search(r"(?i)WHENGENERATED|GENERATED\s*(?:AT|ON)?", text):
+            for token in re.findall(
+                r"(?i)(?:\b(?:UTC|GMT|E[SD]T|C[SD]T|M[SD]T|P[SD]T|ET|CT|MT|PT)\b|(?:UTC|GMT)?[+-]\d{1,2}:?\d{2})",
+                text,
+            ):
+                if _timezone_label(token):
+                    candidates.append(_timezone_info(
+                        token, "report_timezone_metadata", "high", metadata_context=True
+                    ))
+
+    # Preserve first evidence for a zone/method pair.
+    unique = []
+    seen = set()
+    for item in candidates:
+        key = (item["timezone"], item["method"])
+        if key not in seen:
+            unique.append(item)
+            seen.add(key)
+    return unique
+
+
 def detect_csv_timezone(
     content: str,
     broker: str | None = None,
     row_timezone: str | None = None,
+    fallback_override: str | None = None,
 ) -> dict:
-    """Resolve CSV execution timezone and record how the decision was made.
+    """Resolve timezone evidence conservatively.
 
     Priority:
-      1. explicit row timezone (generic template / broker-specific column)
-      2. explicit IANA timezone in the export
-      3. explicit CSV timezone metadata or a timezone suffix in report metadata
-      4. verified broker profile (Thinkorswim/Schwab -> America/Chicago)
-      5. configured application fallback, marked low-confidence
+      1. explicit row timezone
+      2. explicit CSV/report metadata
+      3. user-selected fallback for local-clock exports
+      4. verified broker profile
+      5. configured application fallback (low confidence)
 
-    A local clock time alone is never treated as proof of a timezone.
+    Embedded timezone/offsets inside execution timestamps are handled per-row by
+    attach_execution_timestamp and outrank every file-level result.
     """
     if row_timezone:
-        resolved = _valid_iana_timezone(row_timezone)
-        if not resolved:
-            raise ValueError(
-                f"Unsupported timezone '{row_timezone}'. Use an IANA zone such as "
-                "America/Chicago or a supported US abbreviation such as CST/CDT/CT."
+        return _timezone_info(row_timezone, "row_timezone", "authoritative")
+
+    candidates = _metadata_timezone_candidates(content)
+    zones = sorted({item["timezone"] for item in candidates})
+    if len(zones) > 1:
+        details = ", ".join(zones)
+        raise ValueError(
+            f"Conflicting timezone metadata was found in this CSV ({details}). "
+            "Nothing was imported; fix the export or choose a clean source file."
+        )
+    if candidates:
+        # Dedicated metadata is stronger than generated-at context.
+        candidates.sort(
+            key=lambda item: (
+                0 if item["confidence"] == "authoritative" else 1,
+                0 if item["method"] == "csv_timezone_metadata" else 1,
             )
-        return {
-            "timezone": resolved,
-            "method": "row_timezone",
-            "confidence": "high",
-            "evidence": str(row_timezone).strip(),
-        }
+        )
+        return candidates[0]
 
-    sample = str(content or "")[:20000]
-
-    # Explicit IANA zone anywhere in the export metadata wins.
-    match = re.search(
-        r"\b((?:America|US)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?)\b",
-        sample,
-    )
-    if match:
-        resolved = _valid_iana_timezone(match.group(1))
-        if resolved:
-            return {
-                "timezone": resolved,
-                "method": "csv_iana_timezone",
-                "confidence": "high",
-                "evidence": match.group(1),
-            }
-
-    # Common metadata shapes: Time Zone,CDT  /  Timezone: America/Chicago.
-    meta_match = re.search(
-        r"(?im)(?:^|,|\b)(?:TIME\s*ZONE|TIMEZONE|TZ)\s*[,=:]\s*\"?([A-Za-z_/+-]+)",
-        sample,
-    )
-    if meta_match:
-        resolved = _valid_iana_timezone(meta_match.group(1))
-        if resolved:
-            return {
-                "timezone": resolved,
-                "method": "csv_timezone_metadata",
-                "confidence": "high",
-                "evidence": meta_match.group(1),
-            }
-
-    # IBKR statements commonly include a generated-at timezone suffix. Treat it
-    # as report metadata, not as strong as a dedicated Time Zone field.
-    generated_match = re.search(
-        r"(?im)WhenGenerated[^\n]*?\b(UTC|GMT|E[SD]T|C[SD]T|M[SD]T|P[SD]T)\b",
-        sample,
-    )
-    if generated_match:
-        resolved = _valid_iana_timezone(generated_match.group(1))
-        if resolved:
-            return {
-                "timezone": resolved,
-                "method": "report_timezone_metadata",
-                "confidence": "medium",
-                "evidence": generated_match.group(1).upper(),
-            }
+    if fallback_override:
+        return _timezone_info(fallback_override, "manual_fallback", "high")
 
     profile = BROKER_TIMEZONE_DEFAULTS.get(str(broker or "").lower())
     if profile:
@@ -150,7 +245,7 @@ def detect_csv_timezone(
             "evidence": str(broker),
         }
 
-    fallback = _valid_iana_timezone(DEFAULT_EXECUTION_TIMEZONE)
+    fallback = _timezone_label(DEFAULT_EXECUTION_TIMEZONE)
     if not fallback:
         raise ValueError(
             f"Configured TRADE_EXECUTION_TIMEZONE '{DEFAULT_EXECUTION_TIMEZONE}' is invalid."
@@ -165,13 +260,45 @@ def detect_csv_timezone(
 
 def _time_precision(value: str) -> str:
     raw = str(value or "").strip().upper()
-    if re.search(r'\d{1,2}:\d{2}:\d{2}', raw):
+    if re.search(r"\d{1,2}:\d{2}:\d{2}", raw):
         return "second"
     return "minute"
 
 
+def _extract_embedded_timezone(value: str | None) -> dict | None:
+    """Return timezone evidence carried by a timestamp/time string itself."""
+    raw = str(value or "").strip().strip('"')
+    if not raw:
+        return None
+
+    token = None
+    if re.search(r"(?i)Z$", raw):
+        token = "UTC"
+    else:
+        m = re.search(r"(?i)(UTC|GMT)?([+-]\d{1,2}:?\d{2})$", raw)
+        if m:
+            token = (m.group(1) or "") + m.group(2)
+        else:
+            m = re.search(r"(?i)\b(UTC|GMT|E[SD]T|C[SD]T|M[SD]T|P[SD]T|ET|CT|MT|PT)\s*$", raw)
+            if m:
+                token = m.group(1)
+
+    if not token:
+        return None
+    info = _timezone_info(token, "embedded_timestamp_timezone", "authoritative")
+    return info
+
+
+def _strip_embedded_timezone(value: str) -> str:
+    raw = str(value or "").strip().strip('"')
+    raw = re.sub(r"(?i)Z$", "", raw).strip()
+    raw = re.sub(r"(?i)(?:UTC|GMT)?[+-]\d{1,2}:?\d{2}$", "", raw).strip()
+    raw = re.sub(r"(?i)\b(?:UTC|GMT|E[SD]T|C[SD]T|M[SD]T|P[SD]T|ET|CT|MT|PT)\s*$", "", raw).strip()
+    return raw
+
+
 def _parse_clock_time(value: str):
-    raw = str(value or "").strip()
+    raw = _strip_embedded_timezone(str(value or ""))
     for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
         try:
             return datetime.strptime(raw, fmt).time()
@@ -180,42 +307,101 @@ def _parse_clock_time(value: str):
     return None
 
 
+def _wall_clock_offset(label: str, iso_date: str, time_value: str):
+    try:
+        day = datetime.strptime(str(iso_date), "%Y-%m-%d").date()
+        clock = _parse_clock_time(time_value)
+        if clock is None:
+            return None
+        zone = _timezone_object(label)
+        naive = datetime.combine(day, clock)
+        return naive.replace(tzinfo=zone, fold=0).utcoffset()
+    except Exception:
+        return None
+
+
+def _timezone_evidence_conflicts(
+    first: dict | None,
+    second: dict | None,
+    iso_date: str,
+    time_value: str,
+) -> bool:
+    if not first or not second:
+        return False
+    if first["timezone"] == second["timezone"]:
+        return False
+    a = _wall_clock_offset(first["timezone"], iso_date, time_value)
+    b = _wall_clock_offset(second["timezone"], iso_date, time_value)
+    return a is not None and b is not None and a != b
+
+
 def canonical_execution_timestamp(
     iso_date: str,
     time_value: str,
     source_timezone: str = DEFAULT_EXECUTION_TIMEZONE,
 ) -> str | None:
-    """Convert a broker-local execution clock time into an immutable UTC instant.
+    """Convert a broker-local execution clock into an immutable UTC instant.
 
-    Thinkorswim/Schwab exports are interpreted using the configured IANA zone
-    (America/Chicago by default). The original date/time strings are preserved
-    separately; this value exists so downstream charts never have to guess.
+    An embedded zone/offset in time_value is authoritative. Otherwise the
+    resolved source_timezone is used. Ambiguous/nonexistent DST wall clocks are
+    rejected rather than guessed.
     """
     try:
         day = datetime.strptime(str(iso_date), "%Y-%m-%d").date()
         clock = _parse_clock_time(time_value)
         if clock is None:
             return None
-        zone = ZoneInfo(source_timezone)
+
+        embedded = _extract_embedded_timezone(time_value)
+        label = embedded["timezone"] if embedded else source_timezone
+        zone = _timezone_object(label)
         naive = datetime.combine(day, clock)
         first = naive.replace(tzinfo=zone, fold=0)
         second = naive.replace(tzinfo=zone, fold=1)
 
-        # A repeated fall-back clock time is ambiguous without an explicit UTC
-        # offset. Refuse to invent which occurrence the broker meant.
         if first.utcoffset() != second.utcoffset():
             return None
 
         utc_dt = first.astimezone(timezone.utc)
-
-        # Spring-forward can create local wall-clock times that never existed.
-        # Round-trip through UTC and reject those instead of silently shifting.
         if utc_dt.astimezone(zone).replace(tzinfo=None) != naive:
             return None
-
         return utc_dt.isoformat().replace("+00:00", "Z")
     except (ValueError, TypeError, KeyError):
         return None
+
+
+def _parse_combined_datetime(value: str) -> tuple[str, str, dict | None] | None:
+    """Parse a combined execution timestamp while preserving any zone suffix."""
+    raw = str(value or "").strip().strip('"')
+    if not raw:
+        return None
+    embedded = _extract_embedded_timezone(raw)
+    base = _strip_embedded_timezone(raw).replace("T", " ").strip()
+    formats = (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%m/%d/%y %I:%M:%S %p",
+        "%m/%d/%Y %I:%M %p",
+        "%m/%d/%y %I:%M %p",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%y %H:%M",
+    )
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(base, fmt)
+            time_text = dt.strftime("%H:%M:%S")
+            if embedded:
+                # Keep zone evidence attached so canonical conversion is independent
+                # of file/broker defaults.
+                suffix = embedded.get("evidence") or embedded["timezone"]
+                time_text = f"{time_text} {suffix}"
+            return dt.strftime("%Y-%m-%d"), time_text, embedded
+        except ValueError:
+            continue
+    return None
 
 
 def attach_execution_timestamp(
@@ -232,9 +418,18 @@ def attach_execution_timestamp(
     time_value = str(item.get("time") or "").strip()
     source_date = str(item.get("source_date") or item.get("date") or iso_date).strip()
     source_time = str(item.get("source_time") or item.get("time") or "").strip()
+    source_timestamp = item.get("source_timestamp") or f"{source_date} {source_time}".strip()
+
+    embedded = _extract_embedded_timezone(source_timestamp) or _extract_embedded_timezone(time_value)
+    if embedded:
+        source_timezone = embedded["timezone"]
+        timezone_detection_method = embedded["method"]
+        timezone_detection_confidence = embedded["confidence"]
+        timezone_detection_evidence = embedded["evidence"]
+
     item["source_broker"] = source_broker
     item["source_timezone"] = source_timezone
-    item["source_timestamp"] = item.get("source_timestamp") or f"{source_date} {source_time}".strip()
+    item["source_timestamp"] = source_timestamp
     item["timezone_detection_method"] = timezone_detection_method
     item["timezone_detection_confidence"] = timezone_detection_confidence
     if timezone_detection_evidence:
@@ -787,7 +982,9 @@ def parse_cash_balance_section(
 
 
 
-def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_schwab_transactions_csv(
+    content: str, account_id: int, conn=None, timezone_override: str | None = None
+) -> tuple[list[dict], int]:
     """Parse Schwab transaction-history CSV exports.
 
     Format:
@@ -797,7 +994,9 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
     "9/25/26 10:11 AM"). The importer stores ":00" seconds and explicitly marks
     timestamp_precision="minute"; it never invents sub-minute timing.
     """
-    timezone_info = detect_csv_timezone(content, "schwab_transactions")
+    timezone_info = detect_csv_timezone(
+        content, "schwab_transactions", fallback_override=timezone_override
+    )
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
     header_idx = None
     col = {}
@@ -832,23 +1031,13 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
             continue
 
         dt_text = cell(row, 'DATE')
-        parsed_dt = None
-        timestamp_precision = "minute"
-        for fmt, precision in (
-            ('%m/%d/%y %I:%M:%S %p', 'second'),
-            ('%m/%d/%Y %I:%M:%S %p', 'second'),
-            ('%m/%d/%y %I:%M %p', 'minute'),
-            ('%m/%d/%Y %I:%M %p', 'minute'),
-        ):
-            try:
-                parsed_dt = datetime.strptime(dt_text, fmt)
-                timestamp_precision = precision
-                break
-            except ValueError:
-                pass
-        if parsed_dt is None:
+        parsed_parts = _parse_combined_datetime(dt_text)
+        if parsed_parts is None:
             problems.append(f"line {line_no}: unsupported Schwab timestamp '{dt_text}'")
             continue
+        iso_date, parsed_time, embedded_timezone = parsed_parts
+        parsed_dt = datetime.strptime(f"{iso_date} {_strip_embedded_timezone(parsed_time)}", "%Y-%m-%d %H:%M:%S")
+        timestamp_precision = _time_precision(dt_text)
 
         desc = cell(row, 'DESCRIPTION').strip('"')
         parsed = parse_cash_description(desc)
@@ -864,7 +1053,7 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
         parsed.update({
             'date': f"{parsed_dt.month}/{parsed_dt.day}/{str(parsed_dt.year)[2:]}",
             'iso_date': parsed_dt.strftime('%Y-%m-%d'),
-            'time': parsed_dt.strftime('%H:%M:%S'),
+            'time': parsed_time,
             'amount': amount,
             'commission': abs(misc_fees) + abs(commissions),
             'raw_description': desc,
@@ -873,8 +1062,9 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
             'source_timestamp': dt_text,
             'timestamp_precision': timestamp_precision,
         })
+        row_timezone_info = embedded_timezone or timezone_info
         executions.append(
-            attach_detected_execution_timestamp(parsed, "schwab_transactions", timezone_info)
+            attach_detected_execution_timestamp(parsed, "schwab_transactions", row_timezone_info)
         )
 
     if problems:
@@ -1286,13 +1476,17 @@ def _cross_section_key(ex: dict) -> str:
     return f"{ex.get('iso_date','')}|{ex.get('ticker','')}|{ex.get('action','')}|{ex.get('qty','')}|{ex.get('price','')}"
 
 
-def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_thinkorswim_csv(
+    content: str, account_id: int, conn=None, timezone_override: str | None = None
+) -> tuple[list[dict], int]:
     """
     Full CSV parse pipeline.
     Returns (list of trade dicts ready for DB insert, skipped_count).
     """
     content = content.lstrip('﻿')
-    timezone_info = detect_csv_timezone(content, "thinkorswim")
+    timezone_info = detect_csv_timezone(
+        content, "thinkorswim", fallback_override=timezone_override
+    )
 
     sections = split_csv_sections(content)
     cash_rows = find_cash_balance_section(sections)
@@ -1678,14 +1872,18 @@ def parse_ibkr_trades_section(records: list[dict[str, str]]) -> list[dict]:
     return executions
 
 
-def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_ibkr_csv(
+    content: str, account_id: int, conn=None, timezone_override: str | None = None
+) -> tuple[list[dict], int]:
     """
     IBKR Activity Statement CSV parse pipeline (Client Portal -> Performance &
     Reports -> Statements -> Activity -> CSV). Same output contract as
     parse_thinkorswim_csv: (trade dicts ready for DB insert, skipped_count).
     """
     content = content.lstrip('﻿')
-    timezone_info = detect_csv_timezone(content, "ibkr")
+    timezone_info = detect_csv_timezone(
+        content, "ibkr", fallback_override=timezone_override
+    )
     sections = split_ibkr_sections(content)
 
     trade_records = sections.get('Trades')
@@ -1728,9 +1926,10 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
 # are never skipped silently: the import stops and names the line, because a
 # missing fill changes every P&L number after it.
 
-GENERIC_REQUIRED = ('date', 'time', 'symbol', 'side', 'quantity', 'price')
+GENERIC_REQUIRED = ('symbol', 'side', 'quantity', 'price')
 GENERIC_OPTIONAL = (
-    'commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier', 'timezone'
+    'date', 'time', 'timestamp', 'commission', 'asset_type', 'expiry',
+    'strike', 'put_call', 'multiplier', 'timezone'
 )
 
 _GENERIC_ALIASES = {
@@ -1742,6 +1941,10 @@ _GENERIC_ALIASES = {
     'strike_price': 'strike',
     'time_zone': 'timezone', 'timezone_name': 'timezone',
     'tz': 'timezone', 'source_timezone': 'timezone',
+    'datetime': 'timestamp', 'date_time': 'timestamp', 'date_time_utc': 'timestamp',
+    'execution_time': 'timestamp', 'execution_timestamp': 'timestamp',
+    'executed_at': 'timestamp', 'filled_at': 'timestamp', 'fill_timestamp': 'timestamp',
+    'transact_time': 'timestamp', 'transaction_time': 'timestamp',
 }
 
 
@@ -1753,7 +1956,9 @@ def _generic_header(cells):
         key = _GENERIC_ALIASES.get(key, key)
         if key in GENERIC_REQUIRED or key in GENERIC_OPTIONAL:
             index.setdefault(key, i)
-    return index if all(k in index for k in GENERIC_REQUIRED) else None
+    has_identity = all(k in index for k in GENERIC_REQUIRED)
+    has_clock = 'timestamp' in index or ('date' in index and 'time' in index)
+    return index if has_identity and has_clock else None
 
 
 def _generic_date(value):
@@ -1827,9 +2032,11 @@ def _num(text):
     return float(text.replace(',', '').replace('$', '').strip())
 
 
-def parse_generic_rows(content):
-    """Read the generic template into execution dicts. Raises ValueError naming every bad line."""
-    file_timezone_info = detect_csv_timezone(content, "generic")
+def parse_generic_rows(content, timezone_override: str | None = None):
+    """Read a generic execution CSV with adaptive timestamp/timezone handling."""
+    file_timezone_info = detect_csv_timezone(
+        content, "generic", fallback_override=timezone_override
+    )
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
 
     header_at, col = None, None
@@ -1855,19 +2062,40 @@ def parse_generic_rows(content):
         why = []
 
         symbol = cell(cells, 'symbol').upper()
+        raw_timestamp = cell(cells, 'timestamp')
         raw_date = cell(cells, 'date')
         raw_time = cell(cells, 'time')
-        date = _generic_date(raw_date)
-        time_ = _generic_time(raw_time)
+        embedded_timezone = None
+
+        if raw_timestamp:
+            parsed_timestamp = _parse_combined_datetime(raw_timestamp)
+            if parsed_timestamp:
+                date, time_, embedded_timezone = parsed_timestamp
+            else:
+                date, time_ = None, None
+        else:
+            date = _generic_date(raw_date)
+            time_ = _generic_time(raw_time)
+            embedded_timezone = _extract_embedded_timezone(raw_time)
+            if embedded_timezone and time_:
+                time_ = f"{time_} {embedded_timezone.get('evidence') or embedded_timezone['timezone']}"
+
         action = _generic_side(cell(cells, 'side'))
         asset = _generic_asset(cell(cells, 'asset_type'), symbol)
         timezone_info = None
         try:
             row_timezone = cell(cells, 'timezone')
-            timezone_info = (
+            explicit_row_timezone = (
                 detect_csv_timezone("", "generic", row_timezone=row_timezone)
-                if row_timezone else file_timezone_info
+                if row_timezone else None
             )
+            if embedded_timezone and explicit_row_timezone and _timezone_evidence_conflicts(
+                embedded_timezone, explicit_row_timezone, date or "", time_ or ""
+            ):
+                raise ValueError(
+                    "timestamp UTC offset/timezone conflicts with the row timezone column"
+                )
+            timezone_info = embedded_timezone or explicit_row_timezone or file_timezone_info
         except ValueError as exc:
             why.append(str(exc))
 
@@ -1890,9 +2118,15 @@ def parse_generic_rows(content):
         if not symbol:
             why.append("symbol is empty")
         if not date:
-            why.append(f"date '{cell(cells, 'date')}' is not YYYY-MM-DD or MM/DD/YYYY")
+            if raw_timestamp:
+                why.append(f"timestamp '{raw_timestamp}' is not a supported execution date/time")
+            else:
+                why.append(f"date '{raw_date}' is not YYYY-MM-DD or MM/DD/YYYY")
         if not time_:
-            why.append(f"time '{cell(cells, 'time')}' is not HH:MM or HH:MM:SS")
+            if raw_timestamp:
+                why.append(f"timestamp '{raw_timestamp}' is not a supported execution time")
+            else:
+                why.append(f"time '{raw_time}' is not HH:MM or HH:MM:SS")
         if not action:
             why.append(f"side '{cell(cells, 'side')}' is not BUY or SELL")
         if qty is None:
@@ -1952,7 +2186,7 @@ def parse_generic_rows(content):
             'date': date,
             'iso_date': date,
             'time': time_,
-            'source_timestamp': f"{raw_date} {raw_time}".strip(),
+            'source_timestamp': raw_timestamp or f"{raw_date} {raw_time}".strip(),
             'amount': round(amount, 2),
             'commission': round(commission, 2),
             'raw_description': f"{action} {qty} {ticker} @{price}",
@@ -1972,9 +2206,9 @@ def parse_generic_rows(content):
     return executions
 
 
-def parse_generic_csv(content, account_id, conn=None):
+def parse_generic_csv(content, account_id, conn=None, timezone_override: str | None = None):
     """Generic template pipeline with explicit timezone safety."""
-    executions = parse_generic_rows(content)
+    executions = parse_generic_rows(content, timezone_override=timezone_override)
     low_confidence = [
         ex for ex in executions
         if ex.get("timezone_detection_confidence") == "low"
@@ -1982,8 +2216,8 @@ def parse_generic_csv(content, account_id, conn=None):
     if low_confidence:
         raise ValueError(
             "Timezone could not be verified for this generic CSV. Nothing was imported. "
-            "Add a timezone column using an IANA zone such as America/Chicago "
-            "(recommended) or a supported US abbreviation such as CT/CST/CDT."
+            "Provide an embedded UTC offset/Z timestamp, a timezone column, CSV timezone metadata, "
+            "or choose a local-time fallback on the Import page."
         )
     missing_ts = [ex for ex in executions if not ex.get("timestamp_utc")]
     if missing_ts:
@@ -2046,7 +2280,13 @@ def detect_broker(content: str) -> str | None:
     return None
 
 
-def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_broker_csv(
+    content: str,
+    broker: str,
+    account_id: int,
+    conn=None,
+    timezone_override: str | None = None,
+) -> tuple[list[dict], int]:
     """
     Route a CSV to the right broker parser. broker is a BROKER_PARSERS key or
     'auto'. An explicit broker that clearly does not match the file raises a
@@ -2074,4 +2314,6 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> t
             f"{BROKER_LABELS[key]} is selected. Change the broker dropdown and try again."
         )
 
-    return BROKER_PARSERS[key](content, account_id, conn)
+    return BROKER_PARSERS[key](
+        content, account_id, conn, timezone_override=timezone_override
+    )

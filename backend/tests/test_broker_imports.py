@@ -84,7 +84,7 @@ def test_ibkr_timestamp_timezone_is_detected_from_statement_metadata(ibkr):
     assert executions
     assert all(e["source_timezone"] == "America/New_York" for e in executions)
     assert all(e["timezone_detection_method"] == "report_timezone_metadata" for e in executions)
-    assert all(e["timezone_detection_confidence"] == "medium" for e in executions)
+    assert all(e["timezone_detection_confidence"] == "high" for e in executions)
     assert all(e.get("timestamp_utc") for e in executions)
 
 

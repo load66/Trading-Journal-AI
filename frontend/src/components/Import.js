@@ -25,6 +25,15 @@ const BROKER_HELP = {
   generic: <>Copy your fills into the template, one row per execution. Include the <strong>timezone</strong> column (for example <code>America/Chicago</code>); ambiguous generic timestamps are rejected instead of guessed.</>,
 };
 
+const TIMEZONE_FALLBACKS = [
+  { value: '', label: 'Auto — use timezone evidence in CSV' },
+  { value: 'America/New_York', label: 'Eastern Time (America/New_York)' },
+  { value: 'America/Chicago', label: 'Central Time (America/Chicago)' },
+  { value: 'America/Denver', label: 'Mountain Time (America/Denver)' },
+  { value: 'America/Los_Angeles', label: 'Pacific Time (America/Los_Angeles)' },
+  { value: 'UTC', label: 'UTC' },
+];
+
 const BROKER_DROP_LABEL = {
   auto: 'Drop your broker CSV (Thinkorswim, Schwab, or IBKR)',
   thinkorswim: 'Drop Thinkorswim account statement CSV',
@@ -47,8 +56,8 @@ function brokerFromAccount(account) {
    way in before giving up. Expands into the column reference when the generic
    template is the selected broker. */
 const TEMPLATE_COLUMNS = [
-  ['date', 'Required', 'YYYY-MM-DD, or MM/DD/YYYY'],
-  ['time', 'Required', '24 hour HH:MM or HH:MM:SS, or 1:05 PM'],
+  ['date + time', 'One option', 'YYYY-MM-DD + local clock time'],
+  ['timestamp', 'Alternative', 'ISO/combined timestamp; embedded Z or UTC offset is authoritative'],
   ['symbol', 'Required', 'AAPL. Futures start with a slash: /MESU26'],
   ['side', 'Required', 'BUY or SELL. BUY TO COVER and SELL SHORT work too'],
   ['quantity', 'Required', 'Shares or contracts, always positive'],
@@ -57,7 +66,7 @@ const TEMPLATE_COLUMNS = [
   ['asset_type', 'Optional', 'STOCK (default), OPTION or FUTURE'],
   ['expiry, strike, put_call', 'Options', '2026-08-28, 765, CALL or PUT'],
   ['multiplier', 'Optional', 'Point value for a future the app does not know'],
-  ['timezone', 'Required', 'IANA zone preferred: America/Chicago. CT/CST/CDT also accepted'],
+  ['timezone', 'When local time', 'IANA zone preferred. Not needed when timestamp already contains Z/UTC offset'],
 ];
 
 function GenericTemplateTip({ open, onUse }) {
@@ -172,6 +181,7 @@ export default function Import({ accounts, accountId }) {
   const [csvResult, setCsvResult] = useState(null);
   const [csvError, setCsvError] = useState(null);
   const [reconcileCsv, setReconcileCsv] = useState(false);
+  const [csvTimezoneOverride, setCsvTimezoneOverride] = useState('');
 
   // Diary upload state
   const [diaryFile, setDiaryFile] = useState(null);
@@ -194,6 +204,7 @@ export default function Import({ accounts, accountId }) {
     fd.append('account_id', csvAccountId);
     fd.append('broker', csvBroker);
     fd.append('reconcile', reconcileCsv ? 'true' : 'false');
+    if (csvTimezoneOverride) fd.append('timezone_override', csvTimezoneOverride);
     try {
       const res = await importApi.importCsv(fd);
       setCsvResult(res.data);
@@ -252,8 +263,9 @@ export default function Import({ accounts, accountId }) {
 
           <div className="notice" style={{ marginTop: 12, display: 'block', fontSize: 12.5, lineHeight: 1.5 }}>
             <strong style={{ color: 'var(--text-primary)' }}>Timezone safeguard:</strong>{' '}
-            broker timezone is detected before import, the original broker timestamp is preserved,
-            and every fill is normalized to UTC. Ambiguous timestamps are rejected rather than guessed.
+            embedded Z/UTC offsets, row timezone columns, and CSV metadata are detected first;
+            broker defaults are only fallbacks. The original timestamp is preserved and every fill
+            is normalized to UTC. Conflicting or ambiguous timestamps are rejected rather than guessed.
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginTop: 16 }}>
@@ -290,6 +302,22 @@ export default function Import({ accounts, accountId }) {
                   <option key={a.id} value={a.id}>{a.name}</option>
                 ))}
               </select>
+            </div>
+            <div>
+              <label className="field-label" htmlFor="imp-csv-timezone">Local-time fallback</label>
+              <select
+                id="imp-csv-timezone"
+                value={csvTimezoneOverride}
+                onChange={e => setCsvTimezoneOverride(e.target.value)}
+                style={{ width: '100%' }}
+              >
+                {TIMEZONE_FALLBACKS.map(option => (
+                  <option key={option.value || 'auto'} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 5, lineHeight: 1.4 }}>
+                Used only when the CSV itself has no timezone/offset. Explicit CSV evidence always wins.
+              </div>
             </div>
           </div>
 

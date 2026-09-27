@@ -118,8 +118,64 @@ def test_generic_timezone_column_is_dst_aware_and_auditable():
     assert execution["source_timestamp"] == "2026-09-25 08:47:04"
     assert execution["source_timezone"] == "America/Chicago"
     assert execution["timezone_detection_method"] == "row_timezone"
-    assert execution["timezone_detection_confidence"] == "high"
+    assert execution["timezone_detection_confidence"] == "authoritative"
     assert execution["timestamp_utc"] == "2026-09-25T13:47:04Z"
+
+
+def test_generic_combined_iso_timestamp_with_offset_needs_no_timezone_column():
+    content = (
+        "timestamp,symbol,side,quantity,price,commission,asset_type\n"
+        "2026-09-25T09:47:04-04:00,AAPL,BUY,1,200,0,STOCK\n"
+        "2026-09-25T09:50:04-04:00,AAPL,SELL,1,201,0,STOCK\n"
+    )
+    assert detect_broker(content) == "generic"
+    trades, skipped = parse_broker_csv(content, "auto", account_id=1)
+    assert skipped == 0
+    execs = json.loads(trades[0]["executions"])
+    assert execs[0]["source_timestamp"] == "2026-09-25T09:47:04-04:00"
+    assert execs[0]["source_timezone"] == "UTC-04:00"
+    assert execs[0]["timezone_detection_method"] == "embedded_timestamp_timezone"
+    assert execs[0]["timezone_detection_confidence"] == "authoritative"
+    assert execs[0]["timestamp_utc"] == "2026-09-25T13:47:04Z"
+
+
+def test_generic_combined_z_timestamp_is_utc_authoritative():
+    content = (
+        "timestamp,symbol,side,quantity,price\n"
+        "2026-09-25T13:47:04Z,AAPL,BUY,1,200\n"
+        "2026-09-25T13:50:04Z,AAPL,SELL,1,201\n"
+    )
+    trades, _ = parse_broker_csv(content, "generic", account_id=1)
+    execs = json.loads(trades[0]["executions"])
+    assert execs[0]["source_timezone"] == "UTC"
+    assert execs[0]["timestamp_utc"] == "2026-09-25T13:47:04Z"
+
+
+def test_generic_row_timezone_conflict_with_embedded_offset_is_rejected():
+    content = (
+        "timestamp,symbol,side,quantity,price,timezone\n"
+        "2026-09-25T09:47:04-04:00,AAPL,BUY,1,200,America/Chicago\n"
+    )
+    with pytest.raises(ValueError, match="conflicts with the row timezone"):
+        parse_generic_rows(content)
+
+
+def test_generic_local_time_can_use_manual_fallback():
+    content = (
+        "date,time,symbol,side,quantity,price\n"
+        "2026-09-25,09:47:04,AAPL,BUY,1,200\n"
+        "2026-09-25,09:50:04,AAPL,SELL,1,201\n"
+    )
+    trades, _ = parse_broker_csv(
+        content,
+        "generic",
+        account_id=1,
+        timezone_override="America/New_York",
+    )
+    execs = json.loads(trades[0]["executions"])
+    assert execs[0]["source_timezone"] == "America/New_York"
+    assert execs[0]["timezone_detection_method"] == "manual_fallback"
+    assert execs[0]["timestamp_utc"] == "2026-09-25T13:47:04Z"
 
 
 def test_generic_import_refuses_unverified_timezone():
