@@ -63,6 +63,7 @@ function SetupBadge({ setup, strategy }) {
 }
 
 function ExcursionCell({ trade }) {
+  if (trade.excursion_stale) return <span className="text-faint">Recalculating</span>;
   const mfe = Number(trade.mfe_pct);
   const mae = Number(trade.mae_pct);
   const hasMfe = Number.isFinite(mfe);
