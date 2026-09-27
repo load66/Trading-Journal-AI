@@ -118,7 +118,7 @@ def test_generic_timezone_column_is_dst_aware_and_auditable():
     assert execution["source_timestamp"] == "2026-09-25 08:47:04"
     assert execution["source_timezone"] == "America/Chicago"
     assert execution["timezone_detection_method"] == "row_timezone"
-    assert execution["timezone_detection_confidence"] == "high"
+    assert execution["timezone_detection_confidence"] == "authoritative"
     assert execution["timestamp_utc"] == "2026-09-25T13:47:04Z"
 
 
