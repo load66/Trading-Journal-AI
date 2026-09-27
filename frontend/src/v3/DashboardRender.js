@@ -100,14 +100,6 @@ const absMoney = (value) => {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-const compactDateTime = (value) => {
-  if (!value) return '';
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-  });
-};
-
 function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const data = kpis || {};
   const hold = edge?.hold_time || {};
@@ -441,12 +433,6 @@ function LatestSmokingGunSummary({ report, onOpen }) {
           <p className="v3-h-sub">Diagnosis and mechanical action plan from your latest saved audit.</p>
         </div>
         <div className="v3-smoking-head-actions">
-          <div className="v3-smoking-period">
-            <span>Report period</span>
-            <strong>{report.title || 'Latest report'}</strong>
-            <b>{report.date_from || '—'} → {report.date_to || '—'}</b>
-            {report.generated_at && <small>Generated {compactDateTime(report.generated_at)}</small>}
-          </div>
           <span className={'v3-evidence ' + (report.is_stale ? 'insufficient' : 'verified')}>
             {report.is_stale ? 'SOURCE CHANGED' : 'CURRENT'}
           </span>
@@ -680,8 +666,8 @@ export default function DashboardRender(p) {
   const {
     kpis, accountLabel, span, RangePicker,
     goalsNode, onToggleGoals, showGoals,
-    accountId, onDayClick, onOpenDetail, onViewAllTrades,
-    recentTrades, goals,
+    accountId, onDayClick,
+    goals,
     managementRange, onManagementRangeChange, managementKpis, managementEdge,
     latestSmokingGun, onViewSmokingGun,
   } = p;
@@ -829,16 +815,6 @@ export default function DashboardRender(p) {
               onDayClick={onDayClick}
               latestDate={days.length ? days[days.length - 1].date : null}
             />
-          </section>
-          <section className="v3-side-section">
-            <RecentTradesPanel
-              recentTrades={recentTrades}
-              onViewAllTrades={onViewAllTrades}
-              onOpenDetail={onOpenDetail}
-            />
-          </section>
-          <section className="v3-side-section">
-            <OpenPositions {...p} />
           </section>
         </aside>
       </div>
