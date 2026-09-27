@@ -956,7 +956,7 @@ test('professional Review quick picks stay separate from the full journal note',
   expect(payload.notes).toBeNull();
 });
 
-test('copy previous journal uses one safe beginner action', async () => {
+test('copy previous journal opens a simple checked trade picker and pastes safely', async () => {
   tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: { strategy: 'Test Strategy' }, tags: [] } });
 
   await renderApp();
@@ -970,15 +970,18 @@ test('copy previous journal uses one safe beginner action', async () => {
 
   fireEvent.click(await screen.findByRole('button', { name: /Copy previous journal/i }));
 
-  expect(await screen.findByRole('heading', { name: 'Copy a previous journal' })).toBeVisible();
-  expect(screen.getByText('Safe copy')).toBeVisible();
-  expect(screen.getByText(/never overwrites your existing review/i)).toBeVisible();
-  expect(screen.queryByText(/Replace selected content/i)).not.toBeInTheDocument();
-  expect(screen.queryByText(/Fill blanks \+ add missing/i)).not.toBeInTheDocument();
+  const picker = await screen.findByRole('dialog', { name: 'Paste from a previous trade' });
+  expect(picker).toBeVisible();
+  expect(within(picker).getByText('Recommended')).toBeVisible();
+  expect(within(picker).getByText('Safe paste')).toBeVisible();
+  expect(within(picker).getByText(/never overwritten/i)).toBeVisible();
 
-  const copyButton = screen.getByRole('button', { name: /Copy journal safely/i });
-  await waitFor(() => expect(copyButton).toBeEnabled());
-  fireEvent.click(copyButton);
+  const sourceCheckbox = within(picker).getByRole('checkbox', { name: /Select META 2026-09-10/i });
+  expect(sourceCheckbox).toBeChecked();
+
+  const pasteButton = within(picker).getByRole('button', { name: /Paste selected journal/i });
+  expect(pasteButton).toBeEnabled();
+  fireEvent.click(pasteButton);
 
   await waitFor(() => expect(tradesApi.copyJournal).toHaveBeenCalled());
   const [targetGroup, payload] = tradesApi.copyJournal.mock.calls.at(-1);
