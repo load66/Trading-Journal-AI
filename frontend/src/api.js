@@ -40,6 +40,7 @@ export const tradesApi = {
   getLeLevels: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/le-levels`),
   getAnalysisOptions: () => api.get('/api/analysis-options'),
   updateAnalysis: (group, data) => api.patch(`/api/trades/${encodeURIComponent(group)}/analysis`, data),
+  copyJournal: (group, data) => api.post(`/api/trades/${encodeURIComponent(group)}/copy-journal`, data),
   uploadChartScreenshot: (group, formData) => api.post(`/api/trades/${encodeURIComponent(group)}/chart-screenshot`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),

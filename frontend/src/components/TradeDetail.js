@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import './TradeDetail.mobile.css';
-import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, BookOpen, ClipboardCheck, FileText, ShieldCheck, Tags as TagsIcon, Library, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, BookOpen, ClipboardCheck, FileText, ShieldCheck, Tags as TagsIcon, Library, RefreshCw, Copy } from 'lucide-react';
 import { tradesApi, libraryApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
@@ -888,6 +888,22 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [strategyForm, setStrategyForm]       = useState({});
   const [savingStrategy, setSavingStrategy]   = useState(false);
 
+  // Copy reusable journal context from a similar trade
+  const [copyJournalOpen, setCopyJournalOpen] = useState(false);
+  const [copyCandidates, setCopyCandidates] = useState([]);
+  const [copyCandidatesLoading, setCopyCandidatesLoading] = useState(false);
+  const [copySourceGroup, setCopySourceGroup] = useState('');
+  const [copyMode, setCopyMode] = useState('merge');
+  const [copyParts, setCopyParts] = useState({
+    review: true,
+    tags: true,
+    strategy: true,
+    setup: true,
+  });
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyError, setCopyError] = useState(null);
+  const [copyNotice, setCopyNotice] = useState(null);
+
   // Tags
   const [tagForm, setTagForm]       = useState({ tag_type: 'mistake', tag_value: '' });
   const [tagError, setTagError]     = useState(null);
@@ -930,6 +946,15 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   useEffect(() => {
     plannedRiskFocusHandled.current = false;
   }, [trade.trade_group, focusPlannedRisk]);
+
+  useEffect(() => {
+    setCopyJournalOpen(false);
+    setCopyCandidates([]);
+    setCopySourceGroup('');
+    setCopyMode('merge');
+    setCopyError(null);
+    setCopyNotice(null);
+  }, [trade.trade_group]);
 
   useEffect(() => {
     if (!focusPlannedRisk || analysis == null || plannedRiskFocusHandled.current) return;
@@ -1085,6 +1110,111 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     });
     setEditingStrategy(true);
   };
+
+  const openCopyJournal = async () => {
+    setCopyJournalOpen(true);
+    setCopyCandidatesLoading(true);
+    setCopyError(null);
+    setCopyNotice(null);
+    setCopySourceGroup('');
+
+    try {
+      const response = await tradesApi.list({ limit: 300 });
+      const currentStrategy = String(analysis?.strategy || trade.strategy || '').trim().toLowerCase();
+      const currentSetup = String(trade.setup || '').trim().toLowerCase();
+      const rows = (response.data || [])
+        .filter(candidate => candidate.trade_group !== trade.trade_group)
+        .map(candidate => {
+          const strategy = String(candidate.strategy || '').trim().toLowerCase();
+          const setup = String(candidate.setup || '').trim().toLowerCase();
+          const strategyMatch = Boolean(currentStrategy && strategy === currentStrategy);
+          const setupMatch = Boolean(currentSetup && setup === currentSetup);
+          const reusable = Boolean(
+            candidate.analysis_notes
+            || candidate.entry_reason
+            || candidate.exit_reason
+            || candidate.mistakes
+            || candidate.strategy
+            || candidate.setup
+          );
+          const score = (strategyMatch ? 2 : 0) + (setupMatch ? 1 : 0);
+          return { ...candidate, copy_match_score: score, copy_reusable: reusable };
+        });
+
+      const matched = rows
+        .filter(candidate => candidate.copy_match_score > 0)
+        .sort((a, b) => (
+          b.copy_match_score - a.copy_match_score
+          || String(b.date || '').localeCompare(String(a.date || ''))
+          || Number(b.id || 0) - Number(a.id || 0)
+        ));
+
+      const fallback = rows
+        .filter(candidate => candidate.copy_reusable)
+        .sort((a, b) => (
+          String(b.date || '').localeCompare(String(a.date || ''))
+          || Number(b.id || 0) - Number(a.id || 0)
+        ));
+
+      const next = (matched.length ? matched : fallback).slice(0, 40);
+      setCopyCandidates(next);
+      if (next.length) setCopySourceGroup(next[0].trade_group);
+    } catch (e) {
+      setCopyError(e.response?.data?.detail || e.message || 'Could not load similar trades.');
+    } finally {
+      setCopyCandidatesLoading(false);
+    }
+  };
+
+  const handleCopyJournal = async () => {
+    if (!copySourceGroup) return;
+    if (!Object.values(copyParts).some(Boolean)) {
+      setCopyError('Choose at least one section to copy.');
+      return;
+    }
+
+    setCopyBusy(true);
+    setCopyError(null);
+    setCopyNotice(null);
+    try {
+      const response = await tradesApi.copyJournal(trade.trade_group, {
+        source_trade_group: copySourceGroup,
+        include_review: copyParts.review,
+        include_tags: copyParts.tags,
+        include_strategy: copyParts.strategy,
+        include_setup: copyParts.setup,
+        mode: copyMode,
+      });
+      const payload = response.data || {};
+      setAnalysis(payload.analysis || {});
+      setTags(payload.tags || []);
+
+      if (payload.trade) {
+        const updatedTrade = {
+          ...trade,
+          setup: payload.trade.setup,
+          setup_notes: payload.trade.setup_notes,
+          setup_source: payload.trade.setup_source,
+        };
+        setTrade(updatedTrade);
+        if (onTradeUpdate) onTradeUpdate(updatedTrade);
+      }
+
+      const source = copyCandidates.find(candidate => candidate.trade_group === copySourceGroup);
+      setCopyNotice(
+        `Copied journal context from ${source?.ticker || payload.source?.ticker || 'trade'} ${source?.date || payload.source?.date || ''}.`.trim()
+      );
+      setCopyJournalOpen(false);
+      setEditingStrategy(false);
+      loadTagLibrary();
+    } catch (e) {
+      setCopyError(e.response?.data?.detail || e.response?.data?.error || e.message || 'Could not copy journal context.');
+    } finally {
+      setCopyBusy(false);
+    }
+  };
+
+  const selectedCopySource = copyCandidates.find(candidate => candidate.trade_group === copySourceGroup) || null;
 
   // ── Tag handlers ──────────────────────────────────────────────────────────
 
@@ -1535,6 +1665,9 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     <div className="trade-review-toolbar-copy">Journal the trade in detail, then keep Entry / Exit / Mistake fields clean for analytics and pattern detection.</div>
                   </div>
                   <div className="trade-review-toolbar-actions">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={openCopyJournal}>
+                      <Copy size={13} /> Copy similar
+                    </button>
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => setTab('LE Review')}>
                       <ShieldCheck size={13} /> LE evidence
                     </button>
@@ -1552,6 +1685,140 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     )}
                   </div>
                 </div>
+
+                {copyNotice && (
+                  <div className="notice pos trade-copy-notice" role="status">{copyNotice}</div>
+                )}
+
+                {copyJournalOpen && (
+                  <section className="trade-copy-panel" aria-label="Copy journal from a similar trade">
+                    <div className="trade-copy-head">
+                      <div>
+                        <span className="trade-review-eyebrow">Journal accelerator</span>
+                        <h3>Copy from a similar trade</h3>
+                        <p>Matching Strategy and Setup trades are shown first. Trade-specific risk, P&amp;L, executions, chart screenshots, and LE evidence are never copied.</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          setCopyJournalOpen(false);
+                          setCopyError(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+
+                    {copyCandidatesLoading ? (
+                      <div className="trade-copy-loading">Finding similar reviewed trades…</div>
+                    ) : copyCandidates.length ? (
+                      <>
+                        <label className="trade-copy-source">
+                          <span className="field-label">Copy from</span>
+                          <select value={copySourceGroup} onChange={event => setCopySourceGroup(event.target.value)}>
+                            {copyCandidates.map(candidate => {
+                              const exact = candidate.copy_match_score >= 3 ? 'Strategy + setup match' : candidate.copy_match_score === 2 ? 'Strategy match' : candidate.copy_match_score === 1 ? 'Setup match' : 'Recent reviewed trade';
+                              const pnl = candidate.net_pnl == null ? '' : ` · ${candidate.net_pnl >= 0 ? '+' : '-'}${Math.abs(Number(candidate.net_pnl)).toFixed(0)}`;
+                              return (
+                                <option value={candidate.trade_group} key={candidate.trade_group}>
+                                  {candidate.date} · {candidate.ticker} · {exact}{pnl}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </label>
+
+                        {selectedCopySource && (
+                          <div className="trade-copy-source-card">
+                            <div>
+                              <strong>{selectedCopySource.ticker}</strong>
+                              <span>{selectedCopySource.date}</span>
+                            </div>
+                            <div>
+                              <span>Strategy</span>
+                              <strong>{selectedCopySource.strategy || '—'}</strong>
+                            </div>
+                            <div>
+                              <span>Setup</span>
+                              <strong>{selectedCopySource.setup || '—'}</strong>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="trade-copy-parts" role="group" aria-label="Journal sections to copy">
+                          {[
+                            ['review', 'Review', 'Journal note + Entry / Exit / Mistake'],
+                            ['tags', 'Tags', 'Setup, execution, mistake, emotion, outcome tags'],
+                            ['strategy', 'Strategy', 'Reusable strategy label only'],
+                            ['setup', 'Playbook setup', 'The trade setup name, not setup evidence'],
+                          ].map(([key, label, detail]) => (
+                            <label className={`trade-copy-part ${copyParts[key] ? 'active' : ''}`} key={key}>
+                              <input
+                                type="checkbox"
+                                checked={copyParts[key]}
+                                onChange={event => setCopyParts(parts => ({ ...parts, [key]: event.target.checked }))}
+                              />
+                              <span>
+                                <strong>{label}</strong>
+                                <small>{detail}</small>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+
+                        <div className="trade-copy-mode">
+                          <button
+                            type="button"
+                            className={`trade-copy-mode-btn ${copyMode === 'merge' ? 'active' : ''}`}
+                            aria-pressed={copyMode === 'merge'}
+                            onClick={() => setCopyMode('merge')}
+                          >
+                            <strong>Fill blanks + add missing</strong>
+                            <span>Safest default. Keeps anything you already journaled.</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`trade-copy-mode-btn danger ${copyMode === 'replace' ? 'active' : ''}`}
+                            aria-pressed={copyMode === 'replace'}
+                            onClick={() => setCopyMode('replace')}
+                          >
+                            <strong>Replace selected content</strong>
+                            <span>Use when this trade should mirror the source review.</span>
+                          </button>
+                        </div>
+
+                        {copyMode === 'replace' && (
+                          <div className="notice caution trade-copy-warning">
+                            Replace mode overwrites the selected review fields and structured tags on this trade.
+                          </div>
+                        )}
+
+                        {copyError && <div className="notice neg trade-copy-error" role="alert">{copyError}</div>}
+
+                        <div className="trade-copy-actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={handleCopyJournal}
+                            disabled={copyBusy || !copySourceGroup || !Object.values(copyParts).some(Boolean)}
+                          >
+                            <Copy size={15} /> {copyBusy ? 'Copying…' : 'Copy journal'}
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="trade-copy-empty">
+                        <strong>No similar reviewed trades found.</strong>
+                        <span>Set this trade’s Strategy or Playbook Setup first, or journal another trade with reusable context.</span>
+                      </div>
+                    )}
+
+                    {!copyCandidatesLoading && copyCandidates.length === 0 && copyError && (
+                      <div className="notice neg trade-copy-error" role="alert">{copyError}</div>
+                    )}
+                  </section>
+                )}
 
                 <ReviewTemplateShelf
                   hasNote={Boolean((editingStrategy ? strategyForm?.notes : analysis?.notes)?.trim?.())}
