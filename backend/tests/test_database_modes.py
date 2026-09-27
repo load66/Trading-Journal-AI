@@ -297,6 +297,8 @@ def test_runtime_request_sql_has_no_sqlite_only_constructs():
     assert "datetime('now')" not in source
     assert "strftime('%Y', date)" not in source
     assert 'except sqlite3.IntegrityError' not in source
+    assert 'ROUND(SUM(t.net_pnl),2)' not in source
+    assert 'ROUND(CAST(SUM(t.net_pnl) AS NUMERIC), 2)' in source
 
 
 def test_year_filter_clause_is_portable_for_iso_text_dates():
