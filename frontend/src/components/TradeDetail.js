@@ -948,6 +948,15 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   }, [trade.trade_group, focusPlannedRisk]);
 
   useEffect(() => {
+    setCopyJournalOpen(false);
+    setCopyCandidates([]);
+    setCopySourceGroup('');
+    setCopyMode('merge');
+    setCopyError(null);
+    setCopyNotice(null);
+  }, [trade.trade_group]);
+
+  useEffect(() => {
     if (!focusPlannedRisk || analysis == null || plannedRiskFocusHandled.current) return;
     plannedRiskFocusHandled.current = true;
     setTab('Stats');
