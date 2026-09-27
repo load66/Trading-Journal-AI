@@ -31,6 +31,9 @@ Rules:
 - If a trade has process_evidence: none, its grade MUST be "N/A" and the reason must say there is insufficient process evidence.
 - If there is no diary or emotional-state evidence for the day, mental_game MUST say "Insufficient evidence" and must not infer psychology from wins/losses.
 - mistakes may contain only evidence-backed process problems from recorded fields OR VERIFIED deterministic behavior_flags supplied by the backend.
+- For every mistake you want preserved in the detailed Flags view, also return a mistake_findings object with an exact support anchor.
+- For a VERIFIED behavior flag, copy its exact behavior_code and trade_group when present. Do not invent codes or trade_group values.
+- For a recorded trade mistake, use support_type "recorded_process" and the exact trade_group containing that recorded mistake.
 - Deterministic behavior_flags are observations, not motives. Never rename "loss re-entry" as revenge trading unless the trader explicitly recorded that motive.
 - overall_grade must be "N/A" when there is not enough process evidence to grade the day.
 - Be direct and specific, but separate facts from interpretation.
@@ -42,6 +45,15 @@ Required JSON schema:
   "mental_game": "1-2 sentences on the trader's psychological state and emotional arc across the day",
   "strengths": ["specific thing done well 1", "specific thing done well 2"],
   "mistakes": ["specific mistake with detail 1", "specific mistake with detail 2"],
+  "mistake_findings": [
+    {
+      "text": "specific evidence-backed process finding",
+      "support_type": "verified_behavior_flag|recorded_process",
+      "behavior_code": "exact supplied behavior flag code or null",
+      "trade_group": "exact supplied trade_group or null",
+      "ticker": "SYMBOL or null"
+    }
+  ],
   "coaching": ["specific actionable coaching point 1", "specific actionable coaching point 2", "specific actionable coaching point 3"],
   "trade_grades": [
     {
@@ -262,6 +274,85 @@ def _anthropic_daily_summary(user_content: str) -> dict:
     return json.loads(_strip_json_fence(response_text(response)))
 
 
+def _validated_ai_mistake_findings(
+    result: dict,
+    trades: list[dict],
+    behavior_flags: list[dict],
+) -> list[dict]:
+    """Keep only AI mistake findings that point back to supplied evidence.
+
+    The model may phrase a finding more usefully than the raw detector, but it
+    cannot create new evidence. A finding survives only when its support anchor
+    matches an actual deterministic flag or an explicit recorded mistake field.
+    """
+    trade_by_group = {
+        str(t.get("trade_group")): t
+        for t in trades
+        if t.get("trade_group") is not None
+    }
+    flag_rows = [f for f in (behavior_flags or []) if isinstance(f, dict)]
+    out = []
+    seen = set()
+
+    for finding in result.get("mistake_findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        text = str(finding.get("text") or "").strip()
+        support_type = str(finding.get("support_type") or "").strip().lower()
+        code = str(finding.get("behavior_code") or "").strip()
+        group = str(finding.get("trade_group") or "").strip()
+        ticker = str(finding.get("ticker") or "").strip().upper()
+        if not text:
+            continue
+
+        supported = False
+        support = None
+
+        if support_type == "verified_behavior_flag" and code:
+            for flag in flag_rows:
+                if str(flag.get("code") or "") != code:
+                    continue
+                flag_group = str(flag.get("trade_group") or "").strip()
+                flag_ticker = str(flag.get("ticker") or "").strip().upper()
+                if group and flag_group and group != flag_group:
+                    continue
+                if ticker and flag_ticker and ticker != flag_ticker:
+                    continue
+                supported = True
+                support = {
+                    "behavior_code": code,
+                    "trade_group": flag.get("trade_group"),
+                    "ticker": flag.get("ticker"),
+                }
+                break
+
+        elif support_type == "recorded_process" and group:
+            trade = trade_by_group.get(group)
+            if trade and str(trade.get("mistakes") or "").strip():
+                if not ticker or ticker == str(trade.get("ticker") or "").strip().upper():
+                    supported = True
+                    support = {
+                        "trade_group": trade.get("trade_group"),
+                        "ticker": trade.get("ticker"),
+                    }
+
+        if not supported:
+            continue
+
+        key = re.sub(r"\s+", " ", text.lower()).strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "text": text,
+            "evidence": "ANALYZED",
+            "support_type": support_type,
+            **(support or {}),
+        })
+
+    return out
+
+
 def generate_daily_summary(context: dict) -> dict:
     """Generate a structured daily summary with Groq first, Anthropic fallback."""
     date = context["date"]
@@ -312,7 +403,13 @@ Diary entry for this date:
     verified_strengths = context.get("verified_strengths") or []
     recorded = context.get("recorded_observations") or []
     flag_section = "\n".join(
-        f"  - {f.get('title')}: {f.get('detail')}" for f in behavior_flags
+        (
+            f"  - behavior_code: {f.get('code')} | "
+            f"trade_group: {f.get('trade_group') or 'N/A'} | "
+            f"ticker: {f.get('ticker') or 'N/A'} | "
+            f"{f.get('title')}: {f.get('detail')}"
+        )
+        for f in behavior_flags
     ) or "  None."
     strength_section = "\n".join(
         f"  - {o.get('text')}" for o in verified_strengths
@@ -376,6 +473,7 @@ Generate the daily coaching summary JSON."""
     result.setdefault("narrative", "")
     result.setdefault("strengths", [])
     result.setdefault("mistakes", [])
+    result.setdefault("mistake_findings", [])
     result.setdefault("coaching", [])
     result.setdefault("trade_grades", [])
     result.setdefault("overall_grade", "N/A")
@@ -453,10 +551,25 @@ Generate the daily coaching summary JSON."""
             "evidence": "VERIFIED",
             "code": f.get("code"),
             "trade_group": f.get("trade_group"),
+            "ticker": f.get("ticker"),
             "observed_pnl": f.get("observed_pnl"),
         }
         for f in behavior_flags
     ]
+
+    # Preserve useful AI phrasing only when it points back to evidence that the
+    # backend can independently verify. This restores nuanced findings (for
+    # example, a WMT process mistake) without allowing outcome-based guesses.
+    ai_mistake_obs = _validated_ai_mistake_findings(result, trades, behavior_flags)
+    existing_text = {
+        re.sub(r"\s+", " ", str(row.get("text") or "").lower()).strip()
+        for row in mistake_obs
+    }
+    for row in ai_mistake_obs:
+        key = re.sub(r"\s+", " ", str(row.get("text") or "").lower()).strip()
+        if key and key not in existing_text:
+            mistake_obs.append(row)
+            existing_text.add(key)
 
     focus_map = {
         "averaging_down": "Mechanical rule: do not add at a worse price than the running average entry.",
@@ -518,7 +631,7 @@ Generate the daily coaching summary JSON."""
     result["patterns"] = [x.get("text") for x in pattern_obs]
 
     result["evidence_locked"] = True
-    result["evidence_version"] = 4
+    result["evidence_version"] = 5
     result["analytics_engine_version"] = ANALYTICS_ENGINE_VERSION
     result["evidence_note"] = (
         "VERIFIED = deterministic calculation/detector. RECORDED = trader/diary input. "
