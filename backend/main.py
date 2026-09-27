@@ -1176,20 +1176,47 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
         raise HTTPException(status_code=404, detail="Trade not found")
 
     trade = row_to_dict(row)
-    # Only update allowed fields
-    allowed = {'ticker', 'side', 'gross_pnl', 'net_pnl', 'commissions', 'date',
-               'instrument_type', 'option_expiry', 'option_strike', 'option_type'}
+    financial_fields = {'gross_pnl', 'net_pnl', 'commissions'}
+    if any(k in data for k in financial_fields):
+        raise HTTPException(
+            status_code=400,
+            detail="P&L and fees are execution-derived. Edit the executions instead.",
+        )
+
+    allowed = {'ticker', 'side', 'date', 'instrument_type',
+               'option_expiry', 'option_strike', 'option_type'}
     updates = {k: v for k, v in data.items() if k in allowed}
 
-    if trade.get('source') == 'imported':
+    if trade.get('source') == 'imported' and updates:
         updates['source'] = 'edited'
 
     if updates:
+        updates.update({
+            'mfe_pct': None,
+            'mae_pct': None,
+            'exit_efficiency': None,
+            'excursion_basis': None,
+            'excursion_calculated_at': None,
+            'excursion_version': None,
+        })
         set_clause = ', '.join(f"{k}=?" for k in updates)
         conn.execute(
             f"UPDATE trades SET {set_clause} WHERE id=?",
             list(updates.values()) + [trade_id]
         )
+        conn.commit()
+
+        refreshed = row_to_dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone())
+        execs = json.loads(refreshed.get('executions') or '[]')
+        if execs and any(k in data for k in {'ticker', 'side', 'instrument_type', 'date'}):
+            return _recalculate_and_save(refreshed, execs, conn, trade_id)
+
+        for summary_date in {str(trade.get('date') or ''), str(refreshed.get('date') or '')}:
+            if summary_date:
+                conn.execute(
+                    "DELETE FROM daily_summaries WHERE summary_date=? AND account_id=?",
+                    (summary_date, trade.get('account_id')),
+                )
         conn.commit()
 
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
