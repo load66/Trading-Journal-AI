@@ -1100,12 +1100,15 @@ test('Day Review manual Re-run Diagnosis forces a fresh AI pass', async () => {
   ));
 });
 
-test('Settings has Strategies, Sources and Tags sections, and Tags leaves out strategy and source types', async () => {
+test('Settings has Accounts, Strategies, Sources and Tags sections, and Tags leaves out strategy and source types', async () => {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
   const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
   expect(within(tablist).getAllByRole('tab').map(t => t.textContent.replace(/\d+/g, '').trim()))
-    .toEqual(['Strategies', 'Sources', 'Tags', 'Storage']);
+    .toEqual(['Accounts', 'Strategies', 'Sources', 'Tags', 'Storage']);
+
+  expect(await screen.findByRole('heading', { name: 'Account management' })).toBeInTheDocument();
+  fireEvent.click(within(tablist).getByRole('tab', { name: /Strategies/ }));
   expect(await screen.findByText('VWAP Cross')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit VWAP Cross' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Delete VWAP Cross' })).toBeInTheDocument();
@@ -1115,6 +1118,30 @@ test('Settings has Strategies, Sources and Tags sections, and Tags leaves out st
   expect(screen.getByRole('region', { name: 'Execution tags' })).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: /Strategy tags/ })).not.toBeInTheDocument();
   expect(screen.queryByRole('region', { name: /Source tags/ })).not.toBeInTheDocument();
+});
+
+test('Settings reviews account type impact before saving a type-only update', async () => {
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Change type for Day Trading' }));
+  const typeSelect = screen.getByRole('combobox', { name: 'Account type for Day Trading' });
+  expect(within(typeSelect).getAllByRole('option').map(o => o.textContent))
+    .toEqual(['Day Trading', 'Swing Trading', 'Mixed Trading', 'Investment']);
+
+  fireEvent.change(typeSelect, { target: { value: 'mixed_trading' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Review change' }));
+
+  const dialog = screen.getByRole('dialog', { name: 'Confirm account type change' });
+  expect(dialog).toHaveTextContent('Day Trading');
+  expect(dialog).toHaveTextContent('Mixed Trading');
+  expect(dialog).toHaveTextContent('Overnight trades will be included in Holding Behavior analysis.');
+  expect(dialog).toHaveTextContent('Trade history');
+  expect(dialog).toHaveTextContent('P&L');
+
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Change account type' }));
+  await waitFor(() => expect(accountsApi.update).toHaveBeenCalledWith(1, { type: 'mixed_trading' }));
+  expect(await screen.findByRole('status')).toHaveTextContent('Day Trading is now Mixed Trading.');
 });
 
 test('Settings Storage shows R2 free-tier health and refreshes on demand', async () => {
