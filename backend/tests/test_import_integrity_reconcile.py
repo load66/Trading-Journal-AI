@@ -63,7 +63,66 @@ def test_explicit_timezone_metadata_overrides_broker_profile():
         "schwab_transactions",
     )
     assert info["timezone"] == "America/New_York"
-    assert info["method"] == "csv_iana_timezone"
+    assert info["method"] == "csv_timezone_metadata"
+    assert info["confidence"] == "authoritative"
+
+
+def test_eastern_metadata_adapts_schwab_without_using_central_profile():
+    content = "Time Zone,ET\n" + QCOM_CSV
+    trades, skipped = parse_schwab_transactions_csv(content, account_id=1, conn=None)
+    assert skipped == 0
+    execs = json.loads(trades[0]["executions"])
+    assert all(e["source_timezone"] == "America/New_York" for e in execs)
+    assert all(e["timezone_detection_method"] == "csv_timezone_metadata" for e in execs)
+    # 9:47 AM ET on Sep 25, 2026 is 13:47 UTC.
+    assert execs[0]["timestamp_utc"] == "2026-09-25T13:47:00Z"
+
+
+def test_literal_standard_and_daylight_abbreviations_are_fixed_when_embedded():
+    assert canonical_execution_timestamp(
+        "2026-09-25", "08:47:00 EST", "America/Chicago"
+    ) == "2026-09-25T13:47:00Z"
+    assert canonical_execution_timestamp(
+        "2026-09-25", "08:47:00 EDT", "America/Chicago"
+    ) == "2026-09-25T12:47:00Z"
+    assert canonical_execution_timestamp(
+        "2026-09-25", "08:47:00 CST", "America/New_York"
+    ) == "2026-09-25T14:47:00Z"
+    assert canonical_execution_timestamp(
+        "2026-09-25", "08:47:00 CDT", "America/New_York"
+    ) == "2026-09-25T13:47:00Z"
+
+
+def test_embedded_numeric_offset_is_authoritative_over_broker_profile():
+    content = QCOM_CSV.replace(
+        "9/25/26 9:47 AM,TRD,BOT +5 QCOM",
+        "9/25/26 9:47 AM -04:00,TRD,BOT +5 QCOM",
+        1,
+    )
+    trades, _ = parse_schwab_transactions_csv(content, account_id=1, conn=None)
+    execs = json.loads(trades[0]["executions"])
+    first = execs[0]
+    assert first["source_timezone"] == "UTC-04:00"
+    assert first["timezone_detection_method"] == "embedded_timestamp_timezone"
+    assert first["timezone_detection_confidence"] == "authoritative"
+    assert first["timestamp_utc"] == "2026-09-25T13:47:00Z"
+
+
+def test_conflicting_file_timezone_metadata_is_rejected():
+    content = "Time Zone,America/Chicago\nTimezone,America/New_York\n" + QCOM_CSV
+    import pytest
+    with pytest.raises(ValueError, match="Conflicting timezone metadata"):
+        detect_csv_timezone(content, "schwab_transactions")
+
+
+def test_manual_fallback_beats_broker_profile_when_csv_has_no_timezone_metadata():
+    info = detect_csv_timezone(
+        QCOM_CSV,
+        "schwab_transactions",
+        fallback_override="America/New_York",
+    )
+    assert info["timezone"] == "America/New_York"
+    assert info["method"] == "manual_fallback"
     assert info["confidence"] == "high"
 
 
