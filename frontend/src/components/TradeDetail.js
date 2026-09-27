@@ -1074,7 +1074,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     setChartScreenshotError(null);
     setChartScreenshotUrl('');
 
-    if (!analysis?.chart_screenshot_path) {
+    if (tab !== 'Chart Review' || !analysis?.chart_screenshot_path) {
       setChartScreenshotLoading(false);
       return () => {};
     }
@@ -1097,7 +1097,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [trade.trade_group, analysis?.chart_screenshot_path, chartScreenshotRevision]);
+  }, [trade.trade_group, analysis?.chart_screenshot_path, chartScreenshotRevision, tab]);
 
   const handleChartScreenshotUpload = useCallback(async (file) => {
     if (!file) return;
@@ -1108,7 +1108,14 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       const form = new FormData();
       form.append('file', optimized, optimized.name);
       const res = await tradesApi.uploadChartScreenshot(trade.trade_group, form);
-      setAnalysis(prev => ({ ...(prev || {}), chart_screenshot_path: res.data.chart_screenshot_path }));
+      setAnalysis(prev => ({
+        ...(prev || {}),
+        chart_screenshot_path: res.data.chart_screenshot_path,
+        chart_screenshot_provider: res.data.chart_screenshot_provider,
+        chart_screenshot_bytes: res.data.chart_screenshot_bytes,
+        chart_screenshot_width: res.data.chart_screenshot_width,
+        chart_screenshot_height: res.data.chart_screenshot_height,
+      }));
       setChartScreenshotRevision(value => value + 1);
     } catch (e) {
       setChartScreenshotError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Upload failed.');
@@ -1118,6 +1125,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   }, [trade.trade_group]);
 
   useEffect(() => {
+    if (tab !== 'Chart Review') return undefined;
+
     const handlePaste = (event) => {
       const target = event.target;
       if (target instanceof HTMLElement && (
@@ -1141,13 +1150,20 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
-  }, [handleChartScreenshotUpload]);
+  }, [handleChartScreenshotUpload, tab]);
 
   const handleChartScreenshotDelete = async () => {
     setChartScreenshotError(null);
     try {
       await tradesApi.deleteChartScreenshot(trade.trade_group);
-      setAnalysis(prev => ({ ...(prev || {}), chart_screenshot_path: null }));
+      setAnalysis(prev => ({
+        ...(prev || {}),
+        chart_screenshot_path: null,
+        chart_screenshot_provider: null,
+        chart_screenshot_bytes: null,
+        chart_screenshot_width: null,
+        chart_screenshot_height: null,
+      }));
       closeChartScreenshot();
     } catch (e) {
       setChartScreenshotError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Could not remove screenshot.');
