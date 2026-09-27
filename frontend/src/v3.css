@@ -4170,85 +4170,6 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   font-size: 9px;
   line-height: 1.45;
 }
-.trade-copy-parts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px;
-}
-.trade-copy-part {
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--divider-soft);
-  background: var(--surface-page);
-  cursor: pointer;
-}
-.trade-copy-part.active {
-  border-color: var(--accent-line-soft);
-  background: var(--surface-selected);
-}
-.trade-copy-part input {
-  flex: 0 0 auto;
-  margin-top: 2px;
-  accent-color: var(--accent-line);
-}
-.trade-copy-part > span {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-.trade-copy-part strong {
-  color: var(--text-primary);
-  font-size: 10.5px;
-}
-.trade-copy-part small {
-  color: var(--text-tertiary);
-  font-size: 8.5px;
-  line-height: 1.35;
-}
-.trade-copy-mode {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-}
-.trade-copy-mode-btn {
-  min-width: 0;
-  padding: 10px 11px;
-  border: 1px solid var(--divider-soft);
-  background: var(--surface-page);
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.trade-copy-mode-btn.active {
-  border-color: var(--accent-line);
-  background: var(--surface-selected);
-  box-shadow: inset 2px 0 0 var(--accent-line);
-}
-.trade-copy-mode-btn.danger.active {
-  border-color: color-mix(in srgb, var(--caution) 55%, var(--divider));
-  box-shadow: inset 2px 0 0 var(--caution);
-}
-.trade-copy-mode-btn strong,
-.trade-copy-mode-btn span {
-  display: block;
-}
-.trade-copy-mode-btn strong {
-  color: var(--text-primary);
-  font-size: 10.5px;
-}
-.trade-copy-mode-btn span {
-  margin-top: 4px;
-  color: var(--text-tertiary);
-  font-size: 8.5px;
-  line-height: 1.35;
-}
-.trade-copy-warning {
-  margin: 0;
-  border-color: color-mix(in srgb, var(--caution) 45%, var(--divider));
-}
 .trade-copy-error {
   margin: 0;
 }
@@ -4749,18 +4670,6 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   .trade-copy-source-card strong {
     white-space: normal;
     overflow-wrap: anywhere;
-  }
-  .trade-copy-parts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .trade-copy-part {
-    min-height: 74px;
-  }
-  .trade-copy-mode {
-    grid-template-columns: 1fr;
-  }
-  .trade-copy-mode-btn {
-    min-height: 62px;
   }
   .trade-copy-actions {
     justify-content: stretch;
