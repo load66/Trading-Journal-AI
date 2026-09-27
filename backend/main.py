@@ -1094,20 +1094,28 @@ def list_trades(
             continue
         if closed_only and is_open:
             continue
-        d["pl_pct"] = _trade_pl_percent(d)
 
-        # R is meaningful only when the trader has explicitly recorded planned
-        # dollar risk (or a legacy analysis already has an R multiple). Do not
-        # infer risk from stop price because option journals may record
-        # underlying levels rather than option-premium stops.
-        stored_r = d.get("r_multiple")
-        risk = d.get("risk_per_trade")
-        if stored_r is not None:
-            d["realized_r"] = stored_r
-        elif risk is not None and abs(float(risk)) > 0 and d.get("net_pnl") is not None:
-            d["realized_r"] = round(float(d["net_pnl"]) / abs(float(risk)), 4)
-        else:
-            d["realized_r"] = None
+        d["is_open"] = is_open
+        d["hold_seconds"] = None if is_open else canonical_hold_seconds(d)
+        d["pl_pct"] = None if is_open else _trade_pl_percent(d)
+
+        # Never surface a derived market-path metric from an older algorithm.
+        # Dashboard backfill will recalculate current-version values.
+        d["excursion_stale"] = (
+            d.get("excursion_version") != EXCURSION_ALGORITHM_VERSION
+        )
+        if d["excursion_stale"]:
+            d["mfe_pct"] = None
+            d["mae_pct"] = None
+            d["exit_efficiency"] = None
+
+        # Planned dollar risk is the source of truth for R. Legacy stored R is
+        # only a fallback when no explicit planned-risk amount exists.
+        d["realized_r"] = None if is_open else canonical_realized_r(
+            d,
+            risk_per_trade=d.get("risk_per_trade"),
+            stored_r_multiple=d.get("r_multiple"),
+        )
 
         result.append(d)
 
@@ -1214,48 +1222,62 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
 
 
 def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
-    """Recalculate P&L from executions and persist. Returns updated trade row dict."""
-    side = trade['side']
-    instrument = trade['instrument_type']
-    ticker = trade['ticker']
-
-    entry_fills = [e for e in execs if e['action'] == ('BOT' if side == 'LONG' else 'SOLD')]
-    exit_fills  = [e for e in execs if e['action'] == ('SOLD' if side == 'LONG' else 'BOT')]
-
-    entry_qty = sum(e['qty'] for e in entry_fills)
-    exit_qty  = sum(e['qty'] for e in exit_fills)
-    is_open   = (entry_qty != exit_qty) or exit_qty == 0
+    """Recalculate realized P&L from executions and invalidate derived caches."""
+    probe = dict(trade)
+    probe["executions"] = execs
+    is_open = canonical_is_open_position(probe)
 
     if is_open:
         gross_pnl, net_pnl = 0.0, 0.0
     else:
-        avg_entry = sum(e['qty'] * e['price'] for e in entry_fills) / entry_qty
-        avg_exit  = sum(e['qty'] * e['price'] for e in exit_fills)  / exit_qty
-        if instrument == 'OPTION':
-            multiplier = 100
-        elif instrument == 'FUTURE':
-            multiplier = next(
-                (v for k, v in FUTURES_MULTIPLIERS.items() if ticker.upper().startswith(k.upper())), 1
-            )
+        rebuilt = canonical_recompute_closed_pnl(probe)
+        if rebuilt is None:
+            gross_pnl, net_pnl = 0.0, 0.0
         else:
-            multiplier = 1
-        gross_pnl = (avg_entry - avg_exit if side == 'SHORT' else avg_exit - avg_entry) * entry_qty * multiplier
-        commissions_total = sum(e.get('commission', 0) for e in execs)
-        net_pnl   = round(gross_pnl - commissions_total, 2)
-        gross_pnl = round(gross_pnl, 2)
+            gross_pnl = rebuilt["gross_pnl"]
+            net_pnl = rebuilt["net_pnl"]
 
-    commissions = round(sum(e.get('commission', 0) for e in execs), 2)
+    commissions = round(sum(abs(float(e.get("commission") or 0)) for e in execs), 2)
 
-    # Attribute closed trade to the last exit fill's date
-    trade_date = trade['date']
-    if not is_open and exit_fills:
-        sorted_exits = sorted(exit_fills, key=lambda e: (e.get('date', ''), e.get('time', '')))
-        trade_date = sorted_exits[-1].get('date', trade['date'])
+    # Attribute a completed trade to the final exit fill's broker date.
+    trade_date = trade["date"]
+    if not is_open:
+        _, exit_action = ("SOLD", "BOT") if str(trade.get("side") or "").upper() == "SHORT" else ("BOT", "SOLD")
+        exit_fills = [e for e in execs if str(e.get("action") or "").upper() == exit_action]
+        if exit_fills:
+            exit_fills = sorted(
+                exit_fills,
+                key=lambda e: (
+                    str(e.get("timestamp_utc") or ""),
+                    str(e.get("date") or ""),
+                    str(e.get("time") or ""),
+                ),
+            )
+            trade_date = exit_fills[-1].get("date") or trade["date"]
 
+    old_date = trade.get("date")
     conn.execute(
-        "UPDATE trades SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=? WHERE id=?",
-        (json.dumps(execs), gross_pnl, net_pnl, commissions, trade_date, trade_id)
+        """UPDATE trades
+           SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=?,
+               mfe_pct=NULL, mae_pct=NULL, exit_efficiency=NULL,
+               excursion_basis=NULL, excursion_calculated_at=NULL,
+               excursion_version=NULL
+           WHERE id=?""",
+        (json.dumps(execs), gross_pnl, net_pnl, commissions, trade_date, trade_id),
     )
+
+    account_id = trade.get("account_id")
+    for stale_date in {old_date, trade_date}:
+        if not stale_date:
+            continue
+        if account_id is None:
+            conn.execute("DELETE FROM daily_summaries WHERE summary_date=?", (stale_date,))
+        else:
+            conn.execute(
+                "DELETE FROM daily_summaries WHERE summary_date=? AND account_id=?",
+                (stale_date, account_id),
+            )
+
     conn.commit()
     return row_to_dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone())
 
