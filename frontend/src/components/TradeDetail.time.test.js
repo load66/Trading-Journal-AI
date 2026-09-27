@@ -1,4 +1,5 @@
 import {
+  calculateDefaultPlannedRisk,
   executionTimeETMinutes,
   formatExecutionTimeET,
 } from './TradeDetail';
@@ -10,4 +11,31 @@ describe('TradeDetail Eastern Time normalization', () => {
   });
 
 
+});
+
+
+describe('TradeDetail option planned-risk baseline', () => {
+  test('uses total premium paid across all long-option entry contracts', () => {
+    expect(calculateDefaultPlannedRisk({
+      instrument_type: 'OPTION',
+      side: 'LONG',
+      executions: [
+        { action: 'BOT', qty: 2, price: 1.00 },
+        { action: 'BOT', qty: 3, price: 2.00 },
+      ],
+    })).toBe(800);
+  });
+
+  test('does not guess short-option or stock risk', () => {
+    expect(calculateDefaultPlannedRisk({
+      instrument_type: 'OPTION',
+      side: 'SHORT',
+      executions: [{ action: 'SOLD', qty: 1, price: 1.00 }],
+    })).toBeNull();
+    expect(calculateDefaultPlannedRisk({
+      instrument_type: 'STOCK',
+      side: 'LONG',
+      executions: [{ action: 'BOT', qty: 100, price: 50 }],
+    })).toBeNull();
+  });
 });

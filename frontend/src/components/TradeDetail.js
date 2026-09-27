@@ -148,6 +148,21 @@ function computeStats(trade) {
   return { avgEntry, avgExit, totalQty, adjustedCost, plPercent, openTime, closeTime, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
 }
 
+export function calculateDefaultPlannedRisk(trade) {
+  if (!trade) return null;
+  const instrument = String(trade.instrument_type || '').toUpperCase();
+  const side = String(trade.side || '').toUpperCase();
+
+  // Long options have a mechanically knowable maximum loss: premium paid.
+  // Do not guess short-option, stock, or futures risk without an explicit
+  // premium/price stop because their actual loss can differ materially.
+  if (instrument !== 'OPTION' || side !== 'LONG') return null;
+
+  const { adjustedCost } = computeStats(trade);
+  if (!Number.isFinite(adjustedCost) || adjustedCost <= 0) return null;
+  return Math.round(adjustedCost * 100) / 100;
+}
+
 // ── Stat row helper ────────────────────────────────────────────────────────────
 
 function StatRow({ label, value, valueColor }) {
@@ -645,7 +660,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       strategy: analysis?.strategy || '',
       idea_source: analysis?.idea_source || 'Watchlist',
       stop_loss: analysis?.stop_loss ?? '',
-      risk_per_trade: analysis?.risk_per_trade ?? '',
+      risk_per_trade: analysis?.risk_per_trade ?? calculateDefaultPlannedRisk(trade) ?? '',
       target_price: analysis?.target_price ?? '',
       emotional_state: analysis?.emotional_state || '',
     });
@@ -654,7 +669,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       rrPlanInputRef.current?.focus();
       rrPlanInputRef.current?.select?.();
     }, 0);
-  }, [focusPlannedRisk, analysis]);
+  }, [focusPlannedRisk, analysis, trade]);
 
   // ── Execution handlers ────────────────────────────────────────────────────
 
@@ -1049,7 +1064,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                           strategy: analysis?.strategy || '',
                           idea_source: analysis?.idea_source || 'Watchlist',
                           stop_loss: analysis?.stop_loss ?? '',
-                          risk_per_trade: analysis?.risk_per_trade ?? '',
+                          risk_per_trade: analysis?.risk_per_trade ?? calculateDefaultPlannedRisk(trade) ?? '',
                           target_price: analysis?.target_price ?? '',
                           emotional_state: analysis?.emotional_state || '',
                         });
@@ -1122,7 +1137,9 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     <div>
                       <EditField label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
                       <div className="text-muted" style={{ fontSize: 11.5, marginTop: 4, lineHeight: 1.35 }}>
-                        Total dollars accepted at risk for the full position. Option dollar risk requires a premium-based stop, not only the underlying-chart distance.
+                        {calculateDefaultPlannedRisk(trade) != null
+                          ? `Auto-filled from total entry premium: ${stats.totalQty} contract${stats.totalQty === 1 ? '' : 's'} × ${stats.avgEntry.toFixed(2)} × 100 = ${calculateDefaultPlannedRisk(trade).toFixed(2)} max premium at risk. Edit this lower if your planned option-premium stop risk was smaller.`
+                          : 'Total dollars accepted at risk for the full position. Enter this manually when max loss cannot be inferred safely.'}
                       </div>
                     </div>
                     <EditField label="Emotional State" value={statsForm.emotional_state} onChange={v => setStatsForm(f => ({ ...f, emotional_state: v }))} options={EMOTIONAL_STATES} />
