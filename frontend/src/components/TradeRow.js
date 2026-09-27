@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { tradesApi } from '../api';
-import { AlertTriangle, CheckCircle2, ChevronRight, ClipboardList, Image as ImageIcon } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 
 const signed$ = (v) => {
   if (v == null) return '—';
@@ -62,9 +62,18 @@ const GRADE_MEANING = {
 
 function SetupBadge({ setup, grade, notes, strategy }) {
   if (!setup || setup === 'NONE') {
-    return strategy
-      ? <span className="trade-strategy-text" title={strategy}>{shortText(strategy, 84)}</span>
-      : <span className="text-faint">Not tagged</span>;
+    if (!strategy) return <span className="text-faint">Not tagged</span>;
+    const gradeCls = GRADE_CLASS[grade] || 'text-muted';
+    return (
+      <span className="trade-setup-badge" title={strategy}>
+        <span className="trade-strategy-text">{shortText(strategy, 58)}</span>
+        {grade && (
+          <span className={`chip ${gradeCls === 'pos' ? 'pos' : gradeCls === 'caution' ? 'caution' : ''}`}>
+            {grade}
+          </span>
+        )}
+      </span>
+    );
   }
 
   let violations = [];
@@ -98,28 +107,46 @@ function SetupBadge({ setup, grade, notes, strategy }) {
 function ReviewStatus({ trade }) {
   const fields = [trade.entry_reason, trade.exit_reason, trade.mistakes];
   const completed = fields.filter(value => String(value || '').trim()).length;
-  const mistake = shortText(trade.mistakes, 68);
   const reviewed = completed === 3;
   const partial = completed > 0;
+  const state = reviewed ? 'complete' : partial ? 'partial' : 'empty';
+  const detail = [
+    reviewed ? 'Reviewed' : partial ? `${completed}/3 review fields documented` : 'Needs review',
+    trade.emotional_state ? `Emotion: ${trade.emotional_state}` : null,
+    trade.chart_screenshot_path ? 'Chart saved' : null,
+    trade.mistakes ? `Mistake: ${shortText(trade.mistakes, 90)}` : null,
+  ].filter(Boolean).join(' • ');
 
   return (
-    <div className="trade-review-status">
-      <div className={`trade-review-state ${reviewed ? 'complete' : partial ? 'partial' : 'empty'}`}>
-        {reviewed
-          ? <CheckCircle2 size={14} aria-hidden="true" />
-          : trade.mistakes
-            ? <AlertTriangle size={14} aria-hidden="true" />
-            : <ClipboardList size={14} aria-hidden="true" />}
-        <span>{reviewed ? 'Reviewed' : partial ? `${completed}/3 documented` : 'Needs review'}</span>
-      </div>
-      {mistake ? (
-        <div className="trade-review-mistake" title={trade.mistakes}>{mistake}</div>
-      ) : (
-        <div className="trade-review-meta">
-          {trade.emotional_state && <span>{trade.emotional_state}</span>}
-          {trade.chart_screenshot_path && <span className="trade-review-photo"><ImageIcon size={12} /> Chart saved</span>}
-        </div>
-      )}
+    <span
+      className={`trade-review-dot ${state}`}
+      role="img"
+      aria-label={detail}
+      title={detail}
+    />
+  );
+}
+
+function ProcessStatus({ trade }) {
+  const grade = String(trade.setup_grade || '').toUpperCase();
+  let label = 'Unscored';
+  let state = 'unscored';
+
+  if (['A++', 'A+', 'A'].includes(grade)) {
+    label = 'Followed';
+    state = 'followed';
+  } else if (grade === 'B') {
+    label = 'Minor drift';
+    state = 'minor';
+  } else if (['C', 'D', 'F'].includes(grade)) {
+    label = 'Violation';
+    state = 'violation';
+  }
+
+  return (
+    <div className={`trade-process-status ${state}`} title={grade ? `Process status derived from setup grade ${grade}.` : 'No setup grade yet.'}>
+      <span className="trade-process-dot" aria-hidden="true" />
+      <span>{label}</span>
     </div>
   );
 }
@@ -133,10 +160,10 @@ function ExcursionCell({ trade }) {
 
   return (
     <div className="trade-excursion-cell" title="Maximum favorable / adverse excursion while the trade was open">
-      <span className="pos">{hasMfe ? `+${Math.abs(mfe).toFixed(1)}%` : '—'}</span>
+      <span className="pos">{hasMfe ? `+${Math.abs(mfe).toFixed(1)}` : '—'}</span>
       <span className="trade-excursion-sep">/</span>
-      <span className="neg">{hasMae ? `-${Math.abs(mae).toFixed(1)}%` : '—'}</span>
-      <small>MFE / MAE</small>
+      <span className="neg">{hasMae ? `-${Math.abs(mae).toFixed(1)}` : '—'}</span>
+      <small>% MFE / MAE</small>
     </div>
   );
 }
@@ -148,7 +175,7 @@ function ExitQuality({ trade }) {
   return (
     <div className="trade-exit-quality" title="How much of the covered favorable move was retained at exit">
       <span className={`num ${cls}`}>{value.toFixed(1)}%</span>
-      <small>capture</small>
+      <small>Exit capture</small>
     </div>
   );
 }
@@ -166,6 +193,21 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
     && Number.isFinite(targetDistance) && targetDistance > 0
       ? targetDistance / stopDistance
       : null;
+  const riskPerTrade = Number(trade.risk_per_trade);
+  const entryExecs = Array.isArray(trade.executions)
+    ? trade.executions
+    : (() => { try { return JSON.parse(trade.executions || '[]'); } catch { return []; } })();
+  const optionEntries = entryExecs.filter(e => side === 'LONG' ? e.action === 'BOT' : e.action === 'SOLD');
+  const optionEntryQty = optionEntries.reduce((sum, fill) => sum + Number(fill.qty || 0), 0);
+  const optionEntryPremium = optionEntries.reduce((sum, fill) => sum + Number(fill.qty || 0) * Number(fill.price || 0), 0);
+  const maxPremiumRisk = trade.instrument_type === 'OPTION' && side === 'LONG' && optionEntryQty > 0
+    ? optionEntryPremium * 100
+    : null;
+  const usesMaxPremiumBaseline = Number.isFinite(riskPerTrade) && riskPerTrade > 0
+    && Number.isFinite(maxPremiumRisk)
+    && Math.abs(riskPerTrade - maxPremiumRisk) < 0.01
+    && trade.r_multiple == null;
+  const showRealizedR = realizedR != null && Number.isFinite(realizedR) && !usesMaxPremiumBaseline;
 
   const handleOpen = () => { if (onOpenDetail) onOpenDetail(trade); };
   const ADD_NEW = '__add_new__';
@@ -186,8 +228,8 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
       return (
         <SetupBadge
           setup={null}
-          grade={null}
-          notes={null}
+          grade={rowTrade.setup_grade}
+          notes={rowTrade.setup_notes}
           strategy={rowTrade.strategy}
         />
       );
@@ -314,13 +356,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
         <SetupEditor trade={trade} />
       </td>
 
-      <td className="trade-review-cell">
-        <ReviewStatus trade={trade} />
-      </td>
-
-      <td className="trade-excursion-col"><ExcursionCell trade={trade} /></td>
-      <td className="trade-exit-col"><ExitQuality trade={trade} /></td>
-
       <td className="trade-r-cell">
         <div
           className="trade-r-status"
@@ -331,12 +366,25 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
           <span className={`num ${plannedRR != null ? 'trade-r-planned' : 'trade-r-missing'}`}>
             {plannedRR != null ? `1:${plannedRR.toFixed(2)}` : 'Not Set'}
           </span>
-          {realizedR != null && Number.isFinite(realizedR) && (
+          {showRealizedR ? (
             <small className={realizedR > 0 ? 'pos' : realizedR < 0 ? 'neg' : 'text-muted'}>
               {realizedR > 0 ? '+' : ''}{realizedR.toFixed(2)}R realized
             </small>
-          )}
+          ) : usesMaxPremiumBaseline ? (
+            <small className="text-muted" title="Full premium is max loss, not an option-stop risk plan.">R pending</small>
+          ) : null}
         </div>
+      </td>
+
+      <td className="trade-process-cell">
+        <ProcessStatus trade={trade} />
+      </td>
+
+      <td className="trade-excursion-col"><ExcursionCell trade={trade} /></td>
+      <td className="trade-exit-col"><ExitQuality trade={trade} /></td>
+
+      <td className="trade-review-cell">
+        <ReviewStatus trade={trade} />
       </td>
 
       <td className="trade-open-cell">
