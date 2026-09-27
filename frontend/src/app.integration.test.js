@@ -191,6 +191,11 @@ jest.mock('./api', () => {
     dailySummaryApi: withDefault({ get: fn(() => ok({ trades: [] })) }),
     syncApi: withDefault({}),
     goalsApi: withDefault({ get: fn(() => ok({ win_rate: 65 })), put: fn(() => ok({ win_rate: 65 })) }),
+    leRiskPlanApi: withDefault({
+      get: fn((params = {}) => ok({ date: params.date || '2026-09-28', capital: null, exposure_pct: 30, direction: 'call', option_price: null, delta: null, underlying_entry: null, stop_price: null, target_price: null, rule_committed: false, trade1: '', trade2: '', third_trade_a_plus: false, trade3_done: false })),
+      put: fn((payload) => ok(payload)),
+      remove: fn((params = {}) => ok({ date: params.date || '2026-09-28', capital: null, exposure_pct: 30, direction: 'call', option_price: null, delta: null, underlying_entry: null, stop_price: null, target_price: null, rule_committed: false, trade1: '', trade2: '', third_trade_a_plus: false, trade3_done: false })),
+    }),
     reportsApi: withDefault({ get: fn(() => Promise.reject(new Error('no reports in tests'))) }),
     smokingGunApi: withDefault({ get: fn(() => ok({ has_data: false })), diagnose: fn(() => ok({ diagnosis: null })) }),
     smokingGunLibraryApi: withDefault({

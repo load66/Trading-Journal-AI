@@ -226,6 +226,146 @@ def put_goals(
     return json.loads(payload)
 
 
+# ── LE daily risk plan ─────────────────────────────────────────────────────────
+
+LE_RISK_PLAN_DEFAULTS = {
+    "capital": None,
+    "exposure_pct": 30.0,
+    "direction": "call",
+    "option_price": None,
+    "delta": None,
+    "underlying_entry": None,
+    "stop_price": None,
+    "target_price": None,
+    "rule_committed": False,
+    "trade1": "",
+    "trade2": "",
+    "third_trade_a_plus": False,
+    "trade3_done": False,
+}
+
+
+class LERiskPlanBody(BaseModel):
+    account_id: int | None = None
+    date: str
+    capital: float | None = None
+    exposure_pct: float = 30.0
+    direction: str = "call"
+    option_price: float | None = None
+    delta: float | None = None
+    underlying_entry: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
+    rule_committed: bool = False
+    trade1: str = ""
+    trade2: str = ""
+    third_trade_a_plus: bool = False
+    trade3_done: bool = False
+
+
+def _le_risk_plan_date(value: str) -> str:
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD") from exc
+    return value
+
+
+def _validate_le_risk_plan(payload: dict) -> dict:
+    exposure = float(payload.get("exposure_pct", 30.0))
+    if exposure < 20 or exposure > 30:
+        raise HTTPException(status_code=422, detail="LE exposure must stay between 20% and 30%")
+    payload["exposure_pct"] = exposure
+
+    direction = str(payload.get("direction") or "call").strip().lower()
+    if direction not in {"call", "put"}:
+        raise HTTPException(status_code=422, detail="direction must be call or put")
+    payload["direction"] = direction
+
+    for key in ("trade1", "trade2"):
+        outcome = str(payload.get(key) or "").strip().lower()
+        if outcome not in {"", "green", "red"}:
+            raise HTTPException(status_code=422, detail=f"{key} must be green, red, or blank")
+        payload[key] = outcome
+
+    for key in ("capital", "option_price", "underlying_entry", "stop_price", "target_price"):
+        value = payload.get(key)
+        if value is not None and float(value) <= 0:
+            raise HTTPException(status_code=422, detail=f"{key} must be greater than zero")
+
+    delta = payload.get("delta")
+    if delta is not None and not (0 < abs(float(delta)) <= 1):
+        raise HTTPException(status_code=422, detail="delta must be between -1 and 1, excluding zero")
+    return payload
+
+
+def _le_risk_plan_key(plan_date: str) -> str:
+    return f"le_risk_plan:{plan_date}"
+
+
+@app.get("/api/le-risk-plan")
+def get_le_risk_plan(
+    plan_date: str = Query(..., alias="date"),
+    account_id: int | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    plan_date = _le_risk_plan_date(plan_date)
+    acct_key = account_id if account_id is not None else 0
+    row = conn.execute(
+        "SELECT value FROM settings WHERE account_id = ? AND key = ?",
+        (acct_key, _le_risk_plan_key(plan_date)),
+    ).fetchone()
+    saved = json.loads(row["value"]) if row else {}
+    return {"date": plan_date, **LE_RISK_PLAN_DEFAULTS, **saved}
+
+
+@app.put("/api/le-risk-plan")
+def put_le_risk_plan(
+    body: LERiskPlanBody,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    plan_date = _le_risk_plan_date(body.date)
+    acct_key = body.account_id if body.account_id is not None else 0
+    payload = _validate_le_risk_plan({
+        "capital": body.capital,
+        "exposure_pct": body.exposure_pct,
+        "direction": body.direction,
+        "option_price": body.option_price,
+        "delta": body.delta,
+        "underlying_entry": body.underlying_entry,
+        "stop_price": body.stop_price,
+        "target_price": body.target_price,
+        "rule_committed": body.rule_committed,
+        "trade1": body.trade1,
+        "trade2": body.trade2,
+        "third_trade_a_plus": body.third_trade_a_plus,
+        "trade3_done": body.trade3_done,
+    })
+    conn.execute(
+        """INSERT INTO settings (account_id, key, value) VALUES (?, ?, ?)
+           ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value""",
+        (acct_key, _le_risk_plan_key(plan_date), json.dumps(payload)),
+    )
+    conn.commit()
+    return {"date": plan_date, **payload}
+
+
+@app.delete("/api/le-risk-plan")
+def delete_le_risk_plan(
+    plan_date: str = Query(..., alias="date"),
+    account_id: int | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    plan_date = _le_risk_plan_date(plan_date)
+    acct_key = account_id if account_id is not None else 0
+    conn.execute(
+        "DELETE FROM settings WHERE account_id = ? AND key = ?",
+        (acct_key, _le_risk_plan_key(plan_date)),
+    )
+    conn.commit()
+    return {"date": plan_date, **LE_RISK_PLAN_DEFAULTS}
+
+
 # ── Accounts ───────────────────────────────────────────────────────────────────
 
 class AccountCreate(BaseModel):

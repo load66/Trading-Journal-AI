@@ -261,6 +261,58 @@ def test_goals_merge_new_skill_baselines_into_older_saved_payload(monkeypatch, t
         conn.close()
 
 
+
+def test_le_risk_plan_persists_per_account_and_date(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        body = main.LERiskPlanBody(
+            account_id=7,
+            date="2026-09-28",
+            capital=10000,
+            exposure_pct=30,
+            direction="call",
+            option_price=4.20,
+            delta=0.62,
+            underlying_entry=150,
+            stop_price=148.50,
+            rule_committed=True,
+            trade1="green",
+        )
+        saved = main.put_le_risk_plan(body=body, conn=conn)
+        assert saved["capital"] == 10000
+        assert saved["rule_committed"] is True
+        assert saved["trade1"] == "green"
+
+        loaded = main.get_le_risk_plan(plan_date="2026-09-28", account_id=7, conn=conn)
+        assert loaded["option_price"] == 4.20
+        assert loaded["delta"] == 0.62
+
+        other_account = main.get_le_risk_plan(plan_date="2026-09-28", account_id=8, conn=conn)
+        assert other_account["capital"] is None
+        assert other_account["trade1"] == ""
+
+        cleared = main.delete_le_risk_plan(plan_date="2026-09-28", account_id=7, conn=conn)
+        assert cleared["capital"] is None
+        assert main.get_le_risk_plan(plan_date="2026-09-28", account_id=7, conn=conn)["capital"] is None
+    finally:
+        conn.close()
+
+
+def test_le_risk_plan_rejects_exposure_outside_le_range(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        body = main.LERiskPlanBody(account_id=1, date="2026-09-28", capital=10000, exposure_pct=35)
+        with pytest.raises(main.HTTPException) as exc:
+            main.put_le_risk_plan(body=body, conn=conn)
+        assert exc.value.status_code == 422
+        assert "20%" in exc.value.detail
+    finally:
+        conn.close()
+
 def test_recent_closed_trades_sort_by_broker_exit_time(monkeypatch, tmp_path):
     main = fresh_main(monkeypatch, tmp_path)
     main.init_db()

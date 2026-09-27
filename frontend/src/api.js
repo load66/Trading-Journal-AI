@@ -107,6 +107,12 @@ export const goalsApi = {
   put: (data) => api.put('/api/goals', data),
 };
 
+export const leRiskPlanApi = {
+  get: (params) => api.get('/api/le-risk-plan', { params }),
+  put: (data) => api.put('/api/le-risk-plan', data),
+  remove: (params) => api.delete('/api/le-risk-plan', { params }),
+};
+
 export const reportsApi = {
   get: (params) => api.get('/api/reports', { params }),
 };
