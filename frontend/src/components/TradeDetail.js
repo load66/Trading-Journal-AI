@@ -18,7 +18,7 @@ const fmtSigned$ = (v) => {
 };
 
 const SCREENSHOT_MAX_DIMENSION = 2200;
-const SCREENSHOT_TARGET_BYTES = Math.round(1.5 * 1024 * 1024);
+const SCREENSHOT_TARGET_BYTES = 500 * 1024;
 
 function canvasBlob(canvas, type, quality) {
   return new Promise((resolve, reject) => {
@@ -67,7 +67,7 @@ export async function optimizeChartScreenshot(file) {
     const dimensionSteps = [SCREENSHOT_MAX_DIMENSION, 1920, 1600, 1400]
       .map(maxDimension => Math.min(maxDimension, originalLongEdge))
       .filter((value, index, arr) => value > 0 && arr.indexOf(value) === index);
-    const qualitySteps = [0.92, 0.88, 0.84, 0.80];
+    const qualitySteps = [1.00, 0.96, 0.92, 0.88, 0.84, 0.80, 0.74];
 
     let bestBlob = null;
     for (const maxDimension of dimensionSteps) {

@@ -79,11 +79,56 @@ describe('TradeDetail chart screenshot optimization', () => {
 
       expect(canvas.width).toBe(2200);
       expect(canvas.height).toBe(1238);
-      expect(canvas.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/webp', 0.92);
+      expect(canvas.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/webp', 1);
       expect(drawImage).toHaveBeenCalled();
       expect(optimized.name).toBe('trade-review.webp');
       expect(optimized.type).toBe('image/webp');
       expect(close).toHaveBeenCalled();
+    } finally {
+      createElementSpy.mockRestore();
+      global.createImageBitmap = originalCreateImageBitmap;
+    }
+  });
+
+  test('tries lower WebP quality before reducing chart dimensions', async () => {
+    const originalCreateImageBitmap = global.createImageBitmap;
+    const originalCreateElement = document.createElement.bind(document);
+
+    global.createImageBitmap = jest.fn().mockResolvedValue({
+      width: 2560,
+      height: 1440,
+      close: jest.fn(),
+    });
+
+    const calls = [];
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: jest.fn(() => ({
+        drawImage: jest.fn(),
+        imageSmoothingEnabled: false,
+        imageSmoothingQuality: 'low',
+      })),
+      toBlob: jest.fn((callback, type, quality) => {
+        calls.push({ width: canvas.width, height: canvas.height, quality });
+        const size = quality === 1 ? 600 * 1024 : 450 * 1024;
+        callback(new Blob([new Uint8Array(size)], { type }));
+      }),
+    };
+
+    const createElementSpy = jest.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
+      if (tagName === 'canvas') return canvas;
+      return originalCreateElement(tagName, options);
+    });
+
+    try {
+      const source = new File([new Uint8Array(2 * 1024 * 1024)], 'chart.png', { type: 'image/png' });
+      const optimized = await optimizeChartScreenshot(source);
+
+      expect(calls[0]).toMatchObject({ width: 2200, height: 1238, quality: 1 });
+      expect(calls[1]).toMatchObject({ width: 2200, height: 1238, quality: 0.96 });
+      expect(calls.some(call => call.width < 2200)).toBe(false);
+      expect(optimized.size).toBeLessThanOrEqual(500 * 1024);
     } finally {
       createElementSpy.mockRestore();
       global.createImageBitmap = originalCreateImageBitmap;
