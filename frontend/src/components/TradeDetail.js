@@ -1800,33 +1800,83 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
             {/* ── Chart Review tab ─────────────────────────────────────── */}
             {tab === 'Chart Review' && (
-              <div className="td-chart-review-panel">
-                <div className="td-chart-review-callout">
-                  <Target size={20} />
-                  <div>
-                    <strong>Review the setup visually</strong>
-                    <p>Use the 10-minute chart and your TradingView screenshot together. Check entry location, key levels, 8 EMA structure, planned risk, trims, and whether the trade followed your original thesis.</p>
-                  </div>
+              <div className="td-chart-review-workspace">
+                <div className="td-chart-review-toolbar">
+                  <div className="td-chart-review-title">TradingView Screenshot</div>
+                  {chartScreenshotUrl && (
+                    <div className="td-chart-review-actions">
+                      <label className="btn btn-ghost btn-sm td-chart-review-upload">
+                        <Upload size={13} /> Replace
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          disabled={chartScreenshotUploading}
+                          onChange={e => {
+                            const file = e.target.files?.[0];
+                            e.target.value = '';
+                            handleChartScreenshotUpload(file);
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm td-chart-review-remove"
+                        onClick={handleChartScreenshotDelete}
+                        disabled={chartScreenshotUploading}
+                      >
+                        <Trash2 size={13} /> Remove
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div className="td-chart-review-checks">
-                  <span>10m default</span>
-                  <span>8 EMA</span>
-                  <span>PDH / PDL solid</span>
-                  <span>PMH / PML dashed</span>
+
+                <div className="td-chart-review-stage">
+                  {chartScreenshotLoading ? (
+                    <div className="td-chart-preview-loading text-muted">Loading screenshot…</div>
+                  ) : chartScreenshotUrl ? (
+                    <div
+                      className="td-chart-preview td-chart-review-preview"
+                      role="button"
+                      tabIndex={0}
+                      title="Open screenshot full screen"
+                      aria-label="Open chart screenshot full screen"
+                      aria-haspopup="dialog"
+                      onClick={openChartScreenshot}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          openChartScreenshot();
+                        }
+                      }}
+                    >
+                      <img
+                        src={chartScreenshotUrl}
+                        alt={`${trade.ticker} TradingView review screenshot`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openChartScreenshot();
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <label className="td-chart-review-empty">
+                      <Upload size={26} />
+                      <strong>{chartScreenshotUploading ? 'Uploading…' : 'Add chart screenshot'}</strong>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        disabled={chartScreenshotUploading}
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          handleChartScreenshotUpload(file);
+                        }}
+                      />
+                    </label>
+                  )}
                 </div>
-                <label className="btn btn-primary btn-sm td-chart-review-upload">
-                  <Upload size={14} /> {analysis?.chart_screenshot_path ? 'Replace screenshot' : 'Paste or upload screenshot'}
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    disabled={chartScreenshotUploading}
-                    onChange={e => {
-                      const file = e.target.files?.[0];
-                      e.target.value = '';
-                      handleChartScreenshotUpload(file);
-                    }}
-                  />
-                </label>
+
+                {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
               </div>
             )}
 
@@ -1871,108 +1921,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               </div>
             </section>
           )}
-
-          {/* TradingView screenshot — compact until opened */}
-          <section className="card td-chart-screenshot-side" aria-label="TradingView screenshot">
-            <div className="td-chart-screenshot-head">
-              <div>
-                <div className="section-title" style={{ fontSize: 15 }}>Chart screenshot</div>
-                <div className="text-muted" style={{ fontSize: 11.5, marginTop: 2 }}>
-                  Paste with Ctrl+V or upload. Stored images are automatically compressed.
-                </div>
-              </div>
-            </div>
-
-            {chartScreenshotLoading ? (
-              <div className="td-chart-preview-loading text-muted">Loading screenshot…</div>
-            ) : chartScreenshotUrl ? (
-              <>
-                <div
-                  className="td-chart-preview"
-                  role="button"
-                  tabIndex={0}
-                  title="Open screenshot full screen"
-                  aria-label="Open chart screenshot full screen"
-                  aria-haspopup="dialog"
-                  onClick={openChartScreenshot}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      openChartScreenshot();
-                    }
-                  }}
-                  style={{
-                    width: 800,
-                    maxWidth: '100%',
-                    alignSelf: 'flex-start',
-                    flex: '0 0 auto',
-                  }}
-                >
-                  <img
-                    src={chartScreenshotUrl}
-                    alt={`${trade.ticker} TradingView review screenshot`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      openChartScreenshot();
-                    }}
-                    style={{
-                      width: '100%',
-                      height: 'auto',
-                      maxHeight: 600,
-                      objectFit: 'contain',
-                    }}
-                  />
-                </div>
-                <div
-                  className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
-                  style={{
-                    width: 800,
-                    maxWidth: '100%',
-                    justifyContent: 'flex-start',
-                  }}
-                >
-                  <label className="btn btn-ghost btn-sm td-chart-review-upload">
-                    <Upload size={13} /> Replace
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      disabled={chartScreenshotUploading}
-                      onChange={e => {
-                        const file = e.target.files?.[0];
-                        e.target.value = '';
-                        handleChartScreenshotUpload(file);
-                      }}
-                    />
-                  </label>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={handleChartScreenshotDelete}>
-                    <Trash2 size={13} /> Remove
-                  </button>
-                </div>
-              </>
-            ) : (
-              <label
-                className="td-chart-dropzone td-chart-dropzone-compact"
-                style={{ width: 800, maxWidth: '100%', minHeight: 240, alignSelf: 'flex-start' }}
-              >
-                <div className="td-chart-dropzone-empty">
-                  <Upload size={24} />
-                  <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload screenshot'}</strong>
-                  <span>Ctrl+V works anywhere on this trade. Or click here to choose an image.</span>
-                </div>
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  disabled={chartScreenshotUploading}
-                  onChange={e => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    handleChartScreenshotUpload(file);
-                  }}
-                />
-              </label>
-            )}
-            {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
-          </section>
 
           {/* AI Feedback — only shown when diary analysis exists */}
           {analysis?.ai_feedback && (
