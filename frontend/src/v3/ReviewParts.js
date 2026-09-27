@@ -270,7 +270,7 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
 }
 
 function escapeHighlightRegExp(value) {
-  return value.replace(/[|\\{}()[\]^$+*?.-]/g, '\\/* ── coaching: the report, with the lists behind tabs ───────────────────── */');
+  return value.replace(/[|\\{}()[\]^$+*?.-]/g, '\\$&');
 }
 
 function renderCoachHighlights(text, highlights) {
