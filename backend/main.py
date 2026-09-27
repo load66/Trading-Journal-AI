@@ -946,7 +946,8 @@ def list_trades(
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     sql = """
-        SELECT t.*, ta.strategy, ta.stop_loss, ta.r_multiple, ta.match_confidence, ta.emotional_state,
+        SELECT t.*, ta.strategy, ta.stop_loss, ta.risk_per_trade, ta.r_multiple,
+               ta.match_confidence, ta.emotional_state, ta.idea_source, ta.chart_screenshot_path,
                ta.entry_reason, ta.exit_reason, ta.ai_feedback, ta.mistakes, ta.notes as analysis_notes
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
@@ -995,6 +996,20 @@ def list_trades(
         if closed_only and is_open:
             continue
         d["pl_pct"] = _trade_pl_percent(d)
+
+        # R is meaningful only when the trader has explicitly recorded planned
+        # dollar risk (or a legacy analysis already has an R multiple). Do not
+        # infer risk from stop price because option journals may record
+        # underlying levels rather than option-premium stops.
+        stored_r = d.get("r_multiple")
+        risk = d.get("risk_per_trade")
+        if stored_r is not None:
+            d["realized_r"] = stored_r
+        elif risk is not None and abs(float(risk)) > 0 and d.get("net_pnl") is not None:
+            d["realized_r"] = round(float(d["net_pnl"]) / abs(float(risk)), 4)
+        else:
+            d["realized_r"] = None
+
         result.append(d)
 
     if sort_by == "closed_at_desc":
@@ -1394,6 +1409,7 @@ class AnalysisUpdate(BaseModel):
     strategy: str | None = None
     idea_source: str | None = None
     stop_loss: float | None = None
+    risk_per_trade: float | None = None
     target_price: float | None = None
     emotional_state: str | None = None
     entry_reason: str | None = None
@@ -1409,6 +1425,11 @@ def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.
         raise HTTPException(status_code=404, detail="Trade not found")
 
     updates = data.model_dump(exclude_unset=True)
+
+    if "risk_per_trade" in updates and updates["risk_per_trade"] is not None:
+        if float(updates["risk_per_trade"]) <= 0:
+            raise HTTPException(status_code=400, detail="Planned risk must be greater than $0.")
+        updates["risk_per_trade"] = abs(float(updates["risk_per_trade"]))
 
     existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
     if not existing:

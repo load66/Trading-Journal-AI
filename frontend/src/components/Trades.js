@@ -45,6 +45,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
 
   const [ticker, setTicker] = useState('');
   const [instrType, setInstrType] = useState('');
+  const [reviewFilter, setReviewFilter] = useState('');
   const [dateFrom, setDateFrom] = useState(initialDateFrom);
   const [dateTo, setDateTo] = useState(initialDateTo);
 
@@ -84,7 +85,18 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
     setPage(1);
   };
 
-  const sorted = [...trades].sort((a, b) => {
+  const reviewCount = (trade) => [trade.entry_reason, trade.exit_reason, trade.mistakes]
+    .filter(value => String(value || '').trim()).length;
+
+  const visibleTrades = trades.filter(trade => {
+    const count = reviewCount(trade);
+    if (reviewFilter === 'needs') return count < 3;
+    if (reviewFilter === 'reviewed') return count === 3;
+    if (reviewFilter === 'mistake') return Boolean(String(trade.mistakes || '').trim());
+    return true;
+  });
+
+  const sorted = [...visibleTrades].sort((a, b) => {
     let av, bv;
     switch (sortCol) {
       case 'datetime':
@@ -92,19 +104,20 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
         bv = (b.date || '') + '|' + getOpenTime(b);
         break;
       case 'ticker': av = a.ticker || ''; bv = b.ticker || ''; break;
-      case 'side': av = a.side || ''; bv = b.side || ''; break;
-      case 'type': av = a.instrument_type || ''; bv = b.instrument_type || ''; break;
       case 'net_pnl': av = a.net_pnl ?? 0; bv = b.net_pnl ?? 0; break;
-      case 'r_multiple': av = a.r_multiple ?? -999; bv = b.r_multiple ?? -999; break;
+      case 'r_multiple':
+        av = a.realized_r ?? a.r_multiple ?? -999;
+        bv = b.realized_r ?? b.r_multiple ?? -999;
+        break;
       default: av = a.date || ''; bv = b.date || '';
     }
     const cmp = av < bv ? -1 : av > bv ? 1 : 0;
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
-  const totalNet = trades.reduce((s, t) => s + (t.net_pnl || 0), 0);
-  const winners = trades.filter(t => (t.net_pnl || 0) > 0).length;
-  const winRate = trades.length ? (winners / trades.length * 100).toFixed(1) : 0;
+  const totalNet = visibleTrades.reduce((sum, trade) => sum + (trade.net_pnl || 0), 0);
+  const winners = visibleTrades.filter(trade => (trade.net_pnl || 0) > 0).length;
+  const winRate = visibleTrades.length ? (winners / visibleTrades.length * 100).toFixed(1) : 0;
 
   const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
@@ -128,13 +141,13 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
     <div>
       <PageHeader
         title="Trade View"
-        subtitle="Click a row to open the trade. The Setup column is editable in place."
+        subtitle="Scan results, strategy, review quality, excursion and R in one place. Click any row for the full trade review."
       />
 
       <KpiStrip label="Filtered trade summary">
         <KpiCell label="Selected period" value={<span style={{ fontSize: 22 }}>{period}</span>} />
         <KpiCell label="Net P&L" value={<MoneyValue value={totalNet} />} tone={totalNet >= 0 ? 'pos' : 'neg'} />
-        <KpiCell label="Trades" value={<span className="num">{trades.length.toLocaleString('en-US')}</span>} />
+        <KpiCell label="Trades" value={<span className="num">{visibleTrades.length.toLocaleString('en-US')}</span>} />
         <KpiCell label="Win rate" value={<span className="num">{winRate}%</span>} foot={<><span className="num">{winners}</span> winners</>} />
       </KpiStrip>
 
@@ -163,6 +176,15 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
           </select>
         </div>
         <div>
+          <label className="field-label" htmlFor="tv-review">Review</label>
+          <select id="tv-review" value={reviewFilter} onChange={e => { setReviewFilter(e.target.value); setPage(1); }} style={{ width: 160 }}>
+            <option value="">All reviews</option>
+            <option value="needs">Needs review</option>
+            <option value="reviewed">Fully reviewed</option>
+            <option value="mistake">Mistake flagged</option>
+          </select>
+        </div>
+        <div>
           <label className="field-label" htmlFor="tv-from">From</label>
           <input id="tv-from" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ width: 160 }} />
         </div>
@@ -170,11 +192,11 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
           <label className="field-label" htmlFor="tv-to">To</label>
           <input id="tv-to" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ width: 160 }} />
         </div>
-        {(ticker || instrType || dateFrom || dateTo) && (
+        {(ticker || instrType || reviewFilter || dateFrom || dateTo) && (
           <button
             type="button"
             className="btn btn-ghost"
-            onClick={() => { setTicker(''); setInstrType(''); setDateFrom(''); setDateTo(''); }}
+            onClick={() => { setTicker(''); setInstrType(''); setReviewFilter(''); setDateFrom(''); setDateTo(''); }}
           >
             Clear
           </button>
@@ -189,18 +211,18 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
 
       <section className="card panel-flush" aria-label="Trades">
         <div className="table-container">
-          <table style={{ minWidth: 980 }}>
+          <table className="trade-view-table">
             <thead>
               <tr>
                 {sortTh('datetime', 'Date / Time')}
-                {sortTh('ticker', 'Ticker')}
-                {sortTh('type', 'Type')}
-                {sortTh('side', 'Side')}
-                {sortTh('net_pnl', 'Net P&L', 'num')}
+                {sortTh('ticker', 'Trade')}
+                {sortTh('net_pnl', 'Result', 'num')}
                 <th>Setup / Strategy</th>
-                <th title="Net P/L divided by entry premium/notional. Display only; MFE/MAE/Exit analytics remain unchanged.">P/L %</th>
+                <th>Review</th>
+                <th title="Maximum favorable and adverse excursion while the trade was open.">MFE / MAE</th>
+                <th title="Exit efficiency: share of covered favorable excursion retained at exit.">Exit</th>
                 {sortTh('r_multiple', 'R', 'num')}
-                <th><span className="sr-only">Expand</span></th>
+                <th><span className="sr-only">Open trade</span></th>
               </tr>
             </thead>
             <tbody>

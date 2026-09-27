@@ -604,6 +604,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         strategy: statsForm.strategy || null,
         idea_source: statsForm.idea_source || null,
         stop_loss: toNum(statsForm.stop_loss),
+        risk_per_trade: toNum(statsForm.risk_per_trade),
         target_price: toNum(statsForm.target_price),
         emotional_state: statsForm.emotional_state || null,
       });
@@ -731,12 +732,16 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
   const pnl = trade.net_pnl ?? 0;
 
-  const riskPerShare = analysis?.stop_loss && stats.avgEntry
-    ? Math.abs(stats.avgEntry - analysis.stop_loss) : null;
-  const tradeRisk = riskPerShare && stats.totalQty
-    ? -(riskPerShare * stats.totalQty) : analysis?.risk_per_trade ? -Math.abs(analysis.risk_per_trade) : null;
-  const plannedR  = analysis?.risk_reward ? `${Number(analysis.risk_reward).toFixed(2)}R` : null;
-  const realizedR = analysis?.r_multiple != null ? `${Number(analysis.r_multiple).toFixed(2)}R` : null;
+  const plannedRisk = analysis?.risk_per_trade != null && Number(analysis.risk_per_trade) > 0
+    ? Math.abs(Number(analysis.risk_per_trade)) : null;
+  const realizedRValue = analysis?.r_multiple != null
+    ? Number(analysis.r_multiple)
+    : plannedRisk && trade.net_pnl != null
+      ? Number(trade.net_pnl) / plannedRisk
+      : null;
+  const realizedR = realizedRValue != null && Number.isFinite(realizedRValue)
+    ? `${realizedRValue >= 0 ? '+' : ''}${realizedRValue.toFixed(2)}R`
+    : null;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -816,14 +821,24 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         />
         <KpiCell
           label="Realized R"
-          value={<span className="num">{realizedR ? `${analysis.r_multiple > 0 ? '+' : ''}${realizedR}` : 'n/a'}</span>}
-          tone={analysis?.r_multiple != null ? (analysis.r_multiple >= 0 ? 'pos' : 'neg') : undefined}
-          foot={plannedR ? <>Planned <span className="num">{plannedR}</span></> : null}
+          value={<span className="num">{realizedR || 'Set risk'}</span>}
+          tone={realizedRValue != null ? (realizedRValue >= 0 ? 'pos' : 'neg') : undefined}
+          foot={plannedRisk
+            ? <>Planned risk <span className="num">{fmt$(plannedRisk)}</span></>
+            : <>Add planned risk to calculate R</>}
         />
-        <KpiCell label="Avg entry" value={<span className="num">{stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : 'n/a'}</span>} />
-        <KpiCell label="Avg exit" value={<span className="num">{stats.avgExit ? `$${stats.avgExit.toFixed(2)}` : 'n/a'}</span>} />
-        <KpiCell label="Quantity" value={<span className="num">{stats.totalQty || 'n/a'}</span>} foot={trade.commissions ? <>Comm <span className="num">{fmt$(trade.commissions)}</span></> : null} />
-        <KpiCell label="Risk" value={<span className="num">{tradeRisk ? fmt$(tradeRisk) : 'n/a'}</span>} />
+        <KpiCell label="Avg entry" value={<span className="num">{stats.avgEntry ? `${stats.avgEntry.toFixed(2)}` : 'n/a'}</span>} />
+        <KpiCell label="Avg exit" value={<span className="num">{stats.avgExit ? `${stats.avgExit.toFixed(2)}` : 'n/a'}</span>} />
+        <KpiCell
+          label={trade.instrument_type === 'STOCK' ? 'Shares' : 'Contracts'}
+          value={<span className="num">{stats.totalQty || 'n/a'}</span>}
+          foot={trade.commissions ? <>Comm <span className="num">{fmt$(trade.commissions)}</span></> : null}
+        />
+        <KpiCell
+          label="Exit efficiency"
+          value={<span className="num">{trade.exit_efficiency != null ? `${Number(trade.exit_efficiency).toFixed(1)}%` : 'n/a'}</span>}
+          tone={trade.exit_efficiency != null ? (Number(trade.exit_efficiency) >= 50 ? 'pos' : 'neg') : undefined}
+        />
       </KpiStrip>
 
       {/* Layout: session list | chart, then tabs beside notes */}
@@ -933,6 +948,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                           strategy: analysis?.strategy || '',
                           idea_source: analysis?.idea_source || 'Watchlist',
                           stop_loss: analysis?.stop_loss ?? '',
+                          risk_per_trade: analysis?.risk_per_trade ?? '',
                           target_price: analysis?.target_price ?? '',
                           emotional_state: analysis?.emotional_state || '',
                         });
@@ -952,7 +968,10 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </div>
 
                 <StatRow label="Side" value={trade.side} />
-                <StatRow label="Stocks traded" value={stats.totalQty || '—'} />
+                <StatRow
+                  label={trade.instrument_type === 'STOCK' ? 'Shares traded' : 'Contracts traded'}
+                  value={stats.totalQty || '—'}
+                />
                 <StatRow label="Commissions & Fees" value={trade.commissions ? fmt$(trade.commissions) : '—'} />
                 <StatRow label="P/L %" value={stats.plPercent != null ? `${stats.plPercent >= 0 ? '+' : ''}${stats.plPercent.toFixed(2)}%` : '—'} valueColor={stats.plPercent != null ? (stats.plPercent >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
                 <StatRow label="Gross P&L" value={trade.gross_pnl != null ? fmt$(trade.gross_pnl) : '—'} valueColor={trade.gross_pnl >= 0 ? 'var(--green)' : 'var(--red)'} />
@@ -986,6 +1005,12 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       />
                     </div>
                     <EditField label="Stop Loss ($)" type="number" value={String(statsForm.stop_loss)} onChange={v => setStatsForm(f => ({ ...f, stop_loss: v }))} />
+                    <div>
+                      <EditField label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
+                      <div className="text-muted" style={{ fontSize: 11.5, marginTop: 4, lineHeight: 1.35 }}>
+                        Dollar amount you accepted losing at entry. This unlocks a reliable realized R.
+                      </div>
+                    </div>
                     <EditField label="Profit Target ($)" type="number" value={String(statsForm.target_price)} onChange={v => setStatsForm(f => ({ ...f, target_price: v }))} />
                     <EditField label="Emotional State" value={statsForm.emotional_state} onChange={v => setStatsForm(f => ({ ...f, emotional_state: v }))} options={EMOTIONAL_STATES} />
                   </div>
@@ -993,11 +1018,10 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   <>
                     <StatRow label="Strategy" value={analysis.strategy} valueColor="var(--accent-line)" />
                     <StatRow label="Source" value={analysis.idea_source} valueColor="var(--text-secondary)" />
-                    <StatRow label="Stop Loss" value={analysis.stop_loss ? `$${analysis.stop_loss}` : null} valueColor="var(--caution)" />
-                    <StatRow label="Profit Target" value={analysis.target_price ? `$${analysis.target_price}` : null} valueColor="var(--accent-line)" />
-                    <StatRow label="Trade Risk" value={tradeRisk ? fmt$(tradeRisk) : (analysis.risk_per_trade ? fmt$(-Math.abs(analysis.risk_per_trade)) : null)} valueColor="var(--caution)" />
-                    <StatRow label="Planned R-Multiple" value={plannedR} />
-                    <StatRow label="Realized R-Multiple" value={realizedR} valueColor={analysis?.r_multiple >= 0 ? 'var(--green)' : 'var(--red)'} />
+                    <StatRow label="Stop Loss" value={analysis.stop_loss ? `${analysis.stop_loss}` : null} valueColor="var(--caution)" />
+                    <StatRow label="Profit Target" value={analysis.target_price ? `${analysis.target_price}` : null} valueColor="var(--accent-line)" />
+                    <StatRow label="Planned Risk" value={plannedRisk ? fmt$(-plannedRisk) : 'Not set'} valueColor={plannedRisk ? 'var(--caution)' : 'var(--text-secondary)'} />
+                    <StatRow label="Realized R" value={realizedR || 'Set planned risk to calculate'} valueColor={realizedRValue == null ? 'var(--text-secondary)' : realizedRValue >= 0 ? 'var(--green)' : 'var(--red)'} />
                     {/* Excursion: how far the trade went your way and against you,
                         and how much of the favourable move you actually kept. */}
                     <StatRow
