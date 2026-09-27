@@ -1964,68 +1964,50 @@ def get_kpis(
         params.append(date_to)
 
     rows = conn.execute(sql + " ORDER BY date", params).fetchall()
-    trades = [row_to_dict(r) for r in rows]
+    all_trades = [row_to_dict(r) for r in rows]
+    summary = performance_summary(all_trades)
+    trades = summary["rows"]
 
-    total_net_pnl = sum(t.get('net_pnl') or 0 for t in trades)
-    total_gross_pnl = sum(t.get('gross_pnl') or 0 for t in trades)
-    total_commissions = sum(t.get('commissions') or 0 for t in trades)
+    total_net_pnl = summary["total_net_pnl"]
+    total_gross_pnl = round(sum(float(t.get("gross_pnl") or 0) for t in trades), 2)
+    total_commissions = round(sum(float(t.get("commissions") or 0) for t in trades), 2)
 
-    winners = [t for t in trades if (t.get('net_pnl') or 0) > 0]
-    losers = [t for t in trades if (t.get('net_pnl') or 0) < 0]
-    total_trades = len(trades)
-    win_rate = round(len(winners) / total_trades * 100, 2) if total_trades else 0
+    winners = [t for t in trades if float(t.get("net_pnl") or 0) > 0]
+    losers = [t for t in trades if float(t.get("net_pnl") or 0) < 0]
+    total_trades = summary["total_trades"]
+    win_rate = summary["win_rate"]
+    avg_win = summary["avg_win"]
+    avg_loss = summary["avg_loss"]
+    profit_factor = summary["profit_factor"]
+    expectancy = summary["expectancy"]
 
-    avg_win = round(sum(t['net_pnl'] for t in winners) / len(winners), 2) if winners else 0
-    avg_loss = round(sum(t['net_pnl'] for t in losers) / len(losers), 2) if losers else 0
-
-    profit_factor = _net_profit_factor(trades)
-    gross_wins = sum(t.get('gross_pnl') or 0 for t in winners)
-    gross_losses = abs(sum(t.get('gross_pnl') or 0 for t in losers))
+    gross_values = [float(t.get("gross_pnl") or 0) for t in trades]
+    gross_wins = sum(v for v in gross_values if v > 0)
+    gross_losses = abs(sum(v for v in gross_values if v < 0))
     gross_profit_factor = round(gross_wins / gross_losses, 2) if gross_losses else None
-
-    # Expectancy = win_rate * avg_win + loss_rate * avg_loss (avg_loss is negative)
-    if total_trades > 0:
-        expectancy = round(
-            (len(winners) / total_trades) * avg_win + (len(losers) / total_trades) * avg_loss, 2
-        )
-    else:
-        expectancy = 0.0
 
     avg_pl_pct = _avg_trade_pl_percent(trades)
 
-    # Average R must come from recorded trade-analysis risk data; never infer it
-    # from P&L or option premium. Keep the sample count so the UI can show data
-    # coverage instead of presenting a weak sample as a trustworthy process KPI.
-    r_sql = """
-        SELECT AVG(ta.r_multiple) AS avg_r, COUNT(ta.r_multiple) AS r_count
-        FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
-        WHERE t.net_pnl IS NOT NULL
-    """
-    r_params = []
-    if account_id is not None:
-        r_sql += " AND t.account_id = ?"
-        r_params.append(account_id)
-    if date_from:
-        r_sql += " AND t.date >= ?"
-        r_params.append(date_from)
-    if date_to:
-        r_sql += " AND t.date <= ?"
-        r_params.append(date_to)
-    r_row = conn.execute(r_sql, r_params).fetchone()
-    avg_r = round(float(r_row["avg_r"]), 2) if r_row and r_row["avg_r"] is not None else None
-    r_sample_count = int(r_row["r_count"] or 0) if r_row else 0
+    # Average R is recorded process data. Restrict it to the same closed-trade
+    # population as every other KPI so open positions cannot alter the sample.
+    closed_groups = {str(t.get("trade_group") or "") for t in trades}
+    r_rows = conn.execute(
+        "SELECT trade_group, r_multiple FROM trade_analysis WHERE r_multiple IS NOT NULL"
+    ).fetchall()
+    r_values = [
+        float(row["r_multiple"])
+        for row in r_rows
+        if str(row["trade_group"] or "") in closed_groups
+    ]
+    avg_r = round(sum(r_values) / len(r_values), 2) if r_values else None
+    r_sample_count = len(r_values)
 
-    # Daily P&L
-    daily: dict[str, float] = {}
-    for t in trades:
-        d = t.get('date', '')
-        daily[d] = daily.get(d, 0) + (t.get('net_pnl') or 0)
-
-    trading_days = len(daily)
-    positive_days = sum(1 for v in daily.values() if v > 0)
-    negative_days = sum(1 for v in daily.values() if v < 0)
-    day_win_rate = round(positive_days / trading_days * 100, 1) if trading_days else 0
+    # Daily P&L uses closed trades only; a green day means net day P&L > 0.
+    daily = summary["daily"]
+    trading_days = summary["trading_days"]
+    positive_days = summary["green_days"]
+    negative_days = summary["red_days"]
+    day_win_rate = summary["day_win_rate"]
 
     cumulative = 0.0
     peak = 0.0
@@ -2092,7 +2074,7 @@ def get_kpis(
         "r_sample_count": r_sample_count,
         "max_drawdown": round(max_drawdown, 2),
         "by_entry_time": _time_of_day_kpis(trades),
-        "entry_time_timezone": "CT",
+        "entry_time_timezone": "ET",
         **_excursion_kpis(conn, account_id, date_from, date_to),
     }
 
