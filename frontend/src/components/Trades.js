@@ -115,9 +115,10 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
-  const totalNet = visibleTrades.reduce((sum, trade) => sum + (trade.net_pnl || 0), 0);
-  const winners = visibleTrades.filter(trade => (trade.net_pnl || 0) > 0).length;
-  const winRate = visibleTrades.length ? (winners / visibleTrades.length * 100).toFixed(1) : 0;
+  const completedTrades = visibleTrades.filter(trade => !trade.is_open);
+  const totalNet = completedTrades.reduce((sum, trade) => sum + (trade.net_pnl || 0), 0);
+  const winners = completedTrades.filter(trade => (trade.net_pnl || 0) > 0).length;
+  const winRate = completedTrades.length ? (winners / completedTrades.length * 100).toFixed(1) : 0;
 
   const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
