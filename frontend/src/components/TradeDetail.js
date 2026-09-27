@@ -622,13 +622,21 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     if (!dialog || dialog.open) return;
     chartScreenshotBodyOverflowRef.current = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    dialog.showModal();
+
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
   }, []);
 
   const closeChartScreenshot = useCallback(() => {
     const dialog = chartScreenshotDialogRef.current;
-    if (dialog?.open) dialog.close();
-  }, []);
+    if (!dialog?.open && !dialog?.hasAttribute('open')) return;
+
+    if (typeof dialog.close === 'function') dialog.close();
+    else {
+      dialog.removeAttribute('open');
+      restoreChartScreenshotScroll();
+    }
+  }, [restoreChartScreenshotScroll]);
 
   const restoreChartScreenshotScroll = useCallback(() => {
     document.body.style.overflow = chartScreenshotBodyOverflowRef.current;
