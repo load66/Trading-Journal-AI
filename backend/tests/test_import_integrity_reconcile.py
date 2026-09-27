@@ -9,7 +9,9 @@ BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
 from csv_parser import (
+    canonical_execution_timestamp,
     detect_broker,
+    detect_csv_timezone,
     execution_fingerprint,
     get_existing_fingerprints,
     parse_broker_csv,
@@ -28,6 +30,41 @@ QCOM_CSV = """index,Date, Type, Description, Ref Num, Misc Fees, Commissions, Am
 8,9/25/26 9:47 AM,TRD,BOT +5 QCOM 100 (Weeklys) 25 SEP 26 202.5 CALL @.67 CBOE,1008066078058,-0.06,-2.5,($335.00),$1102.27
 9,9/25/26 9:47 AM,TRD,BOT +5 QCOM 100 (Weeklys) 25 SEP 26 202.5 CALL @.67 CBOE,1008066078058,-0.06,-2.5,($335.00),$1439.83
 """
+
+
+def test_central_timezone_conversion_tracks_daylight_saving_time():
+    assert canonical_execution_timestamp(
+        "2026-01-15", "08:47:00", "America/Chicago"
+    ) == "2026-01-15T14:47:00Z"
+    assert canonical_execution_timestamp(
+        "2026-09-25", "08:47:00", "America/Chicago"
+    ) == "2026-09-25T13:47:00Z"
+
+
+def test_ambiguous_dst_wall_clock_is_rejected():
+    assert canonical_execution_timestamp(
+        "2026-11-01", "01:30:00", "America/Chicago"
+    ) is None
+
+
+def test_schwab_timezone_uses_broker_profile_when_csv_has_no_metadata():
+    info = detect_csv_timezone(QCOM_CSV, "schwab_transactions")
+    assert info == {
+        "timezone": "America/Chicago",
+        "method": "broker_profile",
+        "confidence": "high",
+        "evidence": "schwab_transactions",
+    }
+
+
+def test_explicit_timezone_metadata_overrides_broker_profile():
+    info = detect_csv_timezone(
+        "Time Zone,America/New_York\n" + QCOM_CSV,
+        "schwab_transactions",
+    )
+    assert info["timezone"] == "America/New_York"
+    assert info["method"] == "csv_iana_timezone"
+    assert info["confidence"] == "high"
 
 
 def test_detects_schwab_transaction_history():
@@ -61,6 +98,9 @@ def test_qcom_trim_sequence_and_runner_are_preserved():
     assert execs[-1]["source_ref"] == "1008066079460"
     assert execs[-1]["timestamp_precision"] == "minute"
     assert all(e["source_timezone"] == "America/Chicago" for e in execs)
+    assert all(e["timezone_detection_method"] == "broker_profile" for e in execs)
+    assert all(e["timezone_detection_confidence"] == "high" for e in execs)
+    assert execs[0]["source_timestamp"] == "9/25/26 9:47 AM"
     assert all(e["source_broker"] == "schwab_transactions" for e in execs)
     assert execs[0]["timestamp_utc"] == "2026-09-25T14:47:00Z"
     assert execs[-1]["timestamp_utc"] == "2026-09-25T15:11:00Z"
@@ -196,6 +236,10 @@ def test_authoritative_reconcile_rebuilds_imported_trade_without_duplicates(monk
         assert payload["execution_integrity"]["execution_count"] == 10
         assert payload["execution_integrity"]["canonical_timestamp_count"] == 10
         assert payload["execution_integrity"]["source_timezones"] == ["America/Chicago"]
+        assert payload["execution_integrity"]["source_timestamp_count"] == 10
+        assert payload["execution_integrity"]["timezone_detection_methods"] == ["broker_profile"]
+        assert payload["execution_integrity"]["timezone_confidences"] == ["high"]
+        assert payload["execution_integrity"]["timezone_verified"] is True
 
         rows = conn.execute(
             "SELECT ticker, net_pnl, executions FROM trades WHERE account_id=1 AND ticker='QCOM'"
