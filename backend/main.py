@@ -1356,16 +1356,18 @@ def delete_trade_tag(tag_id: int, conn: sqlite3.Connection = Depends(get_connect
 
 
 def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict:
-    """Aggregate trade-quality metrics: how much of the move was captured, and
-    how much heat was taken to get it.
+    """Aggregate trade-management excursion metrics with explicit coverage.
 
-    exit_efficiency is averaged over WINNERS only — a loser has no favourable
-    excursion to capture, so including them would measure something else.
-    MAE is reported separately for winners and losers because the gap between
-    them is what calibrates the stop.
+    Profit capture is only computed when the excursion path is the actual
+    traded instrument (stock bars or option-premium bars). Proxy/underlying
+    paths are useful context, but they are not a valid profit-capture
+    denominator.
     """
-    sql = ("SELECT instrument_type, net_pnl, mfe_pct, mae_pct, exit_efficiency FROM trades "
-           "WHERE mfe_pct IS NOT NULL AND net_pnl IS NOT NULL AND net_pnl <> 0")
+    sql = (
+        "SELECT date, instrument_type, net_pnl, mfe_pct, mae_pct, "
+        "exit_efficiency, excursion_basis FROM trades "
+        "WHERE net_pnl IS NOT NULL AND net_pnl <> 0"
+    )
     params = []
     if account_id is not None:
         sql += " AND account_id = ?"; params.append(account_id)
@@ -1376,38 +1378,88 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     rows = conn.execute(sql, params).fetchall()
     if not rows:
         return {}
-    wins = [r for r in rows if r['net_pnl'] > 0]
-    losses = [r for r in rows if r['net_pnl'] <= 0]
+
+    excursion_rows = [r for r in rows if r["mfe_pct"] is not None and r["mae_pct"] is not None]
+    winners_all = [r for r in rows if r["net_pnl"] > 0]
+    losses_all = [r for r in rows if r["net_pnl"] < 0]
+    excursion_wins = [r for r in excursion_rows if r["net_pnl"] > 0]
+    excursion_losses = [r for r in excursion_rows if r["net_pnl"] < 0]
+
+    valid_capture_bases = {"stock_1m", "option_premium_1m"}
+    capture_rows = [
+        r for r in winners_all
+        if r["exit_efficiency"] is not None
+        and 0 <= float(r["exit_efficiency"]) <= 100
+        and str(r["excursion_basis"] or "") in valid_capture_bases
+    ]
 
     def avg(vals):
-        vals = [v for v in vals if v is not None]
+        vals = [float(v) for v in vals if v is not None]
         return round(sum(vals) / len(vals), 2) if vals else None
 
     def med(vals):
-        vals = sorted(v for v in vals if v is not None)
+        vals = sorted(float(v) for v in vals if v is not None)
         if not vals:
             return None
         n = len(vals)
         return round(vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2, 2)
 
+    total_n = len(rows)
+    excursion_n = len(excursion_rows)
+    winner_n = len(winners_all)
+    capture_n = len(capture_rows)
+    total_days = len({r["date"] for r in rows if r["date"]})
+    excursion_days = len({r["date"] for r in excursion_rows if r["date"]})
+    capture_days = len({r["date"] for r in capture_rows if r["date"]})
+    excursion_coverage = round(excursion_n / total_n * 100, 1) if total_n else 0
+    capture_coverage = round(capture_n / winner_n * 100, 1) if winner_n else 0
+
+    def confidence(n, coverage, days, *, reliable_n, developing_n):
+        if n >= reliable_n and coverage >= 70 and days >= 3:
+            return "RELIABLE"
+        if n >= developing_n and coverage >= 40 and days >= 2:
+            return "DEVELOPING"
+        return "LOW"
+
+    basis_counts = {}
+    for r in excursion_rows:
+        basis = str(r["excursion_basis"] or "legacy_or_unknown")
+        basis_counts[basis] = basis_counts.get(basis, 0) + 1
+
     return {
-        "exit_efficiency": avg([r['exit_efficiency'] for r in wins]),
-        "exit_efficiency_median": med([r['exit_efficiency'] for r in wins]),
-        "avg_mfe": avg([r['mfe_pct'] for r in rows]),
-        "avg_mae": avg([r['mae_pct'] for r in rows]),
-        "avg_mae_win": avg([r['mae_pct'] for r in wins]),
-        "avg_mae_loss": avg([r['mae_pct'] for r in losses]),
-        "excursion_n": len(rows),
-        "excursion_stock_n": sum(1 for r in rows if r["instrument_type"] == "STOCK"),
-        "excursion_option_n": sum(1 for r in rows if r["instrument_type"] == "OPTION"),
-        "excursion_future_n": sum(1 for r in rows if r["instrument_type"] == "FUTURE"),
+        "exit_efficiency": avg([r["exit_efficiency"] for r in capture_rows]),
+        "exit_efficiency_median": med([r["exit_efficiency"] for r in capture_rows]),
+        "avg_mfe": avg([r["mfe_pct"] for r in excursion_rows]),
+        "avg_mae": avg([r["mae_pct"] for r in excursion_rows]),
+        "avg_mae_win": avg([r["mae_pct"] for r in excursion_wins]),
+        "avg_mae_loss": avg([r["mae_pct"] for r in excursion_losses]),
+        "excursion_n": excursion_n,
+        "excursion_total_n": total_n,
+        "excursion_coverage_pct": excursion_coverage,
+        "excursion_days": excursion_days,
+        "excursion_total_days": total_days,
+        "excursion_confidence": confidence(
+            excursion_n, excursion_coverage, excursion_days,
+            reliable_n=15, developing_n=8,
+        ),
+        "capture_n": capture_n,
+        "capture_total_winners": winner_n,
+        "capture_coverage_pct": capture_coverage,
+        "capture_days": capture_days,
+        "capture_confidence": confidence(
+            capture_n, capture_coverage, capture_days,
+            reliable_n=10, developing_n=5,
+        ),
+        "excursion_stock_n": sum(1 for r in excursion_rows if r["instrument_type"] == "STOCK"),
+        "excursion_option_n": sum(1 for r in excursion_rows if r["instrument_type"] == "OPTION"),
+        "excursion_future_n": sum(1 for r in excursion_rows if r["instrument_type"] == "FUTURE"),
+        "excursion_basis_counts": basis_counts,
         "excursion_note": (
-            "Stocks use actual fill prices with Alpaca 1-minute highs/lows. "
-            "Options use the underlying ticker's directional 1-minute path; "
-            "futures use the configured ETF proxy."
+            "Stocks use actual fill prices with Alpaca 1-minute stock bars. "
+            "Options use actual Schwab option fills with Alpaca OCC option-premium bars. "
+            "Futures may use an ETF proxy and are excluded from profit-capture scoring."
         ),
     }
-
 
 def _net_profit_factor(trades):
     """Profit factor on realized after-commission P&L.
