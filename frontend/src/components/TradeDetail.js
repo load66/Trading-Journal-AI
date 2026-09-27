@@ -916,9 +916,14 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
   const plannedRisk = analysis?.risk_per_trade != null && Number(analysis.risk_per_trade) > 0
     ? Math.abs(Number(analysis.risk_per_trade)) : null;
+  const defaultMaxPremiumRisk = calculateDefaultPlannedRisk(trade);
+  const usesMaxPremiumRiskBaseline = plannedRisk != null
+    && defaultMaxPremiumRisk != null
+    && Math.abs(plannedRisk - defaultMaxPremiumRisk) < 0.01
+    && analysis?.r_multiple == null;
   const realizedRValue = analysis?.r_multiple != null
     ? Number(analysis.r_multiple)
-    : plannedRisk && trade.net_pnl != null
+    : plannedRisk && !usesMaxPremiumRiskBaseline && trade.net_pnl != null
       ? Number(trade.net_pnl) / plannedRisk
       : null;
   const realizedR = realizedRValue != null && Number.isFinite(realizedRValue)
@@ -1003,11 +1008,13 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         />
         <KpiCell
           label="Realized R"
-          value={<span className="num">{realizedR || 'Set risk'}</span>}
+          value={<span className="num">{realizedR || (usesMaxPremiumRiskBaseline ? 'Pending' : 'Set risk')}</span>}
           tone={realizedRValue != null ? (realizedRValue >= 0 ? 'pos' : 'neg') : undefined}
-          foot={plannedRisk
-            ? <>Planned risk <span className="num">{fmt$(plannedRisk)}</span></>
-            : <>Add planned risk to calculate R</>}
+          foot={usesMaxPremiumRiskBaseline
+            ? <>Max premium <span className="num">{fmt$(plannedRisk)}</span> · set premium-stop risk</>
+            : plannedRisk
+              ? <>Planned risk <span className="num">{fmt$(plannedRisk)}</span></>
+              : <>Add planned risk to calculate R</>}
         />
         <KpiCell label="Avg entry" value={<span className="num">{stats.avgEntry ? `${stats.avgEntry.toFixed(2)}` : 'n/a'}</span>} />
         <KpiCell label="Avg exit" value={<span className="num">{stats.avgExit ? `${stats.avgExit.toFixed(2)}` : 'n/a'}</span>} />
@@ -1153,10 +1160,18 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       }</strong>
                     </div>
                     <div>
-                      <EditField label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
+                      <EditField
+                        label={calculateDefaultPlannedRisk(trade) != null
+                          && Math.abs(Number(statsForm.risk_per_trade) - calculateDefaultPlannedRisk(trade)) < 0.01
+                          ? 'Max Premium Risk ($)'
+                          : 'Planned Risk ($)'}
+                        type="number"
+                        value={String(statsForm.risk_per_trade)}
+                        onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))}
+                      />
                       <div className="text-muted" style={{ fontSize: 11.5, marginTop: 4, lineHeight: 1.35 }}>
                         {calculateDefaultPlannedRisk(trade) != null
-                          ? `Auto-filled from total entry premium: ${stats.totalQty} contract${stats.totalQty === 1 ? '' : 's'} × ${stats.avgEntry.toFixed(2)} × 100 = ${calculateDefaultPlannedRisk(trade).toFixed(2)} max premium at risk. Edit this lower if your planned option-premium stop risk was smaller.`
+                          ? `Auto-filled from total entry premium: ${stats.totalQty} contract${stats.totalQty === 1 ? '' : 's'} × ${stats.avgEntry.toFixed(2)} × 100 = ${calculateDefaultPlannedRisk(trade).toFixed(2)} maximum premium loss. Enter a smaller dollar amount when your option-premium stop defines the true planned risk.`
                           : 'Total dollars accepted at risk for the full position. Enter this manually when max loss cannot be inferred safely.'}
                       </div>
                     </div>
@@ -1177,8 +1192,16 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       }
                       valueColor="var(--accent-line)"
                     />
-                    <StatRow label="Planned Risk" value={plannedRisk ? fmt$(-plannedRisk) : 'Not set'} valueColor={plannedRisk ? 'var(--caution)' : 'var(--text-secondary)'} />
-                    <StatRow label="Realized R" value={realizedR || 'Set planned risk to calculate'} valueColor={realizedRValue == null ? 'var(--text-secondary)' : realizedRValue >= 0 ? 'var(--green)' : 'var(--red)'} />
+                    <StatRow
+                      label={usesMaxPremiumRiskBaseline ? 'Max Premium Risk' : 'Planned Risk'}
+                      value={plannedRisk ? fmt$(-plannedRisk) : 'Not set'}
+                      valueColor={plannedRisk ? 'var(--caution)' : 'var(--text-secondary)'}
+                    />
+                    <StatRow
+                      label="Realized R"
+                      value={realizedR || (usesMaxPremiumRiskBaseline ? 'Pending premium-stop risk' : 'Set planned risk to calculate')}
+                      valueColor={realizedRValue == null ? 'var(--text-secondary)' : realizedRValue >= 0 ? 'var(--green)' : 'var(--red)'}
+                    />
                     {/* Excursion: how far the trade went your way and against you,
                         and how much of the favourable move you actually kept. */}
                     <StatRow
