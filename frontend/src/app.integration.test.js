@@ -217,6 +217,8 @@ beforeAll(() => {
   global.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
   Element.prototype.scrollIntoView = jest.fn();
   window.alert = jest.fn();
+  URL.createObjectURL = jest.fn(() => 'blob:trade-chart-review');
+  URL.revokeObjectURL = jest.fn();
 });
 
 beforeEach(() => __restoreMocks());
