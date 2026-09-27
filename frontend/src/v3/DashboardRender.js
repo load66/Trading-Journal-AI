@@ -1,7 +1,7 @@
 /* The V3 Today page. Presentation only: every value, handler and piece of
    state is passed in from Dashboard.js, so no behaviour lives here. */
 import { useState, useEffect } from 'react';
-import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, AlertTriangle } from 'lucide-react';
 import { calendarApi } from '../api';
 import {
   Measures, EquityCurve, DailyPnlBars, MonthGrid,
