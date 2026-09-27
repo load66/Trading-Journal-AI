@@ -3958,3 +3958,523 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     border-right: 0;
   }
 }
+
+
+/* ---------- professional LE trade review workspace ---------- */
+.trade-review-shell {
+  display: grid;
+  gap: 16px;
+  padding-top: 10px;
+}
+.trade-review-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 4px 0 2px;
+}
+.trade-review-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.trade-review-kicker,
+.trade-review-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-line);
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.trade-review-toolbar-copy {
+  max-width: 720px;
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.trade-review-templates {
+  padding: 15px;
+  border: 1px solid var(--divider);
+  background: var(--surface-inset);
+}
+.trade-review-templates-head,
+.trade-review-structured-head,
+.trade-review-journal-head,
+.trade-review-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.trade-review-templates-head h3,
+.trade-review-structured-head h3,
+.trade-review-journal-head h3 {
+  margin: 5px 0 0;
+  font-family: var(--font-display);
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -.02em;
+}
+.trade-review-templates-head p,
+.trade-review-structured-head p {
+  max-width: 760px;
+  margin: 5px 0 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.trade-review-template-source,
+.trade-review-analytics-badge,
+.trade-review-note-state,
+.trade-review-completion {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.trade-review-template-source {
+  color: var(--accent-line);
+  border-color: var(--accent-line-soft);
+}
+.trade-review-template-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 13px;
+}
+.trade-review-template-card {
+  appearance: none;
+  min-width: 0;
+  border: 1px solid var(--divider-soft);
+  background: var(--surface-page);
+  color: inherit;
+  padding: 13px;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .14s ease, background .14s ease, transform .14s ease;
+}
+.trade-review-template-card:hover,
+.trade-review-template-card:focus-visible {
+  border-color: var(--accent-line-soft);
+  background: var(--surface-panel);
+  transform: translateY(-1px);
+  outline: none;
+}
+.trade-review-template-card.featured {
+  box-shadow: inset 2px 0 0 var(--accent-line);
+}
+.trade-review-template-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--divider);
+  background: var(--surface-inset);
+  color: var(--accent-line);
+}
+.trade-review-template-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.trade-review-template-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.trade-review-template-title-row strong {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.trade-review-template-title-row small {
+  padding: 2px 5px;
+  border: 1px solid var(--divider);
+  color: var(--text-tertiary);
+  font-size: 7.5px;
+  font-weight: 750;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.trade-review-template-copy b {
+  color: var(--accent-line);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.trade-review-workspace-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(250px, .75fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.trade-review-journal,
+.trade-review-summary,
+.trade-review-structured {
+  min-width: 0;
+  border: 1px solid var(--divider);
+  background: var(--surface-page);
+}
+.trade-review-journal {
+  padding: 16px;
+}
+.trade-review-note-state.saved,
+.trade-review-completion.c4 {
+  color: var(--result-pos);
+  border-color: color-mix(in srgb, var(--result-pos) 40%, var(--divider));
+}
+.trade-review-note-state.empty,
+.trade-review-completion.c0,
+.trade-review-completion.c1,
+.trade-review-completion.c2,
+.trade-review-completion.c3 {
+  color: var(--text-tertiary);
+}
+.trade-review-journal-editor {
+  width: 100%;
+  min-height: 430px;
+  margin-top: 13px;
+  padding: 15px 16px;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 1px solid var(--divider);
+  border-radius: 0;
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.62;
+  tab-size: 2;
+  outline: none;
+}
+.trade-review-journal-editor:focus {
+  border-color: var(--accent-line-soft);
+  box-shadow: inset 2px 0 0 var(--accent-line);
+}
+.trade-review-journal-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 8.5px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.trade-review-journal-readonly {
+  min-height: 260px;
+  margin-top: 13px;
+  padding: 15px 16px;
+  border: 1px solid var(--divider-soft);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.62;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.trade-review-journal-readonly.empty {
+  display: grid;
+  place-items: center;
+  min-height: 190px;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  text-align: center;
+}
+.trade-review-summary {
+  padding: 16px;
+  background: var(--surface-inset);
+}
+.trade-review-summary-head {
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--divider);
+}
+.trade-review-summary-head > div:nth-child(2) {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.trade-review-summary-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  border: 1px solid var(--divider);
+  background: var(--surface-page);
+  color: var(--accent-line);
+}
+.trade-review-summary-title {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.trade-review-summary-subtitle {
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+}
+.trade-review-summary-grid {
+  display: grid;
+  gap: 1px;
+  margin-top: 13px;
+  border: 1px solid var(--divider-soft);
+  background: var(--divider-soft);
+}
+.trade-review-summary-cell {
+  min-width: 0;
+  padding: 12px;
+  background: var(--surface-page);
+}
+.trade-review-summary-cell span {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.trade-review-summary-cell strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.trade-review-summary-cell strong.neg {
+  color: var(--result-neg);
+}
+.trade-review-summary-cell small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+.trade-review-summary-cell.focus {
+  box-shadow: inset 2px 0 0 var(--accent-line);
+}
+.trade-review-patterns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 12px;
+}
+.trade-review-patterns > span {
+  flex-basis: 100%;
+  color: var(--text-tertiary);
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.trade-review-patterns b {
+  padding: 3px 6px;
+  border: 1px solid var(--divider);
+  color: var(--text-secondary);
+  font-size: 8.5px;
+  font-weight: 650;
+}
+.trade-review-structured {
+  padding: 16px;
+}
+.trade-review-structured-head {
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--divider);
+}
+.trade-review-analytics-badge {
+  color: var(--accent-line);
+  border-color: var(--accent-line-soft);
+}
+.trade-review-editor {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+}
+.trade-review-pick-group {
+  padding: 12px;
+  border: 1px solid var(--divider-soft);
+  background: var(--surface-inset);
+}
+.trade-review-pick-group.entry { box-shadow: inset 2px 0 0 var(--accent-line); }
+.trade-review-pick-group.exit { box-shadow: inset 2px 0 0 var(--result-pos); }
+.trade-review-pick-group.mistake { box-shadow: inset 2px 0 0 var(--caution); }
+.trade-review-pick-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.trade-review-pick-title {
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.trade-review-pick-subtitle {
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+}
+.trade-review-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.trade-review-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 29px;
+  padding: 5px 8px;
+  border: 1px solid var(--divider);
+  background: var(--surface-page);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+.trade-review-chip:hover,
+.trade-review-chip:focus-visible {
+  border-color: var(--accent-line-soft);
+  color: var(--text-primary);
+  outline: none;
+}
+.trade-review-chip.active {
+  border-color: var(--accent-line-soft);
+  background: var(--accent-soft);
+  color: var(--accent-line);
+}
+.trade-review-readonly {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+}
+.trade-review-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.trade-review-context > div {
+  min-width: 130px;
+  padding: 9px 10px;
+  border: 1px solid var(--divider-soft);
+  background: var(--surface-inset);
+}
+.trade-review-context span {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.trade-review-context strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 10.5px;
+}
+.trade-review-note-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--divider-soft);
+  background: var(--divider-soft);
+}
+.trade-review-note-grid article {
+  min-width: 0;
+  min-height: 126px;
+  padding: 12px;
+  background: var(--surface-page);
+}
+.trade-review-note-grid article.has-mistake {
+  box-shadow: inset 2px 0 0 var(--caution);
+}
+.trade-review-note-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.trade-review-note-title svg {
+  color: var(--accent-line);
+}
+.trade-review-note-copy {
+  margin-top: 9px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .trade-review-workspace-grid {
+    grid-template-columns: 1fr;
+  }
+  .trade-review-template-grid,
+  .trade-review-note-grid {
+    grid-template-columns: 1fr;
+  }
+  .trade-review-journal-editor {
+    min-height: 360px;
+  }
+}
+
+@media (max-width: 600px) {
+  .trade-review-toolbar,
+  .trade-review-templates-head,
+  .trade-review-structured-head {
+    flex-direction: column;
+  }
+  .trade-review-toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .trade-review-template-card {
+    padding: 12px 10px;
+  }
+  .trade-review-templates,
+  .trade-review-journal,
+  .trade-review-summary,
+  .trade-review-structured {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .trade-review-journal-editor {
+    min-height: 320px;
+    padding: 13px 12px;
+    font-size: 11px;
+  }
+  .trade-review-journal-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+}
