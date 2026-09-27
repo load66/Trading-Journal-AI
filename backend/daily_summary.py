@@ -4,6 +4,7 @@ import re
 import httpx
 
 from behavior_rules import detect_daily_flags, deterministic_strengths, recorded_observations
+from trade_metrics import trade_is_closed
 
 from ai_analysis import (
     GROQ_API_URL,
@@ -85,7 +86,8 @@ def build_daily_context(conn, date: str, account_id) -> dict:
             d['executions'] = json.loads(d.get('executions') or '[]')
         except Exception:
             d['executions'] = []
-        trades.append(d)
+        if trade_is_closed(d):
+            trades.append(d)
 
     # Day KPIs
     all_pnl = [t.get('net_pnl') or 0 for t in trades]
@@ -111,12 +113,13 @@ def build_daily_context(conn, date: str, account_id) -> dict:
 
     # All-time KPIs for context
     at_params = []
-    at_sql = "SELECT net_pnl, gross_pnl FROM trades WHERE 1=1"
+    at_sql = "SELECT net_pnl, gross_pnl, side, executions FROM trades WHERE 1=1"
     if account_id is not None:
         at_sql += " AND account_id = ?"
         at_params.append(account_id)
-    at_rows = conn.execute(at_sql, at_params).fetchall()
-    at_all = [dict(r)['net_pnl'] or 0 for r in at_rows]
+    at_rows = [dict(r) for r in conn.execute(at_sql, at_params).fetchall()]
+    at_rows = [r for r in at_rows if trade_is_closed(r)]
+    at_all = [r['net_pnl'] or 0 for r in at_rows]
     at_wins = [p for p in at_all if p > 0]
     at_losses = [p for p in at_all if p < 0]
     at_total = len(at_all)
