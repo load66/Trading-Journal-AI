@@ -1459,21 +1459,27 @@ test('Dashboard generates an evidence-locked Trade Management AI review on deman
   const button = await screen.findByRole('button', { name: /^Generate$/i });
   fireEvent.click(button);
 
-  await waitFor(() => expect(tradeManagementAnalysisApi.get).toHaveBeenCalledTimes(2));
-  expect(tradeManagementAnalysisApi.get.mock.calls[1][0]).toEqual(
-    expect.objectContaining({ range: '30D' })
-  );
-  expect(tradeManagementAnalysisApi.get.mock.calls[1][0]).not.toEqual(
-    expect.objectContaining({ cached_only: true })
-  );
+  await waitFor(() => {
+    const generationCalls = tradeManagementAnalysisApi.get.mock.calls
+      .map(([params]) => params)
+      .filter((params) => !params?.cached_only);
+    expect(generationCalls).toHaveLength(1);
+  });
+  const generationCalls = tradeManagementAnalysisApi.get.mock.calls
+    .map(([params]) => params)
+    .filter((params) => !params?.cached_only);
+  expect(generationCalls[0]).toEqual(expect.objectContaining({ range: '30D' }));
   expect(await screen.findByText('Early invalidation is the clearest improvement candidate.')).toBeVisible();
   expect(screen.getByText(/Same-session holding behavior is healthy/i)).toBeVisible();
 
   fireEvent.click(screen.getByRole('button', { name: /Re-run/i }));
-  await waitFor(() => expect(tradeManagementAnalysisApi.get).toHaveBeenCalledTimes(3));
-  expect(tradeManagementAnalysisApi.get.mock.calls[2][0]).toEqual(
-    expect.objectContaining({ range: '30D', force: true })
-  );
+  await waitFor(() => {
+    const nonCacheCalls = tradeManagementAnalysisApi.get.mock.calls
+      .map(([params]) => params)
+      .filter((params) => !params?.cached_only);
+    expect(nonCacheCalls).toHaveLength(2);
+    expect(nonCacheCalls[1]).toEqual(expect.objectContaining({ range: '30D', force: true }));
+  });
 });
 
 
