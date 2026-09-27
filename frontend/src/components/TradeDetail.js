@@ -517,6 +517,7 @@ function TradeJournalNote({ value, editing, onChange }) {
         <>
           <textarea
             className="trade-review-journal-editor"
+            aria-label="Trade journal note"
             value={text}
             onChange={e => onChange(e.target.value)}
             placeholder="Write what happened, what you saw, how you managed the trade, and what you will repeat or change next time…"
