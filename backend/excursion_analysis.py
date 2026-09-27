@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from trade_metrics import execution_datetime
 
 ET = ZoneInfo("America/New_York")
-EXCURSION_ENGINE_VERSION = "2026.09.27.2"
+EXCURSION_ENGINE_VERSION = "2026.09.27.3"
 
 
 def _execs(trade: dict) -> list[dict]:
