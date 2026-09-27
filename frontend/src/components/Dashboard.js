@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { kpisApi, tradesApi, edgeReportApi, goalsApi, smokingGunLibraryApi } from '../api';
+import { kpisApi, tradesApi, edgeReportApi, goalsApi, smokingGunLibraryApi, excursionApi } from '../api';
 import DateRangePicker from './DateRangePicker';
 import DashboardRender from '../v3/DashboardRender';
 import {
@@ -158,10 +158,14 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       params.date_to = latestTradeDate;
     }
 
-    Promise.all([
+    const backfill = params.date_from && params.date_to
+      ? excursionApi.calculateRange(params).catch(() => null)
+      : Promise.resolve(null);
+
+    backfill.then(() => Promise.all([
       kpisApi.get(params).then(r => r.data),
       edgeReportApi.get(params).then(r => r.data),
-    ]).then(([nextKpis, nextEdge]) => {
+    ])).then(([nextKpis, nextEdge]) => {
       if (!current()) return;
       setManagementKpis(nextKpis);
       setManagementEdge(nextEdge);
