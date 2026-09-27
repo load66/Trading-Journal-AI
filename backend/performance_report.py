@@ -7,6 +7,18 @@ from math import inf
 from statistics import mean, median
 
 from behavior_rules import detect_daily_flags
+from trade_metrics import (
+    completed_trades,
+    entry_fills as canonical_entry_fills,
+    entry_notional as canonical_entry_notional,
+    exit_fills as canonical_exit_fills,
+    first_entry_clock_minutes,
+    first_entry_datetime,
+    hold_seconds,
+    is_open_position,
+    last_exit_datetime,
+    parse_executions,
+)
 
 from smoking_gun_library import (
     ANALYTICS_ENGINE_VERSION,
@@ -70,45 +82,40 @@ def _entry_exit_actions(side):
 
 
 def enrich_trade(trade):
+    """Attach canonical broker-execution facts used by every report section."""
     t = dict(trade)
-    execs = _load_execs(t)
-    entry_action, exit_action = _entry_exit_actions(t.get("side"))
-    entries = [e for e in execs if e.get("action") == entry_action]
-    exits = [e for e in execs if e.get("action") == exit_action]
-
-    def dt(e):
-        return _parse_time(e.get("date") or t.get("date"), e.get("time"))
-
-    entries = sorted(entries, key=lambda e: dt(e) or datetime.max)
-    exits = sorted(exits, key=lambda e: dt(e) or datetime.max)
-    entry_dt = dt(entries[0]) if entries else None
-    exit_dt = dt(exits[-1]) if exits else None
-    hold_sec = (exit_dt - entry_dt).total_seconds() if entry_dt and exit_dt else None
-    if hold_sec is not None and hold_sec < 0:
-        hold_sec = None
+    execs = parse_executions(t)
+    entries = canonical_entry_fills(t)
+    exits = canonical_exit_fills(t)
 
     entry_qty = sum(float(e.get("qty") or 0) for e in entries)
     avg_entry = None
     if entry_qty > 0:
-        avg_entry = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries) / entry_qty
-
-    qty_bot = sum(float(e.get("qty") or 0) for e in execs if e.get("action") == "BOT")
-    qty_sold = sum(float(e.get("qty") or 0) for e in execs if e.get("action") == "SOLD")
-    is_open = abs(qty_bot - qty_sold) > 1e-6
+        avg_entry = sum(
+            float(e.get("qty") or 0) * float(e.get("price") or 0)
+            for e in entries
+        ) / entry_qty
 
     t.update({
         "execs": execs,
         "entries": entries,
         "exits": exits,
-        "entry_dt": entry_dt,
-        "exit_dt": exit_dt,
-        "hold_sec": hold_sec,
+        "entry_dt": first_entry_datetime(t),
+        "exit_dt": last_exit_datetime(t),
+        "entry_clock_min": first_entry_clock_minutes(t),
+        "hold_sec": hold_seconds(t),
         "entry_qty": entry_qty,
         "avg_entry": avg_entry,
-        "entry_notional": entry_qty * (avg_entry or 0),
+        "entry_notional": canonical_entry_notional(t),
         "pnl": float(t.get("net_pnl") or 0),
-        "is_open": is_open,
-        "open_quantity": round(abs(qty_bot - qty_sold), 6),
+        "is_open": is_open_position(t),
+        "open_quantity": round(
+            abs(
+                sum(float(e.get("qty") or 0) for e in execs if str(e.get("action") or "").upper() == "BOT")
+                - sum(float(e.get("qty") or 0) for e in execs if str(e.get("action") or "").upper() == "SOLD")
+            ),
+            6,
+        ),
     })
     return t
 
@@ -343,11 +350,14 @@ def _averaging_down(t):
 
 
 def _time_bucket(t):
-    dt = t.get("entry_dt")
-    if not dt:
+    mins = t.get("entry_clock_min")
+    if mins is None:
         return None
-    mins = dt.hour * 60 + dt.minute
-    start = (mins // 30) * 30
+    if mins < 8 * 60 + 30:
+        return "Pre-market"
+    if mins >= 15 * 60:
+        return "After-hours"
+    start = int(mins // 30) * 30
     h, m = divmod(start, 60)
     return f"{h:02d}:{m:02d}"
 
@@ -424,7 +434,7 @@ def _behavior_analysis(trades):
                 revenge_rows.append(r)
             if r["pnl"] < 0:
                 loss_seen = True
-    add_flaw("Revenge / same-ticker re-entry after loss", revenge_rows)
+    add_flaw("Same-ticker re-entry after loss", revenge_rows)
     add_flaw("Impulsive same-ticker re-entry <=30 sec", chase_rows)
     add_flaw("Averaging down / adding to losers", avg_down)
     add_flaw("Sub-2-minute trades", [t for t in trades if t.get("hold_sec") is not None and t["hold_sec"] < 120])
@@ -440,12 +450,14 @@ def _behavior_analysis(trades):
         add_flaw(f"High-volume trading days ({label} trades)", cohort)
 
     opening_rows = [
-        t for t in trades if t.get("entry_dt")
-        and 570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 600
+        t for t in trades
+        if t.get("entry_clock_min") is not None
+        and 510 <= t["entry_clock_min"] < 540
     ]
     closing_rows = [
-        t for t in trades if t.get("entry_dt")
-        and 930 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 960
+        t for t in trades
+        if t.get("entry_clock_min") is not None
+        and 870 <= t["entry_clock_min"] < 900
     ]
     add_flaw("First 30 minutes", opening_rows)
     add_flaw("Last 30 minutes", closing_rows)
@@ -554,7 +566,7 @@ def _compact_trade_ledger(trades):
 def build_performance_report(trades):
     enriched = [enrich_trade(t) for t in trades]
     open_positions = [t for t in enriched if t.get("is_open")]
-    rows = [t for t in enriched if not t.get("is_open") and t.get("net_pnl") is not None]
+    rows = [enrich_trade(t) for t in completed_trades(trades)]
     hold_order = [x[0] for x in HOLD_BUCKETS]
     option_order = [x[0] for x in OPTION_SIZE_BUCKETS]
     share_order = [x[0] for x in SHARE_NOTIONAL_BUCKETS]
@@ -581,7 +593,7 @@ def build_performance_report(trades):
     daily = _daily_rows(rows)
     behavior = _behavior_analysis(rows)
     raw_by_day = defaultdict(list)
-    for t in trades:
+    for t in rows:
         if t.get("date"):
             raw_by_day[t.get("date")].append(t)
     verified_rule_flags = []
@@ -593,11 +605,11 @@ def build_performance_report(trades):
     behavior["verified_rule_flags"] = verified_rule_flags
     time_blocks = _group_stats(rows, _time_bucket)
     dow = _group_stats(rows, _dow, ["Mon", "Tue", "Wed", "Thu", "Fri"])
-    first10 = _stats([t for t in rows if t.get("entry_dt") and 570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 580])
-    rest = _stats([t for t in rows if t.get("entry_dt") and not (570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 580)])
-    first30 = _stats([t for t in rows if t.get("entry_dt") and 570 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 600])
-    last30 = _stats([t for t in rows if t.get("entry_dt") and 930 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 960])
-    middle = _stats([t for t in rows if t.get("entry_dt") and 600 <= t["entry_dt"].hour * 60 + t["entry_dt"].minute < 930])
+    first10 = _stats([t for t in rows if t.get("entry_clock_min") is not None and 510 <= t["entry_clock_min"] < 520])
+    rest = _stats([t for t in rows if t.get("entry_clock_min") is not None and not (510 <= t["entry_clock_min"] < 520)])
+    first30 = _stats([t for t in rows if t.get("entry_clock_min") is not None and 510 <= t["entry_clock_min"] < 540])
+    last30 = _stats([t for t in rows if t.get("entry_clock_min") is not None and 870 <= t["entry_clock_min"] < 900])
+    middle = _stats([t for t in rows if t.get("entry_clock_min") is not None and 540 <= t["entry_clock_min"] < 870])
 
     size_multiples = sorted(t["size_multiple"] for t in rows if t.get("size_multiple") is not None)
     lo = size_multiples[max(0, int(len(size_multiples) * .10) - 1)] if size_multiples else None
