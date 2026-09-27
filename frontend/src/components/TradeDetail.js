@@ -17,8 +17,8 @@ const fmtSigned$ = (v) => {
   return (n >= 0 ? '+$' : '-$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-const SCREENSHOT_MAX_DIMENSION = 1200;
-const SCREENSHOT_TARGET_BYTES = 500 * 1024;
+const SCREENSHOT_MAX_DIMENSION = 2200;
+const SCREENSHOT_TARGET_BYTES = Math.round(1.5 * 1024 * 1024);
 
 function canvasBlob(canvas, type, quality) {
   return new Promise((resolve, reject) => {
@@ -61,10 +61,13 @@ export async function optimizeChartScreenshot(file) {
   const image = await loadScreenshotImage(file);
   try {
     const originalLongEdge = Math.max(image.width, image.height);
-    const dimensionSteps = [SCREENSHOT_MAX_DIMENSION, 1000, 800]
+    // Trading charts contain small labels and thin level lines that need more
+    // source pixels than a normal photo thumbnail. Preserve desktop detail first,
+    // then step down only when necessary to keep storage bounded.
+    const dimensionSteps = [SCREENSHOT_MAX_DIMENSION, 1920, 1600, 1400]
       .map(maxDimension => Math.min(maxDimension, originalLongEdge))
       .filter((value, index, arr) => value > 0 && arr.indexOf(value) === index);
-    const qualitySteps = [0.78, 0.66, 0.54];
+    const qualitySteps = [0.92, 0.88, 0.84, 0.80];
 
     let bestBlob = null;
     for (const maxDimension of dimensionSteps) {

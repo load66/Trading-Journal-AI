@@ -2,6 +2,7 @@ import {
   calculateDefaultPlannedRisk,
   executionTimeETMinutes,
   formatExecutionTimeET,
+  optimizeChartScreenshot,
 } from './TradeDetail';
 
 describe('TradeDetail Eastern Time normalization', () => {
@@ -37,5 +38,55 @@ describe('TradeDetail option planned-risk baseline', () => {
       side: 'LONG',
       executions: [{ action: 'BOT', qty: 100, price: 50 }],
     })).toBeNull();
+  });
+});
+
+
+describe('TradeDetail chart screenshot optimization', () => {
+  test('preserves a high-resolution desktop chart before stepping down quality', async () => {
+    const originalCreateImageBitmap = global.createImageBitmap;
+    const originalCreateElement = document.createElement.bind(document);
+
+    const close = jest.fn();
+    global.createImageBitmap = jest.fn().mockResolvedValue({
+      width: 2560,
+      height: 1440,
+      close,
+    });
+
+    const drawImage = jest.fn();
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: jest.fn(() => ({
+        drawImage,
+        imageSmoothingEnabled: false,
+        imageSmoothingQuality: 'low',
+      })),
+      toBlob: jest.fn((callback, type, quality) => {
+        callback(new Blob([new Uint8Array(1024)], { type }));
+      }),
+    };
+
+    const createElementSpy = jest.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
+      if (tagName === 'canvas') return canvas;
+      return originalCreateElement(tagName, options);
+    });
+
+    try {
+      const source = new File([new Uint8Array(2 * 1024 * 1024)], 'chart.png', { type: 'image/png' });
+      const optimized = await optimizeChartScreenshot(source);
+
+      expect(canvas.width).toBe(2200);
+      expect(canvas.height).toBe(1238);
+      expect(canvas.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/webp', 0.92);
+      expect(drawImage).toHaveBeenCalled();
+      expect(optimized.name).toBe('trade-review.webp');
+      expect(optimized.type).toBe('image/webp');
+      expect(close).toHaveBeenCalled();
+    } finally {
+      createElementSpy.mockRestore();
+      global.createImageBitmap = originalCreateImageBitmap;
+    }
   });
 });
