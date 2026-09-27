@@ -7,7 +7,8 @@ not infer motive or psychology. A same-ticker entry after a loss is called a
 from __future__ import annotations
 
 import json
-from datetime import datetime
+
+from trade_metrics import execution_datetime, split_entry_exit
 
 
 def _execs(trade: dict) -> list[dict]:
@@ -20,27 +21,19 @@ def _execs(trade: dict) -> list[dict]:
     return raw if isinstance(raw, list) else []
 
 
-def _dt(e: dict) -> datetime | None:
-    try:
-        return datetime.fromisoformat(f"{e.get('date')}T{e.get('time')}")
-    except Exception:
-        return None
+def _dt(e: dict) -> object | None:
+    return execution_datetime(e)
+
+
+def _sort_key(row: dict) -> float:
+    dt = row.get("entry_dt")
+    return dt.timestamp() if dt is not None else float("inf")
 
 
 def enrich_trade(trade: dict) -> dict:
     t = dict(trade)
     side = str(t.get("side") or "").upper()
-    ea = "BOT" if side == "LONG" else "SOLD"
-    xa = "SOLD" if side == "LONG" else "BOT"
-    rows = _execs(t)
-    entries = sorted(
-        [e for e in rows if str(e.get("action") or "").upper() == ea and _dt(e)],
-        key=_dt,
-    )
-    exits = sorted(
-        [e for e in rows if str(e.get("action") or "").upper() == xa and _dt(e)],
-        key=_dt,
-    )
+    entries, exits = split_entry_exit(t)
     t["entries"] = entries
     t["exits"] = exits
     t["entry_dt"] = _dt(entries[0]) if entries else None
@@ -88,7 +81,7 @@ def averaging_down(t: dict) -> bool:
 
 def detect_daily_flags(trades: list[dict], historical_daily_counts: list[int] | None = None) -> list[dict]:
     rows = [enrich_trade(t) for t in trades]
-    rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+    rows = sorted(rows, key=_sort_key)
     flags = []
 
     def add(code, title, detail, row=None, severity="medium", metric=None):
