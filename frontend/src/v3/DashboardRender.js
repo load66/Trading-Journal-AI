@@ -236,24 +236,24 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
               : 'Favorable and adverse excursion are too close for a firm directional diagnosis.';
 
   const bottomCopy = (() => {
-    const csvSentence = holdReliable
+    const holdSentence = holdReliable
       ? 'Winners average ' + winnerHold.toFixed(1) + ' min and losers average ' + loserHold.toFixed(1) + ' min.'
       : 'There is not yet enough hold-time evidence for a firm comparison.';
 
     if (holdLeak) {
-      return csvSentence + ' The clearest management issue is holding losing trades longer, and the median confirms the same pattern. Excursion-based capture/risk stays secondary.';
+      return holdSentence + ' The clearest management issue is holding losing trades longer, and the median confirms the same pattern. Excursion-based capture/risk stays secondary.';
     }
 
     if (holdMixed) {
-      return csvSentence + ' Average and median hold times disagree, so the data does not support a firm hold-time diagnosis. Supplemental market-path coverage is ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
+      return holdSentence + ' Average and median hold times disagree, so the data does not support a firm hold-time diagnosis. Supplemental market-path coverage is ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
     }
 
     if (!captureUsable && !riskUsable) {
-      return csvSentence + ' No excursion-based diagnosis is issued because actual stock/option-premium path coverage is only ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
+      return holdSentence + ' No excursion-based diagnosis is issued because actual stock/option-premium path coverage is only ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
     }
 
     if (captureUsable && captureConfidence === 'RELIABLE' && capture < captureGoal) {
-      return csvSentence + ' Profit capture is ' + capture.toFixed(0) + '% on ' + captureN + ' covered winners, below your ' + captureGoal.toFixed(0) + '% goal. That is the strongest excursion-based management leak in this window.';
+      return holdSentence + ' Profit capture is ' + capture.toFixed(0) + '% on ' + captureN + ' covered winners, below your ' + captureGoal.toFixed(0) + '% goal. That is the strongest excursion-based management leak in this window.';
     }
 
     if (riskUsable && excursionConfidence === 'RELIABLE' && earlyFailurePattern) {
@@ -261,23 +261,23 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       const winnerHeat = oneDecimal(winnerMedianMae);
       const weakLosers = loserMfeLe5Pct.toFixed(0);
       const winnerRoom = winnersBeyond20Pct == null ? null : winnersBeyond20Pct.toFixed(0);
-      return csvSentence + ' The clearest improvement candidate is entry quality / early invalidation: losers reach a median -' + loserHeat + '% MAE versus -' + winnerHeat + '% for winners, and ' + weakLosers + '% of losers never achieve +5% MFE.'
+      return holdSentence + ' The clearest improvement candidate is entry quality / early invalidation: losers reach a median -' + loserHeat + '% MAE versus -' + winnerHeat + '% for winners, and ' + weakLosers + '% of losers never achieve +5% MFE.'
         + (winnerRoom == null ? '' : ' Do not use a blanket -20% stop: ' + winnerRoom + '% of winners also exceeded -20% MAE, so the rule should be setup-specific.');
     }
 
     if (riskUsable && excursionConfidence === 'RELIABLE' && riskMixed) {
-      return csvSentence + ' Excursion averages and medians disagree, so outliers are affecting the risk picture and no firm MFE/MAE diagnosis is promoted.';
+      return holdSentence + ' Excursion averages and medians disagree, so outliers are affecting the risk picture and no firm MFE/MAE diagnosis is promoted.';
     }
 
     if (riskUsable && excursionConfidence === 'RELIABLE' && riskLeak) {
-      return csvSentence + ' Covered trades show more adverse than favorable excursion in both average and median behavior, so risk containment is the strongest excursion-based concern.';
+      return holdSentence + ' Covered trades show more adverse than favorable excursion in both average and median behavior, so risk containment is the strongest excursion-based concern.';
     }
 
     if ((captureUsable && captureConfidence === 'DEVELOPING') || (riskUsable && excursionConfidence === 'DEVELOPING')) {
-      return csvSentence + ' Excursion evidence is still developing, so the dashboard will not promote it to a firm diagnosis yet.';
+      return holdSentence + ' Excursion evidence is still developing, so the dashboard will not promote it to a firm diagnosis yet.';
     }
 
-    return csvSentence + ' The currently covered excursion data does not identify a dominant management leak.';
+    return holdSentence + ' The currently covered excursion data does not identify a dominant management leak.';
   })();
 
   const captureEvidence = captureN + '/' + captureWinnerTotal + ' winning trades · ' + captureCoverage.toFixed(0) + '% coverage · ' + captureConfidence;
