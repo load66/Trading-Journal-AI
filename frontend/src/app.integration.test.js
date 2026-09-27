@@ -651,6 +651,90 @@ test('Dashboard withholds extreme capture when evidence coverage is low', async 
   expect(screen.getByText(/10\/47 trades · 21% coverage · LOW/i)).toBeVisible();
 });
 
+test('management backfill refresh survives same-range dashboard rerenders', async () => {
+  let resolveBackfill;
+  let resolveRecent;
+
+  const backfillPromise = new Promise(resolve => { resolveBackfill = resolve; });
+  const recentPromise = new Promise(resolve => { resolveRecent = resolve; });
+
+  excursionApi.calculateRange.mockImplementation(() =>
+    backfillPromise.then(() => ({ data: { computed: 105, skipped: 42 } }))
+  );
+
+  tradesApi.list.mockImplementation((params = {}) => {
+    if (params.open_only) return Promise.resolve({ data: [] });
+    if (params.closed_only) return recentPromise;
+    return Promise.resolve({ data: [] });
+  });
+
+  let rangedCalls = 0;
+  kpisApi.get.mockImplementation((params = {}) => {
+    if (!params.date_from) {
+      return Promise.resolve({
+        data: {
+          total_net_pnl: 1000,
+          total_trades: 159,
+          daily_pnl: [{ date: '2026-09-25', net_pnl: 100, cumulative: 1000 }],
+        },
+      });
+    }
+
+    rangedCalls += 1;
+    const refreshed = rangedCalls >= 3;
+    return Promise.resolve({
+      data: refreshed ? {
+        total_net_pnl: 1000,
+        total_trades: 159,
+        exit_efficiency: 66.74,
+        capture_n: 62,
+        capture_winner_total: 81,
+        capture_coverage_pct: 76.5,
+        capture_confidence: 'RELIABLE',
+        avg_mfe: 18.2,
+        avg_mae: 7.1,
+        excursion_n: 117,
+        management_coverage_pct: 73.6,
+        excursion_confidence: 'RELIABLE',
+        excursion_days: 21,
+        daily_pnl: [{ date: '2026-09-25', net_pnl: 100, cumulative: 1000 }],
+      } : {
+        total_net_pnl: 1000,
+        total_trades: 159,
+        exit_efficiency: null,
+        capture_n: 7,
+        capture_winner_total: 81,
+        capture_coverage_pct: 8.6,
+        capture_confidence: 'LOW',
+        avg_mfe: null,
+        avg_mae: null,
+        excursion_n: 12,
+        management_coverage_pct: 7.5,
+        excursion_confidence: 'LOW',
+        excursion_days: 1,
+        daily_pnl: [{ date: '2026-09-25', net_pnl: 100, cumulative: 1000 }],
+      },
+    });
+  });
+
+  await renderApp();
+  await waitFor(() => expect(excursionApi.calculateRange).toHaveBeenCalled());
+
+  await act(async () => {
+    resolveRecent({ data: [{ date: '2026-09-25', ticker: 'QQQ', net_pnl: 10 }] });
+    await Promise.resolve();
+  });
+
+  await act(async () => {
+    resolveBackfill();
+    await backfillPromise;
+  });
+
+  expect(await screen.findByText(/117\/159 trades · 74% coverage · RELIABLE/i)).toBeVisible();
+  expect(screen.getAllByText(/62\/81 winning trades · 77% coverage · RELIABLE/i).length).toBeGreaterThanOrEqual(2);
+  expect(screen.queryByText(/12\/159 trades · 8% coverage · LOW/i)).not.toBeInTheDocument();
+});
+
 test('Dashboard reports unavailable profit capture without invalid meter semantics', async () => {
   kpisApi.get.mockResolvedValue({
     data: {
