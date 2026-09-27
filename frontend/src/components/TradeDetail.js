@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, Maximize2 } from 'lucide-react';
-import { tradesApi, chartApi } from '../api';
+import { tradesApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
@@ -412,19 +412,6 @@ export function executionTimeETMinutes(dateStr, timeStr) {
   return parts ? parts.hour * 60 + parts.minute : null;
 }
 
-function barETMinutes(timestamp) {
-  if (!timestamp) return null;
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: DISPLAY_TIME_ZONE,
-      hour: '2-digit', minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(timestamp))
-      .filter(p => p.type !== 'literal')
-      .map(p => [p.type, p.value])
-  );
-  return Number(parts.hour) * 60 + Number(parts.minute);
-}
 
 const TABS = ['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'Chart Review'];
 
