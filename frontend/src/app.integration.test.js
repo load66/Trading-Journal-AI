@@ -462,9 +462,9 @@ test('guided Review quick picks generate journal text and actionable correction'
   const exitNotes = screen.getByRole('textbox', { name: 'Exit notes' });
   const mistakeNotes = screen.getByRole('textbox', { name: 'Mistake \/ improvement notes' });
 
-  expect(entryNotes).toHaveValue(expect.stringContaining('Entered after the breakout level held on a retest.'));
-  expect(exitNotes).toHaveValue(expect.stringContaining('Trimmed into the high of day, then trailed the remainder using the 8 EMA on the 10-minute timeframe.'));
-  expect(mistakeNotes).toHaveValue(expect.stringContaining('Held a losing trade too long after the setup stopped working.'));
+  expect(entryNotes.value).toContain('Entered after the breakout level held on a retest.');
+  expect(exitNotes.value).toContain('Trimmed into the high of day, then trailed the remainder using the 8 EMA on the 10-minute timeframe.');
+  expect(mistakeNotes.value).toContain('Held a losing trade too long after the setup stopped working.');
 
   fireEvent.click(screen.getByRole('button', { name: /Save review/i }));
   await waitFor(() => expect(tradesApi.updateAnalysis).toHaveBeenCalled());
