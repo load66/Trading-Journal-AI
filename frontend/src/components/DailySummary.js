@@ -123,6 +123,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
     const requestId = ++dayRequestRef.current;
     setLoading(true);
     setSummaryLoading(true);
+    setRegenerating(false);
     setSummaryError('');
     setSummary(null);
     setCbDismissed(false);
