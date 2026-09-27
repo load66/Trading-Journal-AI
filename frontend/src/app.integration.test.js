@@ -145,7 +145,10 @@ jest.mock('./api', () => {
       { name: 'OneOption', description: null, trades: 1, aliases: [] },
     ],
     tags: {
-      mistake: [{ name: 'Sized too big', description: null, trades: 6, aliases: [] }],
+      mistake: [
+        { name: 'Sized too big', description: null, trades: 6, aliases: [] },
+        { name: 'Entered Too Close to Resistance', description: 'Higher-priority resistance remained overhead.', trades: 0, aliases: [] },
+      ],
       execution: [{ name: 'Scaled out', description: null, trades: 20, aliases: [] }],
       setup: [], emotion: [], outcome: [],
     },
@@ -168,6 +171,8 @@ jest.mock('./api', () => {
       addExecution: fn(() => ok({})),
       getAnalysis: fn(() => ok(null)),
       updateAnalysis: fn((tradeGroup, payload) => ok(payload)),
+      addTag: fn((tradeGroup, payload) => ok({ id: 901, trade_group: tradeGroup, ...payload, source: 'manual' })),
+      deleteTag: fn((tagId) => ok({ deleted: true, id: tagId })),
       uploadChartScreenshot: fn(() => ok({ chart_screenshot_path: 'trade-review/test/chart.png' })),
       getChartScreenshot: fn(() => ok(new Blob(['image'], { type: 'image/png' }))),
       deleteChartScreenshot: fn(() => ok({ deleted: true })),
@@ -565,6 +570,38 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
   expect(screen.getByRole('button', { name: /Add Execution/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit execution 1' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Delete execution 1' })).toBeInTheDocument();
+});
+
+test('Tags uses the Settings library and adds a saved mistake tag', async () => {
+  tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: {}, tags: [] } });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
+  fireEvent.click(row);
+
+  const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Tags' }));
+
+  expect(await screen.findByText('Trade Tags')).toBeVisible();
+  expect(screen.queryByLabelText('Tag value')).not.toBeInTheDocument();
+
+  const category = screen.getByRole('combobox', { name: 'Tag category' });
+  expect(category).toHaveValue('mistake');
+
+  const savedTag = screen.getByRole('combobox', { name: 'Saved tag' });
+  expect(within(savedTag).getByRole('option', { name: 'Entered Too Close to Resistance' })).toBeInTheDocument();
+  fireEvent.change(savedTag, { target: { value: 'Entered Too Close to Resistance' } });
+
+  expect(screen.getByText('Higher-priority resistance remained overhead.')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Add tag' }));
+
+  await waitFor(() => expect(tradesApi.addTag).toHaveBeenCalledWith(
+    expect.any(String),
+    { tag_type: 'mistake', tag_value: 'Entered Too Close to Resistance' },
+  ));
+  expect(await screen.findByText('Entered Too Close to Resistance')).toBeVisible();
 });
 
 test('Chart Review is the single professional screenshot workspace', async () => {
