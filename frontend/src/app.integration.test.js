@@ -168,6 +168,9 @@ jest.mock('./api', () => {
       addExecution: fn(() => ok({})),
       getAnalysis: fn(() => ok(null)),
       updateAnalysis: fn((tradeGroup, payload) => ok(payload)),
+      uploadChartScreenshot: fn(() => ok({ chart_screenshot_path: 'trade-review/test/chart.png' })),
+      getChartScreenshot: fn(() => ok(new Blob(['image'], { type: 'image/png' }))),
+      deleteChartScreenshot: fn(() => ok({ deleted: true })),
       getLeReview: fn(() => ok({ available: false, reason: 'No LE review in tests', data_warnings: [] })),
       getLeLevels: fn(() => ok({ available: true, levels: {}, feed: 'sip', warnings: [] })),
       getAnalysisOptions: fn(() => ok({ strategies: [], idea_sources: [] })),
@@ -417,7 +420,7 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
 
   const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
   const names = within(tablist).getAllByRole('tab').map(t => t.textContent.trim());
-  expect(names).toEqual(['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'What If']);
+  expect(names).toEqual(['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'Chart Review']);
   expect(screen.getByRole('button', { name: /Back to trades/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Previous trade/ })).toBeDisabled();
   expect(screen.getByRole('button', { name: /Next trade/ })).toBeEnabled();
@@ -432,6 +435,35 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
   expect(screen.getByRole('button', { name: /Add Execution/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit execution 1' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Delete execution 1' })).toBeInTheDocument();
+});
+
+test('Chart Review replaces What If and uploads a TradingView screenshot', async () => {
+  tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: {}, tags: [] } });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
+  fireEvent.click(row);
+
+  const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
+  expect(within(tablist).queryByRole('tab', { name: 'What If' })).not.toBeInTheDocument();
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Chart Review' }));
+
+  expect(await screen.findByText(/Review the setup visually/i)).toBeVisible();
+  expect(screen.getByText('10m default')).toBeVisible();
+  expect(screen.getByText('8 EMA')).toBeVisible();
+  expect(screen.getByText('PDH / PDL solid')).toBeVisible();
+  expect(screen.getByText('PMH / PML dashed')).toBeVisible();
+
+  const input = document.querySelector('.td-chart-review-upload input[type="file"]');
+  const file = new File(['chart'], 'qqq-review.png', { type: 'image/png' });
+  fireEvent.change(input, { target: { files: [file] } });
+
+  await waitFor(() => expect(tradesApi.uploadChartScreenshot).toHaveBeenCalled());
+  const [group, formData] = tradesApi.uploadChartScreenshot.mock.calls.at(-1);
+  expect(group).toBeTruthy();
+  expect(formData.get('file').name).toBe('qqq-review.png');
 });
 
 test('guided Review quick picks generate journal text and actionable correction', async () => {
