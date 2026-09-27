@@ -778,3 +778,65 @@ def test_excursion_confidence_requires_multiple_days(monkeypatch, tmp_path):
         assert multi_day["management_primary_source"] == "broker_csv"
     finally:
         conn.close()
+
+
+def test_trade_list_surfaces_option_journal_and_derives_r_only_from_explicit_risk(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Review Test", "day_trading", "schwab"),
+        )
+        executions = __import__("json").dumps([
+            {"date": "2026-09-25", "time": "09:22:00", "action": "BOT", "qty": 5, "price": 1.08},
+            {"date": "2026-09-25", "time": "09:41:00", "action": "SOLD", "qty": 5, "price": 1.50},
+        ])
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                account_id, "review-option", "2026-09-25", "QCOM", "OPTION", "LONG",
+                205.89, 205.89, 0.0, executions, "imported",
+            ),
+        )
+        conn.execute(
+            """INSERT INTO trade_analysis
+               (trade_group, ticker, date, strategy, risk_per_trade,
+                entry_reason, exit_reason, mistakes, emotional_state)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                "review-option", "QCOM", "2026-09-25",
+                "10m 8 EMA Retest + VWAP Reclaim", 100.0,
+                "Confirmed entry.", "Trimmed into strength.", "Held first trim too long.", "Focused",
+            ),
+        )
+        conn.commit()
+
+        rows = main.list_trades(
+            account_id=account_id,
+            instrument_type=None,
+            date_from=None,
+            date_to=None,
+            ticker=None,
+            open_only=False,
+            closed_only=False,
+            sort_by=None,
+            limit=None,
+            conn=conn,
+        )
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["instrument_type"] == "OPTION"
+        assert row["strategy"] == "10m 8 EMA Retest + VWAP Reclaim"
+        assert row["emotional_state"] == "Focused"
+        assert row["mistakes"] == "Held first trim too long."
+        assert row["risk_per_trade"] == 100.0
+        assert row["realized_r"] == 2.0589
+    finally:
+        conn.close()
