@@ -39,10 +39,17 @@ from ai_analysis import (
 )
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
-from excursion_analysis import calculate_trade_excursion
+from excursion_analysis import calculate_trade_excursion, EXCURSION_ENGINE_VERSION
 from library import router as library_router, init_library_tables, apply_aliases, library_names, TAG_TYPES as LIBRARY_TAG_TYPES
 from smoking_gun_routes import router as smoking_gun_router
 from le_analysis import build_le_levels, build_le_review
+from trade_metrics import (
+    trade_is_closed,
+    trade_pl_percent as canonical_trade_pl_percent,
+    entry_market_minutes,
+    manual_pnl as canonical_manual_pnl,
+    daily_totals as canonical_daily_totals,
+)
 
 load_dotenv()
 
@@ -878,69 +885,27 @@ class TradeCreate(BaseModel):
     time: str | None = None
 
 
-def compute_manual_pnl(side: str, entry: float, exit_price: float | None, qty: int, commissions: float) -> tuple[float, float]:
-    if exit_price is None:
-        return 0.0, -commissions
-    if side.upper() == 'LONG':
-        gross = (exit_price - entry) * qty
-    else:
-        gross = (entry - exit_price) * qty
-    return round(gross, 2), round(gross - commissions, 2)
+def compute_manual_pnl(
+    side: str,
+    entry: float,
+    exit_price: float | None,
+    qty: int,
+    commissions: float,
+    instrument_type: str = "STOCK",
+    ticker: str | None = None,
+) -> tuple[float, float]:
+    return canonical_manual_pnl(
+        side, instrument_type, ticker, entry, exit_price, qty, commissions
+    )
 
 
 def _is_open_position(trade: dict) -> bool:
-    execs = trade.get('executions') or []
-    side = (trade.get('side') or 'LONG').upper()
-    entry_action = 'BOT' if side == 'LONG' else 'SOLD'
-    exit_action  = 'SOLD' if side == 'LONG' else 'BOT'
-    entry_qty = sum(e.get('qty', 0) for e in execs if e.get('action') == entry_action)
-    exit_qty  = sum(e.get('qty', 0) for e in execs if e.get('action') == exit_action)
-    return entry_qty > 0 and entry_qty != exit_qty
+    return not trade_is_closed(trade)
 
 
 def _trade_pl_percent(trade: dict) -> float | None:
-    """Net P/L percentage on entry notional/premium for display purposes only.
-
-    This does not modify P&L, MFE/MAE, exit efficiency, R-multiples, or any
-    stored trade math. Options use the standard 100x contract multiplier.
-    Futures use the existing parser multiplier map when the root is known.
-    Short trades are measured against entry proceeds/notional, not margin.
-    """
-    raw = trade.get("executions") or []
-    if isinstance(raw, str):
-        try:
-            execs = json.loads(raw)
-        except Exception:
-            return None
-    else:
-        execs = raw if isinstance(raw, list) else []
-
-    side = str(trade.get("side") or "").upper()
-    entry_action = "BOT" if side == "LONG" else "SOLD"
-    entries = [e for e in execs if str(e.get("action") or "").upper() == entry_action]
-    qty = sum(float(e.get("qty") or 0) for e in entries)
-    if qty <= 0:
-        return None
-    weighted = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries)
-    avg_entry = weighted / qty if qty else None
-    if not avg_entry:
-        return None
-
-    instrument = str(trade.get("instrument_type") or "STOCK").upper()
-    multiplier = 1.0
-    if instrument == "OPTION":
-        multiplier = 100.0
-    elif instrument == "FUTURE":
-        ticker = str(trade.get("ticker") or "").upper()
-        root = next((r for r in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True) if ticker.startswith(r)), None)
-        if root:
-            multiplier = float(FUTURES_MULTIPLIERS[root])
-
-    entry_notional = abs(avg_entry * qty * multiplier)
-    if entry_notional <= 0:
-        return None
-    return round(float(trade.get("net_pnl") or 0) / entry_notional * 100, 2)
-
+    """Canonical net return on entry capital/premium."""
+    return canonical_trade_pl_percent(trade)
 
 def _avg_trade_pl_percent(trades: list[dict]) -> float | None:
     """Average canonical P/L % across completed trades.
@@ -957,42 +922,8 @@ def _avg_trade_pl_percent(trades: list[dict]) -> float | None:
 
 
 def _trade_entry_minutes(trade: dict) -> int | None:
-    """Return broker-local entry clock time in minutes after midnight.
-
-    Schwab/TOS executions preserve the original broker-local time and are
-    canonicalized at import. For the dashboard's time-of-day edge we use that
-    broker-local clock directly so the result matches the trader's CT session
-    instead of server/import time.
-    """
-    raw = trade.get("executions") or []
-    if isinstance(raw, str):
-        try:
-            execs = json.loads(raw)
-        except Exception:
-            return None
-    else:
-        execs = raw if isinstance(raw, list) else []
-
-    side = str(trade.get("side") or "LONG").upper()
-    entry_action = "BOT" if side == "LONG" else "SOLD"
-    entries = [e for e in execs if str(e.get("action") or "").upper() == entry_action]
-    if not entries:
-        return None
-
-    def parse_minutes(value):
-        raw_time = str(value or "").strip()
-        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
-            try:
-                dt = datetime.strptime(raw_time, fmt)
-                return dt.hour * 60 + dt.minute
-            except ValueError:
-                continue
-        return None
-
-    values = [parse_minutes(e.get("time")) for e in entries]
-    values = [v for v in values if v is not None]
-    return min(values) if values else None
-
+    """First entry in U.S. market time (ET), derived from broker provenance."""
+    return entry_market_minutes(trade)
 
 def _format_half_hour_bucket(start_minute: int) -> str:
     end_minute = start_minute + 30
@@ -1008,7 +939,7 @@ def _format_half_hour_bucket(start_minute: int) -> str:
 
 
 def _time_of_day_kpis(trades: list[dict]) -> list[dict]:
-    """Performance grouped by the trade's first entry execution, 30-min CT buckets."""
+    """Performance grouped by first entry in 30-minute U.S. market-time buckets."""
     buckets: dict[int, list[dict]] = {}
     for trade in trades:
         if trade.get("net_pnl") is None:
@@ -1167,7 +1098,13 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         raise ValueError(f"Account {data.account_id} not found")
 
     gross_pnl, net_pnl = compute_manual_pnl(
-        data.side, data.entry_price, data.exit_price, data.quantity, data.commissions
+        data.side,
+        data.entry_price,
+        data.exit_price,
+        data.quantity,
+        data.commissions,
+        data.instrument_type,
+        data.ticker,
     )
 
     # Build a manual trade group key
