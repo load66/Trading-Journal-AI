@@ -11,12 +11,6 @@ const signed$ = (v) => {
   });
 };
 
-const shortText = (value, max = 76) => {
-  const text = String(value || '').trim().replace(/\s+/g, ' ');
-  if (!text) return '';
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-};
-
 function ConfidenceDot({ level }) {
   return (
     <span
