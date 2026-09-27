@@ -2954,8 +2954,8 @@ def get_yearly_kpis(
 _DOW_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 _SETUP_LABEL_MAP = {'NONE': 'No setup'}
 _HOLD_ORDER = ['0-5 min', '5-15 min', '15-30 min', '30-60 min', '1-2 hrs', '2+ hrs']
-_SESSION_ORDER = ['09:30-09:45', '09:45-10:30', '10:30-11:00',
-                  '11:00-13:30', '13:30-15:30', '15:30-16:00']
+_SESSION_ORDER = ['08:30-08:45', '08:45-09:30', '09:30-10:00',
+                  '10:00-12:30', '12:30-14:30', '14:30-15:00']
 
 
 def _mins_of(t):
@@ -2998,7 +2998,10 @@ def _bucket_stats(rows, key_fn, label_fn=None):
             "trades": n,
             "net_pnl": round(sum(pnls), 2),
             "avg_pnl": round(sum(pnls) / n, 2),
-            "median_pnl": round(pnls[n // 2], 2),
+            "median_pnl": round(
+                pnls[n // 2] if n % 2 else (pnls[n // 2 - 1] + pnls[n // 2]) / 2,
+                2,
+            ),
             "win_rate": round(len(wins) / n * 100, 1),
             "wins": len(wins),
             "losses": len(losses),
@@ -3106,12 +3109,12 @@ def get_reports(
     sql = """
         SELECT t.id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
                t.instrument_type, t.executions, t.setup,
-               t.mfe_pct, t.mae_pct, t.exit_efficiency,
-               ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
+               t.mfe_pct, t.mae_pct, t.exit_efficiency, t.excursion_version,
+               ta.strategy, ta.r_multiple, ta.risk_per_trade, ta.emotional_state, ta.mistakes,
                ta.idea_source
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
-        WHERE t.net_pnl IS NOT NULL AND t.net_pnl <> 0
+        WHERE t.net_pnl IS NOT NULL
     """
     params: list = []
     if account_id is not None:
@@ -3125,25 +3128,34 @@ def get_reports(
         params.append(date_to)
     sql += " ORDER BY t.date, t.id"
 
-    raw = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    raw = canonical_completed_trades(
+        [dict(r) for r in conn.execute(sql, params).fetchall()]
+    )
     if not raw:
         return {"has_data": False}
 
-    # Derive entry time, hold duration and exit count once per trade.
+    # Derive timing/management once from canonical broker execution data.
     for r in raw:
-        try:
-            ex = json.loads(r['executions'] or '[]')
-        except Exception:
-            ex = []
-        ea = 'BOT' if r['side'] == 'LONG' else 'SOLD'
-        xa = 'SOLD' if r['side'] == 'LONG' else 'BOT'
-        ent = sorted([e for e in ex if e.get('action') == ea], key=lambda e: e.get('time', ''))
-        xit = sorted([e for e in ex if e.get('action') == xa], key=lambda e: e.get('time', ''))
-        t_in = _mins_of(ent[0].get('time')) if ent else None
-        t_out = _mins_of(xit[-1].get('time')) if xit else None
-        r['entry_min'] = t_in
-        r['hold_min'] = (t_out - t_in) if (t_in is not None and t_out is not None) else None
-        r['n_exits'] = len({e.get('time') for e in xit}) if xit else 0
+        ex = canonical_parse_executions(r)
+        _, exit_action = ("SOLD", "BOT") if r["side"] == "SHORT" else ("BOT", "SOLD")
+        xit = [e for e in ex if str(e.get("action") or "").upper() == exit_action]
+        r["entry_min"] = canonical_first_entry_clock_minutes(r)
+        hold_sec = canonical_hold_seconds(r)
+        r["hold_min"] = hold_sec / 60 if hold_sec is not None else None
+        exit_events = {
+            str(e.get("source_ref") or e.get("timestamp_utc") or f"{e.get('date','')}|{e.get('time','')}")
+            for e in xit
+        }
+        r["n_exits"] = len(exit_events)
+        r["realized_r"] = canonical_realized_r(
+            r,
+            risk_per_trade=r.get("risk_per_trade"),
+            stored_r_multiple=r.get("r_multiple"),
+        )
+        if r.get("excursion_version") != EXCURSION_ALGORITHM_VERSION:
+            r["mfe_pct"] = None
+            r["mae_pct"] = None
+            r["exit_efficiency"] = None
         try:
             r['dow'] = _dt.strptime(r['date'], '%Y-%m-%d').weekday()
         except Exception:
@@ -3166,20 +3178,21 @@ def get_reports(
         return '2+ hrs'
 
     def session_bucket(r):
+        # Schwab/TOS execution clocks are stored in Central Time.
         t = r['entry_min']
         if t is None:
             return None
-        if t < 9 * 60 + 45:
-            return '09:30-09:45'
-        if t < 10 * 60 + 30:
-            return '09:45-10:30'
-        if t < 11 * 60:
-            return '10:30-11:00'
-        if t < 13 * 60 + 30:
-            return '11:00-13:30'
-        if t < 15 * 60 + 30:
-            return '13:30-15:30'
-        return '15:30-16:00'
+        if t < 8 * 60 + 45:
+            return '08:30-08:45'
+        if t < 9 * 60 + 30:
+            return '08:45-09:30'
+        if t < 10 * 60:
+            return '09:30-10:00'
+        if t < 12 * 60 + 30:
+            return '10:00-12:30'
+        if t < 14 * 60 + 30:
+            return '12:30-14:30'
+        return '14:30-15:00'
 
     def management_bucket(r):
         if r['n_exits'] > 1:
