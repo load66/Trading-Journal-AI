@@ -250,7 +250,7 @@ function applyLayers(layers, visible) {
 
 export default function TradingChart({
   ticker, date, tradeGroup = null, defaultTimeframe = '10Min',
-  executions = [], side = 'LONG', analysis = null,
+  executions = [], side = 'LONG',
   height = 320,
 }) {
   const containerRef = useRef(null);
@@ -260,8 +260,6 @@ export default function TradingChart({
   const [daysBack, setDaysBack] = useState(() => INITIAL_DAYS_BACK[defaultTimeframe] || 1);
   const [warning, setWarning] = useState(null);
   const [leLevels, setLeLevels] = useState({});
-  const [levelFeed, setLevelFeed] = useState(null);
-  const [levelWarning, setLevelWarning] = useState(null);
   const [loading, setLoading] = useState(true);
   const isWide = WIDE_RANGE_TFS.has(timeframe);
   const [visible, setVisible] = useState(DEFAULT_VISIBLE);
@@ -290,8 +288,6 @@ export default function TradingChart({
   useEffect(() => {
     let cancelled = false;
     setLeLevels({});
-    setLevelFeed(null);
-    setLevelWarning(null);
 
     if (!tradeGroup) return () => { cancelled = true; };
 
@@ -299,13 +295,8 @@ export default function TradingChart({
       .then(r => {
         if (cancelled) return;
         setLeLevels(r.data?.levels || {});
-        setLevelFeed(r.data?.feed || null);
-        const warnings = Array.isArray(r.data?.warnings) ? r.data.warnings : [];
-        setLevelWarning(warnings[0] || null);
       })
-      .catch(() => {
-        if (!cancelled) setLevelWarning('LE chart levels unavailable.');
-      });
+      .catch(() => {});
 
     return () => { cancelled = true; };
   }, [tradeGroup]);
@@ -587,7 +578,7 @@ export default function TradingChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, executions, side, analysis, leLevels, height, loading, date, timeframe, isWide, daysBack]);
+  }, [bars, executions, side, leLevels, height, loading, date, timeframe, isWide, daysBack]);
 
   useEffect(() => {
     visibleRef.current = visible;
