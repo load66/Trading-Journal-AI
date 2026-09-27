@@ -5,6 +5,7 @@ import httpx
 
 from behavior_rules import detect_daily_flags, deterministic_strengths, recorded_observations
 from trade_metrics import trade_is_closed
+from smoking_gun_library import ANALYTICS_ENGINE_VERSION
 
 from ai_analysis import (
     GROQ_API_URL,
@@ -476,7 +477,8 @@ Generate the daily coaching summary JSON."""
     result["patterns"] = [x.get("text") for x in pattern_obs]
 
     result["evidence_locked"] = True
-    result["evidence_version"] = 3
+    result["evidence_version"] = 4
+    result["analytics_engine_version"] = ANALYTICS_ENGINE_VERSION
     result["evidence_note"] = (
         "VERIFIED = deterministic calculation/detector. RECORDED = trader/diary input. "
         "INSUFFICIENT DATA = the journal refuses to infer what was not recorded."
