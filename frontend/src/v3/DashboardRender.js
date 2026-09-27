@@ -286,7 +286,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const holdEvidence = holdN + '/' + totalTrades + ' trades · ' + holdCoverage.toFixed(0) + '% broker timestamp coverage';
   const bottomTone = holdLeak
     ? 'bad'
-    : (!captureUsable && !riskUsable) || captureConfidence === 'DEVELOPING' || excursionConfidence === 'DEVELOPING'
+    : earlyFailurePattern || riskMixed || (!captureUsable && !riskUsable)
+        || captureConfidence === 'DEVELOPING' || excursionConfidence === 'DEVELOPING'
       ? 'caution'
       : 'good';
 
