@@ -37,6 +37,39 @@ function summaryErrorMessage(error) {
     || 'The AI diagnosis could not be generated.';
 }
 
+const dayReviewSummaryCache = new Map();
+const dayReviewExcursionDone = new Set();
+
+function dayReviewCacheKey(accountId, date) {
+  return `${accountId ?? 'all'}:${date}`;
+}
+
+function journalTodayKey() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function getRememberedSummary(key) {
+  const entry = dayReviewSummaryCache.get(key);
+  if (!entry || entry.loadedDay !== journalTodayKey()) {
+    if (entry) dayReviewSummaryCache.delete(key);
+    return null;
+  }
+  return entry.summary;
+}
+
+function rememberSummary(key, summary) {
+  if (!summary?.generated_at) return;
+  dayReviewSummaryCache.set(key, {
+    summary,
+    loadedDay: journalTodayKey(),
+  });
+}
+
 // ── R-Multiple chart ──────────────────────────────────────────────────────────
 function RMultipleChart({ trades }) {
   const data = trades.filter(t => t.r_multiple != null).map(t => ({
@@ -121,26 +154,32 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
 
   const fetchDay = useCallback(async (d) => {
     const requestId = ++dayRequestRef.current;
+    const cacheKey = dayReviewCacheKey(accountId, d);
+    const cachedSummary = getRememberedSummary(cacheKey);
+
     setLoading(true);
-    setSummaryLoading(true);
+    setSummaryLoading(!cachedSummary);
     setRegenerating(false);
     setSummaryError('');
-    setSummary(null);
+    setSummary(cachedSummary);
     setCbDismissed(false);
 
     try {
       const params = { date_from: d, date_to: d, closed_only: true };
       if (accountId != null) params.account_id = accountId;
 
-      // Enrich missing MFE/MAE/exit-efficiency once, then read the day.
-      // Failure here must never block the journal; the UI will show insufficient
-      // market data instead of inventing excursion metrics.
-      try {
-        const excursionParams = { date: d };
-        if (accountId != null) excursionParams.account_id = accountId;
-        await excursionApi.calculate(excursionParams);
-      } catch (e) {
-        console.warn('Excursion enrichment unavailable', e);
+      // Enrich MFE/MAE once per account/date for this browser session.
+      // Revisiting the tab should never repeat the expensive enrichment path
+      // before showing coaching that is already cached.
+      if (!cachedSummary && !dayReviewExcursionDone.has(cacheKey)) {
+        try {
+          const excursionParams = { date: d };
+          if (accountId != null) excursionParams.account_id = accountId;
+          await excursionApi.calculate(excursionParams);
+          dayReviewExcursionDone.add(cacheKey);
+        } catch (e) {
+          console.warn('Excursion enrichment unavailable', e);
+        }
       }
 
       const allParams = {};
@@ -173,6 +212,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
 
       // Empty sessions never call the AI provider.
       if (!rawTrades.length) {
+        dayReviewSummaryCache.delete(cacheKey);
         setSummary({
           date: d,
           cached: false,
@@ -183,12 +223,18 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
         return;
       }
 
-      // Opening Day Review automatically resolves the current diagnosis.
-      // The backend reuses a matching evidence fingerprint and regenerates only
-      // when this day's trades/journal evidence changed.
+      // Tab navigation reuses the in-memory copy immediately. The backend also
+      // enforces one automatic AI generation per calendar day, so a remount
+      // cannot trigger another paid generation. Re-run is the explicit bypass.
+      if (cachedSummary) {
+        setSummaryLoading(false);
+        return;
+      }
+
       try {
         const sumRes = await fetchSummary(d);
         if (requestId !== dayRequestRef.current) return;
+        rememberSummary(cacheKey, sumRes.data);
         setSummary(sumRes.data);
       } catch (e) {
         if (requestId !== dayRequestRef.current) return;
@@ -224,6 +270,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
     try {
       const res = await fetchSummary(requestedDate, { force: true });
       if (requestId !== dayRequestRef.current) return;
+      rememberSummary(dayReviewCacheKey(accountId, requestedDate), res.data);
       setSummary(res.data);
     } catch (e) {
       if (requestId !== dayRequestRef.current) return;
@@ -246,6 +293,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
     try {
       const res = await fetchSummary(requestedDate);
       if (requestId !== dayRequestRef.current) return;
+      rememberSummary(dayReviewCacheKey(accountId, requestedDate), res.data);
       setSummary(res.data);
     } catch (e) {
       if (requestId !== dayRequestRef.current) return;
