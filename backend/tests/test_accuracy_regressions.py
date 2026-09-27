@@ -1192,3 +1192,59 @@ def test_losing_trade_with_exit_capture_is_always_stale(monkeypatch, tmp_path):
         ],
     }
     assert main._excursion_is_stale(trade) is True
+
+def test_reports_endpoint_uses_canonical_hold_time_without_name_error(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Reports Regression", "day_trading", "schwab"),
+        )
+        executions = __import__("json").dumps([
+            {
+                "date": "2026-09-25",
+                "time": "08:30:10",
+                "timestamp_utc": "2026-09-25T13:30:10Z",
+                "source_timezone": "America/Chicago",
+                "action": "BOT",
+                "qty": 1,
+                "price": 2.00,
+            },
+            {
+                "date": "2026-09-25",
+                "time": "08:32:20",
+                "timestamp_utc": "2026-09-25T13:32:20Z",
+                "source_timezone": "America/Chicago",
+                "action": "SOLD",
+                "qty": 1,
+                "price": 2.50,
+            },
+        ])
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                account_id, "reports-hold-regression", "2026-09-25", "SPY",
+                "OPTION", "LONG", 50.0, 50.0, 0.0, executions, "imported",
+            ),
+        )
+        conn.commit()
+
+        result = main.get_reports(
+            account_id=account_id,
+            date_from="2026-09-25",
+            date_to="2026-09-25",
+            conn=conn,
+        )
+
+        assert result["has_data"] is True
+        assert result["trade_count"] == 1
+        assert result["by_hold_time"][0]["label"] == "0-5 min"
+    finally:
+        conn.close()
+
