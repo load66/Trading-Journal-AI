@@ -45,7 +45,7 @@ function RMultipleChart({ trades }) {
   }));
   if (!data.length) return null;
   return (
-    <section className="card">
+    <section className="card day-review-r-chart">
       <PanelHead title="R-Multiple by Trade" />
       <ResponsiveContainer width="100%" height={140}>
         <BarChart data={data} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
@@ -273,26 +273,26 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
   }
 
   return (
-    <div>
+    <div className="day-review-page">
       {/* ── Header ── */}
       <PageHeader
         title={formatDateLabel(date)}
         subtitle="Day Review. Read the session while the decisions are fresh."
         actions={<>
-          <button type="button" className="btn btn-secondary" onClick={() => onDateChange(prevTradingDay(date))} aria-label="Previous trading day">
+          <button type="button" className="btn btn-secondary day-review-nav-prev" onClick={() => onDateChange(prevTradingDay(date))} aria-label="Previous trading day">
             <ChevronLeft size={16} /> Previous
           </button>
-          <button type="button" className="btn btn-secondary" onClick={() => onDateChange(nextTradingDay(date))} aria-label="Next trading day">
+          <button type="button" className="btn btn-secondary day-review-nav-next" onClick={() => onDateChange(nextTradingDay(date))} aria-label="Next trading day">
             Next <ChevronRight size={16} />
           </button>
           {date !== today && (
-            <button type="button" className="btn btn-ghost" onClick={() => onDateChange(today)}>
+            <button type="button" className="btn btn-ghost day-review-nav-today" onClick={() => onDateChange(today)}>
               <Calendar size={15} aria-hidden="true" /> Today
             </button>
           )}
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn btn-secondary day-review-header-rerun"
             onClick={handleRegenerate}
             disabled={regenerating || loading || summaryLoading || !trades.length}
           >
@@ -307,7 +307,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
         <div className="v3-band"><div className="v3-empty">Loading…</div></div>
       ) : (
         <>
-          <div className="v3-hero" style={{ paddingTop: 8 }}>
+          <div className="v3-hero day-review-session" style={{ paddingTop: 8 }}>
             <div className="v3-sec-head" style={{ marginBottom: 6 }}>
               <div>
                 <h2 className="v3-h">The session</h2>
@@ -339,7 +339,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
       <div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* Coaching first: you read the review, then the trades it is about */}
-          <section className="card">
+          <section className="card day-review-coaching-card">
             <Coaching
               summary={summary}
               loading={summaryLoading}
@@ -350,11 +350,14 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
           </section>
 
           {/* The trades */}
-          <section className="card panel-flush">
-            <div style={{ padding: '18px 0 12px' }}>
+          <section className="card panel-flush day-review-trades-card">
+            <div className="day-review-trades-head" style={{ padding: '18px 0 12px' }}>
               <PanelHead
                 title="Trade by trade"
-                sub="MFE/MAE uses Alpaca 1-minute market paths. Options use the actual OCC contract premium; stocks use stock bars, with broker fills as execution anchors. Missing provider coverage stays blank. Hover a grade for its evidence."
+                sub={<>
+                  <span className="day-review-trade-sub-desktop">MFE/MAE uses Alpaca 1-minute market paths. Options use the actual OCC contract premium; stocks use stock bars, with broker fills as execution anchors. Missing provider coverage stays blank. Hover a grade for its evidence.</span>
+                  <span className="day-review-trade-sub-mobile">Tap a trade to open its full review. Grade reasoning is shown on each mobile trade card.</span>
+                </>}
               />
             </div>
             <DayTrades

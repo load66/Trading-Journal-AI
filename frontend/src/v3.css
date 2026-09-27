@@ -6421,3 +6421,399 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     font-size: 12px;
   }
 }
+
+
+/* ---------- Day Review: phone-first composition ----------
+   Desktop keeps the analytical table/grid. Phones get purpose-built controls,
+   touch targets, readable coaching, and trade cards instead of horizontal scroll. */
+.v3-trade-cards { display: none; }
+.day-review-trade-sub-mobile { display: none; }
+
+@media (max-width: 600px) {
+  .day-review-page {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .day-review-page .page-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .day-review-page .page-header > div:first-child {
+    width: 100%;
+    min-width: 0;
+  }
+  .day-review-page .page-title {
+    font-size: clamp(24px, 7.4vw, 30px);
+    line-height: 1.04;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+  }
+  .day-review-page .page-subtitle {
+    margin-top: 7px;
+    max-width: 38ch;
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+  .day-review-page .page-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .day-review-page .page-actions .btn {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 12.5px;
+  }
+  .day-review-page .day-review-nav-today {
+    grid-column: 1 / -1;
+  }
+  .day-review-page .day-review-header-rerun {
+    display: none;
+  }
+
+  .day-review-page .day-review-session {
+    margin: 0 -2px;
+    padding: 14px 2px 0 !important;
+  }
+  .day-review-page .day-review-session .v3-sec-head {
+    padding: 0 2px;
+    margin-bottom: 6px;
+  }
+  .day-review-page .day-review-session .v3-h {
+    font-size: 18px;
+  }
+  .day-review-page .day-review-session .v3-h-sub {
+    max-width: 42ch;
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+
+  .day-review-page .v3-session {
+    height: 154px;
+    margin-top: 2px;
+    touch-action: pan-y;
+  }
+  .day-review-page .v3-tl-lab {
+    font-size: 9.5px;
+  }
+  .day-review-page .v3-hour-11,
+  .day-review-page .v3-hour-13,
+  .day-review-page .v3-hour-15 {
+    display: none;
+  }
+  .day-review-page .v3-daymark {
+    min-width: 9px;
+    min-height: 9px;
+  }
+  .day-review-page .v3-daymark::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 36px;
+    height: 36px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+  }
+  .day-review-page .v3-tipbox {
+    left: 10px !important;
+    right: 10px !important;
+    top: auto !important;
+    bottom: 8px;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .day-review-page .v3-measures {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 0;
+    border-top: 1px solid var(--divider-soft);
+  }
+  .day-review-page .v3-m {
+    padding: 14px 12px 15px;
+    gap: 6px;
+  }
+  .day-review-page .v3-m:nth-child(2n) {
+    border-right: 0;
+  }
+  .day-review-page .v3-m-val {
+    font-size: clamp(23px, 7vw, 27px);
+  }
+  .day-review-page .v3-m-read {
+    font-size: 11px;
+    line-height: 1.38;
+  }
+
+  .day-review-page .card {
+    padding: 16px 14px;
+    border-radius: 10px;
+    box-shadow: 0 10px 28px -24px rgba(0, 0, 0, 0.9);
+  }
+  .day-review-page .day-review-coaching-card .v3-sec-head {
+    align-items: flex-start;
+    margin-bottom: 12px;
+  }
+  .day-review-page .day-review-coaching-card .v3-sec-head > div:first-child {
+    min-width: 0;
+    flex: 1 1 220px;
+  }
+  .day-review-page .day-review-coaching-card .v3-acts {
+    margin-left: auto;
+  }
+  .day-review-page .day-review-coaching-card .v3-acts .btn {
+    min-height: 40px;
+    padding: 0 13px;
+  }
+  .day-review-page .day-review-coaching-card .v3-h-sub {
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  .day-review-page .day-review-model-meta {
+    display: none;
+  }
+  .day-review-page .v3-cols {
+    column-count: 1 !important;
+    column-gap: 0;
+  }
+  .day-review-page .v3-narr {
+    font-size: 14px;
+    line-height: 1.7;
+    margin-bottom: 13px;
+  }
+  .day-review-page .v3-narr-quiet {
+    padding-top: 12px;
+    border-top: 1px solid var(--divider-soft);
+    font-size: 13.5px;
+    line-height: 1.65;
+  }
+  .day-review-page .coach-highlight {
+    padding: 1px 2px;
+    border-radius: 3px;
+    font-weight: 650;
+  }
+
+  .day-review-page .v3-tabs {
+    margin: 0 -14px 16px;
+    padding: 0 14px 2px;
+    gap: 6px;
+    border-bottom: 1px solid var(--divider-soft);
+    scroll-snap-type: x proximity;
+    overscroll-behavior-x: contain;
+  }
+  .day-review-page .v3-tab {
+    min-height: 44px;
+    padding: 9px 12px;
+    border-radius: 7px 7px 0 0;
+    scroll-snap-align: start;
+    font-size: 12.5px;
+  }
+  .day-review-page .v3-list {
+    column-count: 1 !important;
+  }
+  .day-review-page .v3-list li {
+    min-height: 44px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-right: 10px;
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+  .day-review-page .v3-list li + li {
+    margin-top: 8px;
+  }
+
+  .day-review-page .day-review-trades-card {
+    padding: 0 !important;
+    overflow: visible;
+  }
+  .day-review-page .day-review-trades-head {
+    padding: 16px 14px 10px !important;
+  }
+  .day-review-page .day-review-trades-head .panel-head {
+    margin-bottom: 0;
+  }
+  .day-review-page .day-review-trade-sub-desktop {
+    display: none;
+  }
+  .day-review-page .day-review-trade-sub-mobile {
+    display: inline;
+  }
+  .day-review-page .day-review-trades-head .section-sub {
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+
+  .day-review-page .v3-trade-table-wrap {
+    display: none;
+  }
+  .day-review-page .v3-trade-cards {
+    display: grid;
+    gap: 8px;
+    padding: 0 10px 10px;
+  }
+  .day-review-page .v3-trade-card-shell {
+    min-width: 0;
+  }
+  .day-review-page .v3-trade-card {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    display: block;
+    padding: 13px;
+    border: 1px solid var(--divider-soft);
+    border-radius: 9px;
+    background: var(--surface-inset);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: border-color .14s ease, background-color .14s ease, transform .08s ease;
+  }
+  .day-review-page .v3-trade-card:active {
+    transform: scale(.995);
+    background: var(--surface-control);
+  }
+  .day-review-page .v3-trade-card:focus-visible {
+    outline: 2px solid var(--accent-line);
+    outline-offset: 2px;
+  }
+  .day-review-page .v3-trade-card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .day-review-page .v3-trade-card-top > span:first-child {
+    min-width: 0;
+  }
+  .day-review-page .v3-trade-card-ticker {
+    display: block;
+    font-family: var(--font-display);
+    font-size: 17px;
+    line-height: 1.1;
+    letter-spacing: -.02em;
+  }
+  .day-review-page .v3-trade-card-meta {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-tertiary);
+    font-size: 10.5px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .day-review-page .v3-trade-card-pnl {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+  }
+  .day-review-page .v3-trade-card-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--divider-soft);
+  }
+  .day-review-page .v3-trade-card-grid > span {
+    min-width: 0;
+  }
+  .day-review-page .v3-trade-card-grid small {
+    display: block;
+    color: var(--text-tertiary);
+    font-size: 9px;
+    line-height: 1.2;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .day-review-page .v3-trade-card-grid b {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.25;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .day-review-page .v3-trade-card-grid b.v3-pos,
+  .day-review-page .v3-trade-card-grid b.pos {
+    color: var(--result-pos);
+  }
+  .day-review-page .v3-trade-card-grid b.v3-neg,
+  .day-review-page .v3-trade-card-grid b.neg {
+    color: var(--result-neg);
+  }
+  .day-review-page .v3-trade-card-grade.good {
+    color: var(--result-pos);
+  }
+  .day-review-page .v3-trade-card-grade.bad {
+    color: var(--result-neg);
+  }
+  .day-review-page .v3-trade-card-grade.neutral {
+    color: var(--text-secondary);
+  }
+  .day-review-page .v3-trade-card-reason {
+    display: block;
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px solid var(--divider-soft);
+    color: var(--text-secondary);
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+
+  .day-review-page .day-review-r-chart {
+    padding: 15px 12px 10px;
+  }
+  .day-review-page .day-review-r-chart .panel-head {
+    margin-bottom: 8px;
+  }
+
+  .day-review-page .notice.caution {
+    align-items: flex-start !important;
+    gap: 10px;
+    padding: 12px;
+  }
+  .day-review-page .notice.caution .btn {
+    min-height: 40px;
+    flex: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .day-review-page .page-title {
+    font-size: 23px;
+  }
+  .day-review-page .page-actions .btn {
+    font-size: 12px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .day-review-page .v3-m {
+    padding: 13px 10px 14px;
+  }
+  .day-review-page .v3-m-val {
+    font-size: 22px;
+  }
+  .day-review-page .v3-trade-card {
+    padding: 12px 10px;
+  }
+  .day-review-page .v3-trade-card-grid {
+    gap: 4px;
+  }
+  .day-review-page .v3-trade-card-grid b {
+    font-size: 11px;
+  }
+}
