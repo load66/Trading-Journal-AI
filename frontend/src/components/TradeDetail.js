@@ -2164,12 +2164,35 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           event.preventDefault();
           closeChartScreenshot();
         }}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          width: '100vw',
+          height: '100vh',
+          maxWidth: 'none',
+          maxHeight: 'none',
+          margin: 0,
+          padding: 0,
+          border: 0,
+          background: 'transparent',
+          overflow: 'hidden',
+          boxSizing: 'border-box',
+        }}
       >
         <div
           className="td-image-modal-stage"
           data-testid="chart-screenshot-stage"
           onClick={(event) => {
             if (event.target === event.currentTarget) closeChartScreenshot();
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxSizing: 'border-box',
           }}
         >
           {chartScreenshotUrl && (
