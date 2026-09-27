@@ -167,6 +167,7 @@ jest.mock('./api', () => {
       list: fn((params = {}) => ok(params.open_only ? [OPEN_TRADE] : [TRADE, TRADE_2])),
       addExecution: fn(() => ok({})),
       getAnalysis: fn(() => ok(null)),
+      updateAnalysis: fn((tradeGroup, payload) => ok(payload)),
       getLeReview: fn(() => ok({ available: false, reason: 'No LE review in tests', data_warnings: [] })),
       getLeLevels: fn(() => ok({ available: true, levels: {}, feed: 'sip', warnings: [] })),
       getAnalysisOptions: fn(() => ok({ strategies: [], idea_sources: [] })),
@@ -416,7 +417,7 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
 
   const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
   const names = within(tablist).getAllByRole('tab').map(t => t.textContent.trim());
-  expect(names).toEqual(['Stats', 'Strategy', 'Tags', 'LE Review', 'Executions', 'What If']);
+  expect(names).toEqual(['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'What If']);
   expect(screen.getByRole('button', { name: /Back to trades/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Previous trade/ })).toBeDisabled();
   expect(screen.getByRole('button', { name: /Next trade/ })).toBeEnabled();
@@ -431,6 +432,47 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
   expect(screen.getByRole('button', { name: /Add Execution/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit execution 1' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Delete execution 1' })).toBeInTheDocument();
+});
+
+test('guided Review quick picks generate journal text and actionable correction', async () => {
+  tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: {}, tags: [] } });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
+  fireEvent.click(row);
+
+  const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Review' }));
+
+  expect(await screen.findByText(/Guided journal/i)).toBeVisible();
+  expect(screen.getByText(/0\/3 review areas documented/i)).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: /Start review/i }));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Break + retest' }));
+  fireEvent.click(screen.getByRole('button', { name: 'HOD trim + 8 EMA trail' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Held loser too long' }));
+
+  expect(screen.getByText(/3\/3 review areas documented/i)).toBeVisible();
+  expect(screen.getByText('Held loser too long')).toBeVisible();
+  expect(screen.getByText(/Exit sooner when favorable progress fails and technical invalidation begins/i)).toBeVisible();
+
+  const entryNotes = screen.getByRole('textbox', { name: 'Entry notes' });
+  const exitNotes = screen.getByRole('textbox', { name: 'Exit notes' });
+  const mistakeNotes = screen.getByRole('textbox', { name: 'Mistake \/ improvement notes' });
+
+  expect(entryNotes).toHaveValue(expect.stringContaining('Entered after the breakout level held on a retest.'));
+  expect(exitNotes).toHaveValue(expect.stringContaining('Trimmed into the high of day, then trailed the remainder using the 8 EMA on the 10-minute timeframe.'));
+  expect(mistakeNotes).toHaveValue(expect.stringContaining('Held a losing trade too long after the setup stopped working.'));
+
+  fireEvent.click(screen.getByRole('button', { name: /Save review/i }));
+  await waitFor(() => expect(tradesApi.updateAnalysis).toHaveBeenCalled());
+
+  const [, payload] = tradesApi.updateAnalysis.mock.calls.at(-1);
+  expect(payload.entry_reason).toContain('Entered after the breakout level held on a retest.');
+  expect(payload.exit_reason).toContain('8 EMA on the 10-minute timeframe');
+  expect(payload.mistakes).toContain('Held a losing trade too long');
 });
 
 test('Import keeps broker CSV import and diary analysis, with keyboard dropzones', async () => {
