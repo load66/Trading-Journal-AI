@@ -56,7 +56,7 @@ def _seed_default_library_items(conn):
                 (kind, tag_type, name, description),
             )
             changed = True
-    if changed:
+    if changed and hasattr(conn, "commit"):
         conn.commit()
 
 
