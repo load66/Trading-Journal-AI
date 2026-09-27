@@ -2468,6 +2468,14 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-management-head .v3-h-sub {
   max-width: 720px;
 }
+.v3-management-grid-clean {
+  align-items: stretch;
+}
+.v3-management-grid-clean .v3-management-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 228px;
+}
 .v3-management-card-top {
   display: flex;
   align-items: center;
@@ -2514,57 +2522,51 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   line-height: 1.38;
 }
 
-.v3-capture-split-clean {
-  height: 16px;
-  min-height: 16px;
+.v3-capture-score strong,
+.v3-giveback-score strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 750;
+  line-height: .95;
+  letter-spacing: -.035em;
+  font-variant-numeric: tabular-nums;
+}
+.v3-capture-progress {
+  height: 8px;
+  margin-top: 11px;
+  overflow: visible;
   border-radius: 999px;
 }
-.v3-capture-split-clean .captured,
-.v3-capture-split-clean .left {
-  min-height: 14px;
+.v3-capture-progress i {
+  width: var(--w, 0%);
 }
-.v3-capture-legend {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 10px;
+.v3-capture-progress.is-empty i {
+  width: 0;
 }
-.v3-capture-legend > div {
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--divider-soft);
-  border-radius: 6px;
-  background: var(--surface-inset);
+.v3-capture-goal {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: var(--goal, 60%);
+  width: 1px;
+  background: var(--text-primary);
+  opacity: .78;
 }
-.v3-capture-legend span {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-tertiary);
-  font-size: 8.5px;
-  font-weight: 700;
-  letter-spacing: .03em;
-  text-transform: uppercase;
-}
-.v3-capture-legend i {
-  width: 7px;
-  height: 7px;
+.v3-capture-goal::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-}
-.v3-capture-legend .captured-dot { background: var(--result-pos); }
-.v3-capture-legend .left-dot { background: var(--text-tertiary); }
-.v3-capture-legend strong {
-  display: block;
-  margin-top: 5px;
-  font-family: var(--font-display);
-  font-size: 22px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
+  background: var(--text-primary);
 }
 
 .v3-comparison-list {
   display: grid;
-  gap: 10px;
+  gap: 9px;
 }
 .v3-comparison-row {
   padding: 9px 10px 10px;
@@ -2614,6 +2616,35 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-comparison-track i.pos { background: var(--result-pos); }
 .v3-comparison-track i.neg { background: var(--result-neg); }
 
+.v3-giveback-score {
+  display: grid;
+  gap: 5px;
+}
+.v3-giveback-score span {
+  color: var(--text-tertiary);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+.v3-giveback-track {
+  height: 8px;
+  margin-top: 11px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-control);
+}
+.v3-giveback-track i {
+  display: block;
+  width: var(--w, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--caution), var(--result-neg));
+}
+
+.v3-management-callout {
+  margin-top: auto;
+}
 .v3-management-callout b {
   color: var(--text-primary);
   font-weight: 750;
@@ -2622,9 +2653,18 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   background: color-mix(in srgb, var(--caution) 4%, var(--surface-inset));
 }
 
-@media (min-width: 1421px) {
+@media (min-width: 1500px) {
   .v3-management-grid-clean {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .v3-management-grid-clean .v3-management-card-feature {
+    grid-column: auto;
+  }
+}
+
+@media (min-width: 1121px) and (max-width: 1499px) {
+  .v3-management-grid-clean {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .v3-management-grid-clean .v3-management-card-feature {
     grid-column: auto;
@@ -2638,17 +2678,11 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   .v3-management-status {
     margin-top: 1px;
   }
-  .v3-capture-legend {
-    grid-template-columns: 1fr 1fr;
-  }
 }
 
 @media (max-width: 420px) {
   .v3-management-card-top {
     display: grid;
     justify-items: start;
-  }
-  .v3-capture-legend {
-    grid-template-columns: 1fr;
   }
 }
