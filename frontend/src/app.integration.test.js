@@ -846,7 +846,15 @@ test('Dashboard primary KPI strip uses goal-based trader metrics from the refere
   expect(screen.getByText(/capture 38% of the favorable move/i)).toBeVisible();
   expect(screen.queryByText('Avg R / trade')).not.toBeInTheDocument();
   expect(screen.queryByText('Max drawdown')).not.toBeInTheDocument();
-  expect(screen.getAllByText(/goal 65%|goal 75%|goal 1\.50|goal 50%|goal \+\$50\.00/i).length).toBeGreaterThanOrEqual(1);
+  const goalMarkers = Array.from(document.querySelectorAll('.v3-measures-dashboard .v3-track-goal'))
+    .map(node => node.getAttribute('data-g'));
+  expect(goalMarkers).toEqual(expect.arrayContaining([
+    'goal 65%',
+    'goal 75%',
+    'goal 1.50',
+    'goal 50%',
+    'goal +$50.00',
+  ]));
 });
 
 test('Dashboard prioritizes trade management and the latest saved Smoking Gun report', async () => {
