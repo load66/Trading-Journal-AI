@@ -1125,6 +1125,7 @@ test('Dashboard places the calendar and LE planner below Trade Management and be
   expect(planning).toBeInTheDocument();
   expect(within(planning).getByRole('article', { name: 'Trading calendar' })).toBeVisible();
   expect(within(planning).getByRole('article', { name: 'LE daily risk plan' })).toBeVisible();
+  expect(within(planning).queryByText('Contract sizing')).not.toBeInTheDocument();
   expect(document.querySelector('.v3-dashboard-side')).not.toBeInTheDocument();
 
   expect(management.compareDocumentPosition(planning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

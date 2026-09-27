@@ -1,15 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Calculator, CheckCircle2, RotateCcw, ShieldCheck } from 'lucide-react';
+import { Calculator, RotateCcw } from 'lucide-react';
 import { leRiskPlanApi } from '../api';
 
 const money = (value) => {
   const n = Number(value || 0);
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-};
-
-const money2 = (value) => {
-  const n = Number(value || 0);
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 const positive = (value) => {
@@ -64,117 +59,22 @@ function apiPayload(plan, date, accountId) {
 
 export function calculateLESize(plan = {}) {
   const capital = positive(plan.capital);
-  const exposurePct = clamp(Number(plan.exposure_pct || 30), 20, 30);
   if (!capital) {
     return {
       hasCapital: false,
-      exposurePct,
       exposureLow: 0,
       exposureHigh: 0,
       maxLoss: 0,
       minTarget: 0,
-      canSize: false,
     };
   }
-
-  const exposureLow = capital * 0.20;
-  const exposureHigh = capital * 0.30;
-  const maxLoss = capital * 0.05;
-  const minTarget = capital * 0.10;
-  const exposureBudget = capital * (exposurePct / 100);
-
-  const optionPrice = positive(plan.option_price);
-  const rawDelta = Number(plan.delta);
-  const delta = Number.isFinite(rawDelta) && rawDelta !== 0 && Math.abs(rawDelta) <= 1 ? Math.abs(rawDelta) : null;
-  const entry = positive(plan.underlying_entry);
-  const stop = positive(plan.stop_price);
-  const direction = plan.direction === 'put' ? 'put' : 'call';
-
-  if (!optionPrice || !delta || !entry || !stop) {
-    return {
-      hasCapital: true,
-      exposurePct,
-      exposureLow,
-      exposureHigh,
-      exposureBudget,
-      maxLoss,
-      minTarget,
-      canSize: false,
-    };
-  }
-
-  const premiumPerContract = optionPrice * 100;
-  const spotRisk = Math.abs(entry - stop);
-  const estimatedLossPerContract = spotRisk * delta * 100;
-  const contractsByExposure = Math.floor(exposureBudget / premiumPerContract);
-  const contractsByRisk = estimatedLossPerContract > 0 ? Math.floor(maxLoss / estimatedLossPerContract) : 0;
-  const contracts = Math.max(0, Math.min(contractsByExposure, contractsByRisk));
-  const premiumUsed = contracts * premiumPerContract;
-  const actualRisk = contracts * estimatedLossPerContract;
-  const stopSideValid = direction === 'call' ? stop < entry : stop > entry;
-
-  const target = positive(plan.target_price);
-  let potentialReward = null;
-  let rr = null;
-  let meetsTarget = null;
-  let meetsRR = null;
-  let targetSideValid = null;
-  let requiredSpotMove = null;
-  let requiredTargetPrice = null;
-
-  if (contracts > 0) {
-    if (target) {
-      const targetMove = Math.abs(target - entry);
-      const rewardPerContract = targetMove * delta * 100;
-      potentialReward = rewardPerContract * contracts;
-      rr = actualRisk > 0 ? potentialReward / actualRisk : null;
-      meetsTarget = potentialReward >= minTarget;
-      meetsRR = rr != null && rr >= 2;
-      targetSideValid = direction === 'call' ? target > entry : target < entry;
-    } else {
-      requiredSpotMove = minTarget / (delta * 100 * contracts);
-      requiredTargetPrice = direction === 'call'
-        ? entry + requiredSpotMove
-        : Math.max(0, entry - requiredSpotMove);
-    }
-  }
-
-  const constraint = contractsByRisk < contractsByExposure ? 'Risk cap' : 'Premium exposure';
 
   return {
     hasCapital: true,
-    exposurePct,
-    exposureLow,
-    exposureHigh,
-    exposureBudget,
-    maxLoss,
-    minTarget,
-    canSize: true,
-    direction,
-    optionPrice,
-    delta,
-    entry,
-    stop,
-    stopSideValid,
-    spotRisk,
-    premiumPerContract,
-    estimatedLossPerContract,
-    contractsByExposure,
-    contractsByRisk,
-    contracts,
-    premiumUsed,
-    actualRisk,
-    actualRiskPct: capital ? actualRisk / capital * 100 : 0,
-    premiumPct: capital ? premiumUsed / capital * 100 : 0,
-    constraint,
-    target,
-    potentialReward,
-    rr,
-    meetsTarget,
-    meetsRR,
-    targetSideValid,
-    requiredSpotMove,
-    requiredTargetPrice,
+    exposureLow: capital * 0.20,
+    exposureHigh: capital * 0.30,
+    maxLoss: capital * 0.05,
+    minTarget: capital * 0.10,
   };
 }
 
@@ -337,7 +237,7 @@ export default function LERiskPlanner({ accountId }) {
           <span className="le-risk-icon"><Calculator size={16} /></span>
           <div>
             <h3 id="le-risk-title">LE Daily Risk Plan</h3>
-            <p>Risk before reward · plan the session before the first click.</p>
+            <p>Enter capital once · your LE risk limits update instantly.</p>
           </div>
         </div>
         <span className={`le-risk-save ${saveState}`} aria-live="polite">
@@ -394,88 +294,6 @@ export default function LERiskPlanner({ accountId }) {
         </div>
       </div>
 
-      <details className="le-risk-sizing">
-        <summary>
-          <span><ShieldCheck size={14} /> Contract sizing</span>
-          <small>{calc.canSize ? (calc.contracts > 0 ? `${calc.contracts} contract${calc.contracts === 1 ? '' : 's'}` : 'No contract fits') : 'Optional inputs'}</small>
-        </summary>
-        <div className="le-risk-sizing-body">
-          <div className="le-risk-fields">
-            <label>
-              <span>Direction</span>
-              <select value={plan.direction} onChange={(e) => update('direction', e.target.value)}>
-                <option value="call">Call / long</option>
-                <option value="put">Put / short</option>
-              </select>
-            </label>
-            <label>
-              <span>Exposure</span>
-              <select value={plan.exposure_pct} onChange={(e) => update('exposure_pct', Number(e.target.value))}>
-                <option value={20}>20%</option>
-                <option value={25}>25%</option>
-                <option value={30}>30%</option>
-              </select>
-            </label>
-            <label>
-              <span>Option price</span>
-              <input type="number" min="0" step="0.01" placeholder="4.20" value={plan.option_price ?? ''} onChange={(e) => update('option_price', e.target.value)} />
-            </label>
-            <label>
-              <span>Delta</span>
-              <input type="number" min="-1" max="1" step="0.01" placeholder="0.62" value={plan.delta ?? ''} onChange={(e) => update('delta', e.target.value)} />
-            </label>
-            <label>
-              <span>Underlying entry</span>
-              <input type="number" min="0" step="0.01" placeholder="150.00" value={plan.underlying_entry ?? ''} onChange={(e) => update('underlying_entry', e.target.value)} />
-            </label>
-            <label>
-              <span>Technical stop</span>
-              <input type="number" min="0" step="0.01" placeholder="Entry-candle low/high" value={plan.stop_price ?? ''} onChange={(e) => update('stop_price', e.target.value)} />
-            </label>
-            <label className="wide">
-              <span>Underlying target <em>optional</em></span>
-              <input type="number" min="0" step="0.01" placeholder="Leave blank to calculate minimum target" value={plan.target_price ?? ''} onChange={(e) => update('target_price', e.target.value)} />
-            </label>
-          </div>
-
-          {calc.canSize && (
-            <>
-              <div className="le-risk-contract-result">
-                <div className="le-risk-contract-primary">
-                  <span>LE size</span>
-                  <strong>{calc.contracts}</strong>
-                  <small>{calc.contracts === 0 ? 'No contract fits both limits' : `${calc.constraint} is binding`}</small>
-                </div>
-                <dl>
-                  <div><dt>Premium used</dt><dd>{money2(calc.premiumUsed)} <small>({calc.premiumPct.toFixed(1)}%)</small></dd></div>
-                  <div><dt>Est. loss at stop</dt><dd className="neg">{money2(calc.actualRisk)} <small>({calc.actualRiskPct.toFixed(2)}%)</small></dd></div>
-                  <div><dt>Exposure limit</dt><dd>{calc.contractsByExposure} contracts</dd></div>
-                  <div><dt>Risk limit</dt><dd>{calc.contractsByRisk} contracts</dd></div>
-                </dl>
-              </div>
-
-              {!calc.stopSideValid && (
-                <div className="le-risk-inline-warning"><AlertTriangle size={13} /> Stop is on the wrong side of entry for this direction.</div>
-              )}
-
-              {calc.contracts > 0 && (calc.target ? (
-                <div className={`le-risk-target-check ${calc.meetsTarget && calc.meetsRR && calc.targetSideValid ? 'good' : 'caution'}`}>
-                  <CheckCircle2 size={14} />
-                  <span>
-                    Target estimates {money2(calc.potentialReward)} reward · {calc.rr == null ? '—' : calc.rr.toFixed(2) + ':1'} R:R
-                    {!calc.targetSideValid ? ' · target is on the wrong side' : !calc.meetsTarget ? ' · below 10% target' : !calc.meetsRR ? ' · below 2:1' : ' · LE checks pass'}
-                  </span>
-                </div>
-              ) : (
-                <div className="le-risk-target-check neutral">
-                  <ShieldCheck size={14} />
-                  <span>Minimum 10% target requires about a {money2(calc.requiredSpotMove)} underlying move to ~{money2(calc.requiredTargetPrice)}.</span>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      </details>
 
       <div className="le-three-rule">
         <div className="le-three-head">
