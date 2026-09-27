@@ -681,6 +681,13 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     }
   };
 
+  const handleReviewSuggestion = (field, item) => {
+    setStrategyForm(prev => ({
+      ...prev,
+      [field]: toggleSuggestedPhrase(prev?.[field] || '', item.text),
+    }));
+  };
+
   // ── Tag handlers ──────────────────────────────────────────────────────────
 
   const handleAddTag = async () => {
@@ -981,10 +988,14 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               </div>
             )}
 
-            {/* ── Strategy tab ──────────────────────────────────────────── */}
-            {tab === 'Strategy' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            {/* ── Guided trade review tab ─────────────────────────────── */}
+            {tab === 'Review' && (
+              <div className="trade-review-shell">
+                <div className="trade-review-toolbar">
+                  <div>
+                    <div className="trade-review-kicker"><Sparkles size={14} /> Guided journal</div>
+                    <div className="trade-review-toolbar-copy">Use quick picks to document the trade consistently, then add any detail that matters.</div>
+                  </div>
                   {!editingStrategy ? (
                     <button
                       onClick={() => {
@@ -995,45 +1006,95 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         });
                         setEditingStrategy(true);
                       }}
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-primary btn-sm"
                       type="button"
                     >
-                      <Pencil size={13} /> Edit
+                      <Pencil size={13} /> {(analysis?.entry_reason || analysis?.exit_reason || analysis?.mistakes) ? 'Edit review' : 'Start review'}
                     </button>
                   ) : (
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">{savingStrategy ? 'Saving…' : 'Save'}</button>
+                      <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">{savingStrategy ? 'Saving…' : 'Save review'}</button>
                       <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost btn-sm">Cancel</button>
                     </div>
                   )}
                 </div>
 
+                <TradeReviewSummary
+                  trade={trade}
+                  entryReason={editingStrategy ? strategyForm.entry_reason : analysis?.entry_reason}
+                  exitReason={editingStrategy ? strategyForm.exit_reason : analysis?.exit_reason}
+                  mistakes={editingStrategy ? strategyForm.mistakes : analysis?.mistakes}
+                />
+
                 {editingStrategy ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <EditTextarea label="Entry Reason" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
-                    <EditTextarea label="Exit Reason"  value={strategyForm.exit_reason}  onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
-                    <EditTextarea label="Mistakes"     value={strategyForm.mistakes}     onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
+                  <div className="trade-review-editor">
+                    <div className="trade-review-editor-head">
+                      <div>
+                        <h3>Build the review</h3>
+                        <p>Click any suggestion to add it. Click it again to remove it. You can still type your own notes.</p>
+                      </div>
+                    </div>
+
+                    <QuickPickGroup
+                      title="Entry"
+                      subtitle="What justified the entry?"
+                      suggestions={ENTRY_REVIEW_SUGGESTIONS}
+                      value={strategyForm.entry_reason}
+                      onToggle={item => handleReviewSuggestion('entry_reason', item)}
+                      tone="entry"
+                    />
+                    <EditTextarea label="Entry notes" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
+
+                    <QuickPickGroup
+                      title="Exit"
+                      subtitle="How did you manage or close the trade?"
+                      suggestions={EXIT_REVIEW_SUGGESTIONS}
+                      value={strategyForm.exit_reason}
+                      onToggle={item => handleReviewSuggestion('exit_reason', item)}
+                      tone="exit"
+                    />
+                    <EditTextarea label="Exit notes" value={strategyForm.exit_reason} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
+
+                    <QuickPickGroup
+                      title="Mistake / improvement"
+                      subtitle="What should change next time?"
+                      suggestions={MISTAKE_REVIEW_SUGGESTIONS}
+                      value={strategyForm.mistakes}
+                      onToggle={item => handleReviewSuggestion('mistakes', item)}
+                      tone="mistake"
+                    />
+                    <EditTextarea label="Mistake / improvement notes" value={strategyForm.mistakes} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
                   </div>
                 ) : (
-                  <>
+                  <div className="trade-review-readonly">
                     {(analysis?.strategy || analysis?.idea_source) && (
-                      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                        {analysis?.strategy && <div><div className="field-label" style={{ marginBottom: 4 }}>Strategy</div><div style={{ color: 'var(--accent-line)', fontWeight: 600 }}>{analysis.strategy}</div></div>}
-                        {analysis?.idea_source && <div><div className="field-label" style={{ marginBottom: 4 }}>Source</div><div style={{ color: 'var(--text-primary)', fontSize: 14 }}>{analysis.idea_source}</div></div>}
+                      <div className="trade-review-context">
+                        {analysis?.strategy && <div><span>Strategy</span><strong>{analysis.strategy}</strong></div>}
+                        {analysis?.idea_source && <div><span>Source</span><strong>{analysis.idea_source}</strong></div>}
                       </div>
                     )}
-                    {analysis?.entry_reason && <div><div className="field-label" style={{ marginBottom: 4 }}>Entry Reason</div><div style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.entry_reason}</div></div>}
-                    {analysis?.exit_reason  && <div><div className="field-label" style={{ marginBottom: 4 }}>Exit Reason</div><div style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.exit_reason}</div></div>}
-                    {analysis?.mistakes     && <div><div className="field-label" style={{ marginBottom: 4 }}>Mistakes</div><div className="neg" style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.mistakes}</div></div>}
-                    {analysis?.ai_feedback  && (
+
+                    <div className="trade-review-note-grid">
+                      <article>
+                        <div className="trade-review-note-title"><Target size={15} /> Entry</div>
+                        <div className="trade-review-note-copy">{analysis?.entry_reason || 'Not documented yet.'}</div>
+                      </article>
+                      <article>
+                        <div className="trade-review-note-title"><CheckCircle2 size={15} /> Exit</div>
+                        <div className="trade-review-note-copy">{analysis?.exit_reason || 'Not documented yet.'}</div>
+                      </article>
+                      <article className={analysis?.mistakes ? 'has-mistake' : ''}>
+                        <div className="trade-review-note-title"><AlertTriangle size={15} /> Mistake / improvement</div>
+                        <div className="trade-review-note-copy">{analysis?.mistakes || 'No improvement note documented yet.'}</div>
+                      </article>
+                    </div>
+
+                    {analysis?.ai_feedback && (
                       <div className="notice accent">
                         {analysis.ai_feedback}
                       </div>
                     )}
-                    {!analysis?.strategy && !analysis?.entry_reason && (
-                      <div className="text-muted" style={{ fontSize: 14 }}>No strategy notes yet. Click Edit to add.</div>
-                    )}
-                  </>
+                  </div>
                 )}
               </div>
             )}
