@@ -487,14 +487,27 @@
 .td-image-modal {
   position: fixed;
   inset: 0;
-  z-index: 10000;
-  display: grid;
-  place-items: center;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
   padding: 32px;
+  border: 0;
+  place-items: center;
   background: rgba(0, 7, 12, .94);
+  color: inherit;
   backdrop-filter: blur(8px);
   cursor: zoom-out;
+  overflow: hidden;
+}
+.td-image-modal[open] {
+  display: grid;
   animation: td-image-backdrop-in .18s ease-out both;
+}
+.td-image-modal::backdrop {
+  background: rgba(0, 7, 12, .94);
+  backdrop-filter: blur(8px);
 }
 .td-image-modal img {
   display: block;
