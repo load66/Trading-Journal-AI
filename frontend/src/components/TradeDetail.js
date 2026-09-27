@@ -113,6 +113,88 @@ function EditTextarea({ label, value, onChange }) {
   );
 }
 
+function QuickPickGroup({ title, subtitle, suggestions, value, onToggle, tone = 'accent' }) {
+  return (
+    <section className={`trade-review-pick-group ${tone}`} aria-label={title}>
+      <div className="trade-review-pick-head">
+        <div>
+          <div className="trade-review-pick-title">{title}</div>
+          <div className="trade-review-pick-subtitle">{subtitle}</div>
+        </div>
+      </div>
+      <div className="trade-review-chip-row">
+        {suggestions.map(item => {
+          const active = hasSuggestedPhrase(value, item.text);
+          return (
+            <button
+              key={item.label}
+              type="button"
+              className={`trade-review-chip${active ? ' active' : ''}`}
+              aria-pressed={active}
+              onClick={() => onToggle(item)}
+              title={item.text}
+            >
+              {active && <CheckCircle2 size={13} />}
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TradeReviewSummary({ trade, entryReason, exitReason, mistakes }) {
+  const completion = reviewCompletion(entryReason, exitReason, mistakes);
+  const selectedMistakes = selectedSuggestions(mistakes, MISTAKE_REVIEW_SUGGESTIONS);
+  const primary = selectedMistakes[0] || null;
+  const pnl = Number(trade?.net_pnl || 0);
+
+  const fallbackFocus = completion < 3
+    ? 'Complete the entry, exit, and mistake review so this trade can contribute to your pattern analysis.'
+    : pnl < 0
+      ? 'Convert the loss into one specific rule you can recognize and execute earlier next time.'
+      : 'Confirm that the profitable outcome came from repeatable process rather than outcome alone.';
+
+  return (
+    <section className="trade-review-summary" aria-label="Trade review summary">
+      <div className="trade-review-summary-head">
+        <div className="trade-review-summary-icon"><Target size={19} /></div>
+        <div>
+          <div className="trade-review-summary-title">Review summary</div>
+          <div className="trade-review-summary-subtitle">{completion}/3 review areas documented</div>
+        </div>
+        <div className={`trade-review-completion c${completion}`}>
+          {completion === 3 ? 'Complete' : 'In progress'}
+        </div>
+      </div>
+
+      <div className="trade-review-summary-grid">
+        <div className="trade-review-summary-cell">
+          <span>Primary improvement</span>
+          <strong className={primary ? 'neg' : ''}>
+            {primary ? primary.label : completion === 3 ? 'No tagged rule violation' : 'Finish the review'}
+          </strong>
+          {primary && <small>{primary.category} execution</small>}
+        </div>
+        <div className="trade-review-summary-cell focus">
+          <span>Next-trade rule</span>
+          <strong>{primary?.correction || fallbackFocus}</strong>
+        </div>
+      </div>
+
+      {selectedMistakes.length > 1 && (
+        <div className="trade-review-patterns">
+          <span>Also flagged</span>
+          {selectedMistakes.slice(1, 4).map(item => (
+            <b key={item.label}>{item.label}</b>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 const EMOTIONAL_STATES = ['Focused', 'Confident', 'Calm', 'Anxious', 'FOMO', 'Frustrated', 'Greedy', 'Fearful', 'Undisciplined', 'Overconfident'];
 const DEFAULT_SOURCES   = ['Watchlist', 'Scanner', 'Alert', 'News', 'Social Media', 'Own Research'];
 
@@ -158,12 +240,6 @@ const MISTAKE_REVIEW_SUGGESTIONS = [
   { label: 'FOMO entry', category: 'Discipline', text: 'Entered because of FOMO instead of waiting for the planned setup.', correction: 'If the planned entry is missed, wait for a new setup instead of chasing.' },
   { label: 'Revenge trade', category: 'Discipline', text: 'Took the trade to recover a prior loss rather than because the setup qualified.', correction: 'Reset after a loss and require the full checklist before the next trade.' },
   { label: 'Overtraded', category: 'Discipline', text: 'Took an extra trade that did not meet the normal quality threshold.', correction: 'Respect the daily trade limit and only take qualified setups.' },
-];
-
-const REVIEW_MANAGED_TAGS = [
-  ...ENTRY_REVIEW_SUGGESTIONS.map(item => ({ tag_type: 'setup', tag_value: item.label })),
-  ...EXIT_REVIEW_SUGGESTIONS.map(item => ({ tag_type: 'execution', tag_value: item.label })),
-  ...MISTAKE_REVIEW_SUGGESTIONS.map(item => ({ tag_type: 'mistake', tag_value: item.label })),
 ];
 
 function phraseLine(text) {
@@ -350,7 +426,7 @@ function barETMinutes(timestamp) {
   return Number(parts.hour) * 60 + Number(parts.minute);
 }
 
-const TABS = ['Stats', 'Strategy', 'Tags', 'LE Review', 'Executions', 'What If'];
+const TABS = ['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'What If'];
 
 const SCENARIOS = [
   { label: '+5 min',    offsetMin: 5 },
