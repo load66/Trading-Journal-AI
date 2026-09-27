@@ -101,7 +101,7 @@ const absMoney = (value) => {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
+function TradeManagement({ kpis, edge, range, onRangeChange, goals, error }) {
   const data = kpis || {};
   const hold = edge?.hold_time || {};
   const totalTrades = Number(data.total_trades || edge?.total_trades || 0);
@@ -320,6 +320,12 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           ))}
         </div>
       </div>
+
+      {error && (
+        <div className="v3-management-data-warning" role="status">
+          {error} No other date range is being substituted.
+        </div>
+      )}
 
       <div className="v3-ref-card-grid">
         <article className="v3-ref-card v3-ref-card-capture">
@@ -620,7 +626,7 @@ export default function DashboardRender(p) {
     goalsNode, onToggleGoals, showGoals,
     accountId, onDayClick,
     goals,
-    managementRange, onManagementRangeChange, managementKpis, managementEdge,
+    managementRange, onManagementRangeChange, managementKpis, managementEdge, managementError,
     latestSmokingGun, onViewSmokingGun,
   } = p;
 
@@ -808,11 +814,12 @@ export default function DashboardRender(p) {
 
           <section className="v3-band v3-dashboard-section v3-management-section">
             <TradeManagement
-              kpis={managementKpis || k}
+              kpis={managementKpis || (managementRange === 'ALL' ? k : null)}
               edge={managementEdge}
               range={managementRange || '30D'}
               onRangeChange={onManagementRangeChange}
               goals={goals}
+              error={managementError}
             />
           </section>
 
