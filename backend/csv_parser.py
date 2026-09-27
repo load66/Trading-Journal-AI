@@ -196,8 +196,24 @@ def canonical_execution_timestamp(
         clock = _parse_clock_time(time_value)
         if clock is None:
             return None
-        local_dt = datetime.combine(day, clock, tzinfo=ZoneInfo(source_timezone))
-        return local_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        zone = ZoneInfo(source_timezone)
+        naive = datetime.combine(day, clock)
+        first = naive.replace(tzinfo=zone, fold=0)
+        second = naive.replace(tzinfo=zone, fold=1)
+
+        # A repeated fall-back clock time is ambiguous without an explicit UTC
+        # offset. Refuse to invent which occurrence the broker meant.
+        if first.utcoffset() != second.utcoffset():
+            return None
+
+        utc_dt = first.astimezone(timezone.utc)
+
+        # Spring-forward can create local wall-clock times that never existed.
+        # Round-trip through UTC and reject those instead of silently shifting.
+        if utc_dt.astimezone(zone).replace(tzinfo=None) != naive:
+            return None
+
+        return utc_dt.isoformat().replace("+00:00", "Z")
     except (ValueError, TypeError, KeyError):
         return None
 
@@ -598,7 +614,7 @@ def parse_trade_history_section(rows: list[list[str]], timezone_info: dict | Non
         if action == 'BOT':
             amount = -amount
 
-        executions.append(attach_execution_timestamp({
+        executions.append(attach_detected_execution_timestamp({
             'action': action,
             'qty': qty,
             'ticker': symbol,
@@ -1675,6 +1691,12 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
             "with the Trades section enabled."
         )
 
+    if timezone_info.get("confidence") == "low":
+        raise ValueError(
+            "IBKR statement timezone could not be verified; nothing was imported. "
+            "Export an Activity Statement that includes Time Zone metadata."
+        )
+
     raw_executions = parse_ibkr_trades_section(trade_records)
     executions = [
         attach_detected_execution_timestamp(ex, "ibkr", timezone_info)
@@ -1947,8 +1969,27 @@ def parse_generic_rows(content):
 
 
 def parse_generic_csv(content, account_id, conn=None):
-    """Generic template pipeline. Same output contract as the broker parsers."""
-    return build_trades_from_executions(parse_generic_rows(content), account_id, conn)
+    """Generic template pipeline with explicit timezone safety."""
+    executions = parse_generic_rows(content)
+    low_confidence = [
+        ex for ex in executions
+        if ex.get("timezone_detection_confidence") == "low"
+    ]
+    if low_confidence:
+        raise ValueError(
+            "Timezone could not be verified for this generic CSV. Nothing was imported. "
+            "Add a timezone column using an IANA zone such as America/Chicago "
+            "(recommended) or a supported US abbreviation such as CT/CST/CDT."
+        )
+    missing_ts = [ex for ex in executions if not ex.get("timestamp_utc")]
+    if missing_ts:
+        sample = missing_ts[0]
+        raise ValueError(
+            "Execution timestamp is ambiguous or invalid in its detected timezone; "
+            "nothing was imported. "
+            f"Example: {sample.get('source_timestamp') or sample.get('time')}"
+        )
+    return build_trades_from_executions(executions, account_id, conn)
 
 
 # ── Broker dispatch ────────────────────────────────────────────────────────────
