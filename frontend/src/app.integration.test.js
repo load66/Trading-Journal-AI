@@ -1098,7 +1098,7 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   expect(captureMeter).toHaveAttribute('aria-valuetext', '64% exit efficiency; goal 60%');
   expect(screen.getByText(/retain a solid portion of the favorable move/i)).toBeVisible();
   expect(screen.getByText('Cumulative net P&L')).toBeVisible();
-  expect(screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Smoking Gun — Latest Audit/i })).toBeVisible();
   expect(screen.getByText('Diagnosis')).toBeVisible();
   expect(screen.getByText('Mechanical action plan')).toBeVisible();
   expect(screen.getByText('Averaging down')).toBeVisible();
@@ -1109,7 +1109,7 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   expect(screen.queryByText('Overall performance')).not.toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'What works' })).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: /View full report/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Open report/i }));
   const smokingTab = await screen.findByRole('tab', { name: 'Smoking Gun' });
   expect(smokingTab).toHaveAttribute('aria-selected', 'true');
 });
@@ -1120,7 +1120,7 @@ test('Dashboard places the calendar and LE planner below Trade Management and be
 
   const management = await screen.findByRole('heading', { name: /Trade management/i });
   const planning = document.querySelector('.v3-dashboard-planning');
-  const smoking = screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i });
+  const smoking = screen.getByRole('heading', { name: /Smoking Gun — Latest Audit/i });
 
   expect(planning).toBeInTheDocument();
   expect(within(planning).getByRole('article', { name: 'Trading calendar' })).toBeVisible();
