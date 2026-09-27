@@ -32,7 +32,9 @@ export default function AddTradeModal({ accounts, defaultAccountId, onClose, onS
     const qty = parseInt(form.quantity);
     const comm = parseFloat(form.commissions) || 0;
     if (!entry || !exit || !qty) return null;
-    const gross = form.side === 'LONG' ? (exit - entry) * qty : (entry - exit) * qty;
+    if (form.instrument_type === 'FUTURE') return null;
+    const multiplier = form.instrument_type === 'OPTION' ? 100 : 1;
+    const gross = (form.side === 'LONG' ? (exit - entry) : (entry - exit)) * qty * multiplier;
     return (gross - comm).toFixed(2);
   };
 
@@ -141,13 +143,13 @@ export default function AddTradeModal({ accounts, defaultAccountId, onClose, onS
             </div>
 
             <div>
-              <label className="field-label" htmlFor="at-comm">Commissions ($)</label>
+              <label className="field-label" htmlFor="at-comm">Commissions &amp; Fees ($)</label>
               <input id="at-comm" type="number" step="0.01" min="0" style={fieldStyle} value={form.commissions} onChange={e => update('commissions', e.target.value)} />
             </div>
 
             <div>
-              <label className="field-label" htmlFor="at-stop">Stop Loss</label>
-              <input id="at-stop" type="number" step="0.01" style={fieldStyle} placeholder="Price level" value={form.stop_loss} onChange={e => update('stop_loss', e.target.value)} />
+              <label className="field-label" htmlFor="at-stop">Stop Distance ($)</label>
+              <input id="at-stop" type="number" step="0.01" min="0" style={fieldStyle} placeholder="Distance from entry" value={form.stop_loss} onChange={e => update('stop_loss', e.target.value)} />
             </div>
 
             <div>
