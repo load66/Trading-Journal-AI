@@ -282,6 +282,7 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
   const [data, setData] = useState(null);
   const [edge, setEdge] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [reportError, setReportError] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
@@ -289,16 +290,29 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
 
   useEffect(() => {
     setLoading(true);
+    setReportError('');
     const params = {};
     if (accountId != null) params.account_id = accountId;
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
     Promise.all([
-      reportsApi.get(params).then(r => r.data).catch(() => null),
-      edgeReportApi.get(params).then(r => r.data).catch(() => null),
-    ]).then(([rep, edg]) => {
+      reportsApi.get(params)
+        .then(r => ({ ok: true, data: r.data }))
+        .catch(() => ({ ok: false, data: null })),
+      edgeReportApi.get(params)
+        .then(r => ({ ok: true, data: r.data }))
+        .catch(() => ({ ok: false, data: null })),
+    ]).then(([repResult, edgeResult]) => {
+      const rep = repResult.data;
       setData(rep && rep.has_data ? rep : null);
-      setEdge(edg);
+      setEdge(edgeResult.data);
+      if (!repResult.ok && !edgeResult.ok) {
+        setReportError('Report and timing analytics could not be loaded.');
+      } else if (!repResult.ok) {
+        setReportError('Report analytics could not be loaded.');
+      } else if (!edgeResult.ok) {
+        setReportError('Timing analytics could not be loaded.');
+      }
       setLoading(false);
     });
   }, [accountId, dateFrom, dateTo]);
@@ -312,9 +326,13 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
     <div>
       <PageHeader
         title="Reports"
-        subtitle={loading ? 'Loading...' : data
-          ? `${data.trade_count.toLocaleString('en-US')} trades across ${s.trading_days} sessions`
-          : 'No trades in range'}
+        subtitle={loading
+          ? 'Loading...'
+          : reportError && !data
+            ? reportError
+            : data
+              ? `${data.trade_count.toLocaleString('en-US')} trades across ${s.trading_days} sessions`
+              : 'No trades in range'}
         actions={
           <DateRangePicker
             dateFrom={dateFrom}
@@ -323,6 +341,12 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
           />
         }
       />
+
+      {reportError && (
+        <div className="notice caution" role="status" style={{ marginBottom: 14 }}>
+          {reportError} Available sections are shown only from data that loaded successfully.
+        </div>
+      )}
 
       <div className="tabs" role="tablist" aria-label="Report sections" style={{ marginBottom: 20 }}>
         {TABS.map(t => (
