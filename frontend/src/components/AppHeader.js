@@ -4,6 +4,7 @@ import {
   CalendarDays, Check, X, Pencil, CalendarCheck, HelpCircle, Upload, Brain, LogOut, Settings as SettingsIcon,
 } from 'lucide-react';
 import { accountsApi } from '../api';
+import { ACCOUNT_TYPES, accountTypeLabel } from '../accountTypes';
 import aiJournalLogo from '../assets/ai-journal-logo.png';
 
 // Every page stays one click away. Import, Brain and Add Trade live with the
@@ -18,15 +19,6 @@ const NAV_ITEMS = [
   { id: 'help', label: 'Help', icon: HelpCircle },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
-
-const ACCOUNT_TYPES = [
-  { value: 'day_trading', label: 'Day Trading' },
-  { value: 'swing_trading', label: 'Swing Trading' },
-  { value: 'mixed_trading', label: 'Mixed Trading' },
-  { value: 'investment', label: 'Investment' },
-];
-
-const accountTypeLabel = (type) => ACCOUNT_TYPES.find(option => option.value === type)?.label || type || 'Unclassified';
 
 const NEW_ACCOUNT_DEFAULT = { name: '', type: 'day_trading', color: '#6366f1', broker: 'Thinkorswim' };
 
