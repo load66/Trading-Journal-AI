@@ -42,6 +42,7 @@ from trade_management_ai import (
     build_management_evidence,
     management_context_signature,
     generate_trade_management_analysis,
+    sanitize_management_ai_result,
 )
 from performance_report import build_performance_report
 from excursion_analysis import calculate_trade_excursion, EXCURSION_ENGINE_VERSION
@@ -3725,6 +3726,7 @@ def get_trade_management_analysis(
                     and int(cached.get("evidence_version") or 0) >= 1
                     and cached.get("input_signature") == input_signature
                 ):
+                    cached = sanitize_management_ai_result(cached)
                     cached["cached"] = True
                     cached["generated_at"] = row["generated_at"]
                     cached["evidence"] = evidence
