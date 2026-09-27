@@ -1495,12 +1495,12 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         and how much of the favourable move you actually kept. */}
                     <StatRow
                       label="Max Favourable (MFE)"
-                      value={trade.mfe_pct == null ? null : `+${Number(trade.mfe_pct).toFixed(2)}%`}
+                      value={trade.excursion_stale || trade.mfe_pct == null ? null : `+${Number(trade.mfe_pct).toFixed(2)}%`}
                       valueColor="var(--result-pos)"
                     />
                     <StatRow
                       label="Max Adverse (MAE)"
-                      value={trade.mae_pct == null ? null : `${Number(trade.mae_pct).toFixed(2)}%`}
+                      value={trade.excursion_stale || trade.mae_pct == null ? null : `-${Math.abs(Number(trade.mae_pct)).toFixed(2)}%`}
                       valueColor="var(--result-neg)"
                     />
                     <StatRow
