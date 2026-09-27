@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, Maximize2 } from 'lucide-react';
 import { tradesApi } from '../api';
 import TradingChart from './TradingChart';
@@ -1728,12 +1729,13 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
       </div>
 
-      {chartScreenshotExpanded && chartScreenshotUrl && (
+      {chartScreenshotExpanded && chartScreenshotUrl && typeof document !== 'undefined' && createPortal(
         <div
           className="td-image-modal"
           role="dialog"
           aria-modal="true"
           aria-label="TradingView screenshot"
+          data-testid="chart-screenshot-lightbox"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setChartScreenshotExpanded(false);
           }}
@@ -1751,7 +1753,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             src={chartScreenshotUrl}
             alt={`${trade.ticker} TradingView review screenshot full screen`}
           />
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
