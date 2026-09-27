@@ -171,12 +171,6 @@ jest.mock('./api', () => {
       addExecution: fn(() => ok({})),
       getAnalysis: fn(() => ok(null)),
       updateAnalysis: fn((tradeGroup, payload) => ok(payload)),
-      copyJournal: fn((tradeGroup, payload) => ok({
-        source: { trade_group: payload.source_trade_group, ticker: 'META', date: '2026-09-10' },
-        analysis: { strategy: 'Test Strategy', entry_reason: 'Copied entry' },
-        tags: [{ id: 902, trade_group: tradeGroup, tag_type: 'setup', tag_value: 'VWAP Reclaim', source: 'manual' }],
-        trade: { ...TRADE, trade_group: tradeGroup, setup: 'VWAP Reclaim', setup_source: 'manual' },
-      })),
       addTag: fn((tradeGroup, payload) => ok({ id: 901, trade_group: tradeGroup, ...payload, source: 'manual' })),
       deleteTag: fn((tagId) => ok({ deleted: true, id: tagId })),
       uploadChartScreenshot: fn(() => ok({ chart_screenshot_path: 'trade-review/test/chart.png' })),
@@ -954,47 +948,6 @@ test('professional Review quick picks stay separate from the full journal note',
   expect(payload.exit_reason).toContain('8 EMA on the 10-minute timeframe');
   expect(payload.mistakes).toContain('Held a losing trade too long');
   expect(payload.notes).toBeNull();
-});
-
-test('copy previous journal opens a simple checked trade picker and pastes safely', async () => {
-  tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: { strategy: 'Test Strategy' }, tags: [] } });
-
-  await renderApp();
-  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
-  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
-  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
-  fireEvent.click(row);
-
-  const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
-  fireEvent.click(within(tablist).getByRole('tab', { name: 'Review' }));
-
-  fireEvent.click(await screen.findByRole('button', { name: /Copy previous journal/i }));
-
-  const picker = await screen.findByRole('dialog', { name: 'Paste from a previous trade' });
-  expect(picker).toBeVisible();
-  expect(within(picker).getByText('Recommended')).toBeVisible();
-  expect(within(picker).getByText('Safe paste')).toBeVisible();
-  expect(within(picker).getByText(/never overwritten/i)).toBeVisible();
-
-  const sourceCheckbox = within(picker).getByRole('checkbox', { name: /Select META 2026-09-10/i });
-  expect(sourceCheckbox).toBeChecked();
-
-  const pasteButton = within(picker).getByRole('button', { name: /Paste selected journal/i });
-  expect(pasteButton).toBeEnabled();
-  fireEvent.click(pasteButton);
-
-  await waitFor(() => expect(tradesApi.copyJournal).toHaveBeenCalled());
-  const [targetGroup, payload] = tradesApi.copyJournal.mock.calls.at(-1);
-  expect(targetGroup).toBe('9/10/26_TSLA_STOCK_1');
-  expect(payload).toEqual({
-    source_trade_group: '9/10/26_META_STOCK_1',
-    include_review: true,
-    include_tags: true,
-    include_strategy: true,
-    include_setup: true,
-    mode: 'merge',
-  });
-  expect(tradesApi.list).toHaveBeenCalledWith(expect.objectContaining({ account_id: 1, limit: 1000 }));
 });
 
 test('LE Complete Review template prebuilds the journal without overwriting analytics fields', async () => {
