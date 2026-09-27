@@ -1573,32 +1573,11 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   onClick={() => setChartScreenshotExpanded(value => !value)}
                   title={chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}
                   aria-pressed={chartScreenshotExpanded}
-                  style={{
-                    width: chartScreenshotExpanded ? 480 : 300,
-                    maxWidth: '100%',
-                    alignSelf: 'flex-start',
-                    flex: '0 0 auto',
-                  }}
                 >
-                  <img
-                    src={chartScreenshotUrl}
-                    alt={`${trade.ticker} TradingView review screenshot`}
-                    style={{
-                      width: '100%',
-                      height: chartScreenshotExpanded ? 270 : 110,
-                      objectFit: 'contain',
-                    }}
-                  />
+                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
                   <span><Maximize2 size={13} /> {chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}</span>
                 </button>
-                <div
-                  className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
-                  style={{
-                    width: chartScreenshotExpanded ? 480 : 300,
-                    maxWidth: '100%',
-                    justifyContent: 'flex-start',
-                  }}
-                >
+                <div className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom">
                   <label className="btn btn-ghost btn-sm td-chart-review-upload">
                     <Upload size={13} /> Replace
                     <input
@@ -1618,10 +1597,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </div>
               </>
             ) : (
-              <label
-                className="td-chart-dropzone td-chart-dropzone-compact"
-                style={{ width: 300, maxWidth: '100%', minHeight: 110, alignSelf: 'flex-start' }}
-              >
+              <label className="td-chart-dropzone td-chart-dropzone-compact">
                 <div className="td-chart-dropzone-empty">
                   <Upload size={24} />
                   <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload screenshot'}</strong>
@@ -2128,32 +2104,11 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   onClick={() => setChartScreenshotExpanded(value => !value)}
                   title={chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}
                   aria-pressed={chartScreenshotExpanded}
-                  style={{
-                    width: chartScreenshotExpanded ? 480 : 300,
-                    maxWidth: '100%',
-                    alignSelf: 'flex-start',
-                    flex: '0 0 auto',
-                  }}
                 >
-                  <img
-                    src={chartScreenshotUrl}
-                    alt={`${trade.ticker} TradingView review screenshot`}
-                    style={{
-                      width: '100%',
-                      height: chartScreenshotExpanded ? 270 : 110,
-                      objectFit: 'contain',
-                    }}
-                  />
+                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
                   <span><Maximize2 size={13} /> {chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}</span>
                 </button>
-                <div
-                  className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
-                  style={{
-                    width: chartScreenshotExpanded ? 480 : 300,
-                    maxWidth: '100%',
-                    justifyContent: 'flex-start',
-                  }}
-                >
+                <div className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom">
                   <label className="btn btn-ghost btn-sm td-chart-review-upload">
                     <Upload size={13} /> Replace
                     <input
@@ -2173,10 +2128,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </div>
               </>
             ) : (
-              <label
-                className="td-chart-dropzone td-chart-dropzone-compact"
-                style={{ width: 300, maxWidth: '100%', minHeight: 110, alignSelf: 'flex-start' }}
-              >
+              <label className="td-chart-dropzone td-chart-dropzone-compact">
                 <div className="td-chart-dropzone-empty">
                   <Upload size={24} />
                   <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload screenshot'}</strong>
@@ -2692,32 +2644,11 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   onClick={() => setChartScreenshotExpanded(value => !value)}
                   title={chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}
                   aria-pressed={chartScreenshotExpanded}
-                  style={{
-                    width: chartScreenshotExpanded ? 480 : 300,
-                    maxWidth: '100%',
-                    alignSelf: 'flex-start',
-                    flex: '0 0 auto',
-                  }}
                 >
-                  <img
-                    src={chartScreenshotUrl}
-                    alt={`${trade.ticker} TradingView review screenshot`}
-                    style={{
-                      width: '100%',
-                      height: chartScreenshotExpanded ? 270 : 110,
-                      objectFit: 'contain',
-                    }}
-                  />
+                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
                   <span><Maximize2 size={13} /> {chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}</span>
                 </button>
-                <div
-                  className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
-                  style={{
-                    width: chartScreenshotExpanded ? 480 : 300,
-                    maxWidth: '100%',
-                    justifyContent: 'flex-start',
-                  }}
-                >
+                <div className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom">
                   <label className="btn btn-ghost btn-sm td-chart-review-upload">
                     <Upload size={13} /> Replace
                     <input
@@ -2737,10 +2668,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </div>
               </>
             ) : (
-              <label
-                className="td-chart-dropzone td-chart-dropzone-compact"
-                style={{ width: 300, maxWidth: '100%', minHeight: 110, alignSelf: 'flex-start' }}
-              >
+              <label className="td-chart-dropzone td-chart-dropzone-compact">
                 <div className="td-chart-dropzone-empty">
                   <Upload size={24} />
                   <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload screenshot'}</strong>
