@@ -453,7 +453,7 @@ test('Trade View surfaces option strategy, review status, excursion and missing-
   expect(screen.getByText('Held first trim too long.')).toBeVisible();
   expect(screen.getByText('+103.7%')).toBeVisible();
   expect(screen.getByText('-72.2%')).toBeVisible();
-  expect(screen.getByText('71%')).toBeVisible();
+  expect(screen.getByText('71.8%')).toBeVisible();
   expect(screen.getByText('Set risk')).toBeVisible();
   expect(screen.queryByText('Not tagged')).not.toBeInTheDocument();
 });
