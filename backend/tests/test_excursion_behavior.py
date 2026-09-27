@@ -74,8 +74,7 @@ def test_option_excursion_uses_contract_premium_path_and_broker_fills():
     result = calculate_trade_excursion(trade, bars, bar_basis="option_premium_1m")
     assert result["basis"] == "option_premium_1m"
     assert result["mfe_pct"] == 50.0
-    assert result["mae_pct"] == 5.0
-    assert result["exit_efficiency"] == 50.0
+    # Entry-minute low may predate the fill, so it is not claimed as confirmed MAE.\n    assert result["mae_pct"] == 0.0\n    assert result["exit_efficiency"] == 50.0
 
 
 def test_option_excursion_rejects_underlying_path_as_profit_capture():
@@ -252,8 +251,7 @@ def test_stock_excursion_does_not_look_ahead_to_later_scale_in():
     ]
     result = calculate_trade_excursion(trade, bars, bar_basis="stock_1m")
     assert result["entry_reference"] == 100
-    assert result["mfe_pct"] == 5.0
-    assert result["mae_pct"] == 21.0
+    # Every held minute contains a fill, so no intraminute high/low is\n    # claimed without ordering evidence. Whole-trade economic MAE is $200 on\n    # $1,800 entry cost after the second fill.\n    assert result["mfe_pct"] == 0.0\n    assert result["mae_pct"] == 11.1111
 
 
 def test_high_trade_count_requires_personal_history():
