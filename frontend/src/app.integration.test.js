@@ -633,10 +633,13 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   expect(screen.getByText('Cumulative net P&L')).toBeVisible();
   expect(screen.queryByText('Profit vs. left on table')).not.toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i })).toBeVisible();
-  expect(screen.getByText('September Smoking Gun')).toBeVisible();
   expect(screen.getByText('Diagnosis')).toBeVisible();
   expect(screen.getByText('Mechanical action plan')).toBeVisible();
   expect(screen.getByText('Averaging down')).toBeVisible();
+  expect(screen.queryByText('Report period')).not.toBeInTheDocument();
+  expect(screen.queryByText('September Smoking Gun')).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: /Recent trades/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: /Open positions/i })).not.toBeInTheDocument();
   expect(screen.queryByText('Overall performance')).not.toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'What works' })).not.toBeInTheDocument();
 
