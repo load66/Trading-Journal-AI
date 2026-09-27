@@ -6576,6 +6576,9 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     line-height: 1.45;
     overflow-wrap: anywhere;
   }
+  .day-review-page .day-review-model-meta {
+    display: none;
+  }
   .day-review-page .v3-cols {
     column-count: 1 !important;
     column-gap: 0;
@@ -6655,6 +6658,9 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     display: grid;
     gap: 8px;
     padding: 0 10px 10px;
+  }
+  .day-review-page .v3-trade-card-shell {
+    min-width: 0;
   }
   .day-review-page .v3-trade-card {
     width: 100%;
