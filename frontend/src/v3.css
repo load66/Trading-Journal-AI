@@ -450,6 +450,25 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-cols > p { orphans: 3; widows: 3; }
 .v3-narr:last-child { margin-bottom: 0; }
 .v3-narr-quiet { font-size: 14px; color: var(--text-secondary); }
+.coach-highlight {
+  display: inline;
+  margin: 0 -1px;
+  padding: 1px 3px;
+  border-radius: 4px;
+  font-weight: 650;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.coach-highlight.good {
+  color: color-mix(in srgb, var(--result-pos) 82%, white);
+  background: color-mix(in srgb, var(--result-pos) 15%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--result-pos) 62%, transparent);
+}
+.coach-highlight.bad {
+  color: color-mix(in srgb, var(--result-neg) 82%, white);
+  background: color-mix(in srgb, var(--result-neg) 15%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--result-neg) 62%, transparent);
+}
 .v3-list { list-style: none; margin: 0; padding: 0; }
 .v3-list li + li { margin-top: 11px; }
 .v3-list li {
@@ -462,6 +481,25 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-list li.good::before { background: var(--result-pos); }
 .v3-list li.bad::before { background: var(--result-neg); }
 .v3-list li.next::before { background: var(--accent-line); }
+.v3-list li.good,
+.v3-list li.bad {
+  padding-top: 7px;
+  padding-right: 10px;
+  padding-bottom: 7px;
+  border-radius: var(--radius-sm);
+}
+.v3-list li.good {
+  color: color-mix(in srgb, var(--result-pos) 68%, var(--text-primary));
+  background: color-mix(in srgb, var(--result-pos) 7%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--result-pos) 58%, transparent);
+}
+.v3-list li.bad {
+  color: color-mix(in srgb, var(--result-neg) 68%, var(--text-primary));
+  background: color-mix(in srgb, var(--result-neg) 7%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--result-neg) 58%, transparent);
+}
+.v3-list li.good::before,
+.v3-list li.bad::before { left: 7px; }
 
 /* the right third of the Today page: what is live right now */
 .v3-rightcol { display: flex; flex-direction: column; }
