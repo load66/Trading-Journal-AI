@@ -1067,6 +1067,7 @@ def list_trades(
         except Exception:
             d['executions'] = []
         is_open = _is_open_position(d)
+        d["is_open"] = is_open
         if open_only and not is_open:
             continue
         if closed_only and is_open:
