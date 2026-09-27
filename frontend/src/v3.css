@@ -669,6 +669,11 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   border-color: color-mix(in srgb, var(--accent-line) 45%, var(--divider));
   background: color-mix(in srgb, var(--accent-line) 8%, transparent);
 }
+.v3-evidence.analyzed {
+  color: var(--accent-line);
+  border-color: color-mix(in srgb, var(--accent-line) 55%, var(--divider));
+  background: color-mix(in srgb, var(--accent-line) 12%, transparent);
+}
 .v3-evidence.insufficient {
   color: var(--text-secondary);
   border-color: var(--divider);

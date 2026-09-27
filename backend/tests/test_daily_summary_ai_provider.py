@@ -95,7 +95,7 @@ def test_daily_summary_prefers_groq(monkeypatch):
     assert result["trade_grades"][0]["grade"] == "N/A"
     assert result["mental_game"].startswith("Insufficient evidence")
     assert result["evidence_locked"] is True
-    assert result["evidence_version"] == 4
+    assert result["evidence_version"] == 5
     assert seen["payload"]["model"] == "openai/gpt-oss-120b"
     assert seen["payload"]["response_format"] == {"type": "json_object"}
     assert seen["headers"]["Authorization"] == "Bearer gsk-test"
@@ -189,4 +189,84 @@ def test_daily_cache_does_not_trust_legacy_summary_without_signature():
         "analytics_engine_version": "current",
     }
     assert daily_summary.daily_cache_matches(content, "current-day-evidence") is False
+
+def test_day_review_preserves_anchored_ai_wmt_mistake(monkeypatch):
+    ctx = context()
+    ctx["trades"][0]["ticker"] = "WMT"
+    ctx["behavior_flags"] = [
+        {
+            "code": "averaging_down",
+            "title": "Added against the position",
+            "detail": "WMT added after price moved against the running average entry.",
+            "evidence": "VERIFIED",
+            "severity": "high",
+            "trade_group": "g1",
+            "ticker": "WMT",
+            "observed_pnl": -58.0,
+        }
+    ]
+    ctx["verified_strengths"] = []
+    ctx["recorded_observations"] = []
+
+    payload = result_payload()
+    payload["mistakes"] = ["WMT was added to while the position was moving against the entry."]
+    payload["mistake_findings"] = [
+        {
+            "text": "WMT was added to while the position was moving against the entry.",
+            "support_type": "verified_behavior_flag",
+            "behavior_code": "averaging_down",
+            "trade_group": "g1",
+            "ticker": "WMT",
+        }
+    ]
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(daily_summary, "_groq_daily_summary", lambda *_args, **_kwargs: payload)
+
+    result = daily_summary.generate_daily_summary(ctx)
+
+    mistakes = result["observations"]["mistakes"]
+    assert any(
+        row.get("evidence") == "VERIFIED"
+        and row.get("code") == "averaging_down"
+        and row.get("ticker") == "WMT"
+        for row in mistakes
+    )
+    assert any(
+        row.get("evidence") == "ANALYZED"
+        and row.get("support_type") == "verified_behavior_flag"
+        and row.get("behavior_code") == "averaging_down"
+        and "WMT" in row.get("text", "")
+        for row in mistakes
+    )
+    assert any("WMT" in text for text in result["mistakes"])
+
+
+def test_day_review_rejects_unanchored_ai_mistake(monkeypatch):
+    ctx = context()
+    ctx["behavior_flags"] = []
+    ctx["verified_strengths"] = []
+    ctx["recorded_observations"] = []
+
+    payload = result_payload()
+    payload["mistakes"] = ["SPY was a revenge trade."]
+    payload["mistake_findings"] = [
+        {
+            "text": "SPY was a revenge trade.",
+            "support_type": "verified_behavior_flag",
+            "behavior_code": "revenge_trade",
+            "trade_group": "g1",
+            "ticker": "SPY",
+        }
+    ]
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(daily_summary, "_groq_daily_summary", lambda *_args, **_kwargs: payload)
+
+    result = daily_summary.generate_daily_summary(ctx)
+
+    assert all("revenge" not in row.get("text", "").lower() for row in result["observations"]["mistakes"])
+    assert all("revenge" not in text.lower() for text in result["mistakes"])
 
