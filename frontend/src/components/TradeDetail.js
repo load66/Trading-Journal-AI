@@ -1464,60 +1464,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             </section>
           )}
 
-          {/* What-if scenarios */}
-          {stats.isClosed && whatIfBars !== null && whatIfBars.length > 0 && (() => {
-            const isStock = !trade.instrument_type || trade.instrument_type === 'STOCK';
-            const scenarios = computeWhatIf(whatIfBars, stats, trade);
-            if (!scenarios) return null;
-            return (
-              <section className="card">
-                <h2 className="section-title">What If Scenarios</h2>
-                <div className="text-muted" style={{ fontSize: 13, margin: '4px 0 12px' }}>
-                  Actual exit: <strong className="num" style={{ color: 'var(--text-primary)' }}>{formatExecutionTimeET(trade.date, stats.closeTime)}</strong> @ <strong className="num" style={{ color: 'var(--text-primary)' }}>${stats.avgExit?.toFixed(2)}</strong>
-                  {isStock && <> · Net P&L: <strong className={`num ${pnl >= 0 ? 'pos' : 'neg'}`}>{fmtSigned$(trade.net_pnl)}</strong></>}
-                </div>
-                {!isStock && (
-                  <div className="notice accent" style={{ fontSize: 13, marginBottom: 10 }}>
-                    Prices shown are the underlying stock. Option P&L not estimated.
-                  </div>
-                )}
-                <div className="scroll-x" style={{ margin: '0 -24px', padding: '0 12px' }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th className={undefined}>Scenario</th>
-                      <th className={'num'}>Price</th>
-                      {isStock && <>
-                        <th className={'num'}>Est. P&L</th>
-                        <th className={'num'}>vs Actual</th>
-                      </>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {scenarios.map((s, i) => {
-                      const better = s.deltaPnl != null && s.deltaPnl > 0;
-                      const worse = s.deltaPnl != null && s.deltaPnl < 0;
-                      return (
-                        <tr key={i}>
-                          <td style={{ fontWeight: 500 }}>{s.label}</td>
-                          <td className="num">{s.price != null ? `$${s.price.toFixed(2)}` : '—'}</td>
-                          {isStock && <>
-                            <td className={`num ${s.whatIfPnl != null ? (s.whatIfPnl >= 0 ? 'pos' : 'neg') : 'text-muted'}`} style={{ fontWeight: 600 }}>
-                              {s.whatIfPnl != null ? fmtSigned$(s.whatIfPnl) : '—'}
-                            </td>
-                            <td className={`num ${better ? 'pos' : worse ? 'neg' : 'text-muted'}`} style={{ fontWeight: 600 }}>
-                              {s.deltaPnl != null ? (s.deltaPnl === 0 ? '—' : (better ? '↑ +' : '↓ ') + '$' + Math.abs(s.deltaPnl).toFixed(0)) : '—'}
-                            </td>
-                          </>}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                </div>
-              </section>
-            );
-          })()}
+
         </div>
           </div>
         </div>
