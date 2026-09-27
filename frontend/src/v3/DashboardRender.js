@@ -1,7 +1,7 @@
 /* The V3 Today page. Presentation only: every value, handler and piece of
    state is passed in from Dashboard.js, so no behaviour lives here. */
 import { useState, useEffect } from 'react';
-import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, AlertTriangle } from 'lucide-react';
+import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, AlertTriangle, BarChart3 } from 'lucide-react';
 import { calendarApi } from '../api';
 import {
   Measures, EquityCurve, DailyPnlBars, MonthGrid,
@@ -190,7 +190,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
     <div className="v3-ref-management">
       <div className="v3-ref-management-head">
         <div className="v3-ref-management-title">
-          <span className="v3-ref-title-icon"><Target size={19} /></span>
+          <span className="v3-ref-title-icon"><BarChart3 size={26} /></span>
           <div>
             <h2>Trade management <HelpDot label="How well you manage trades after entry" /></h2>
             <p>How well do you manage trades after you enter?</p>
