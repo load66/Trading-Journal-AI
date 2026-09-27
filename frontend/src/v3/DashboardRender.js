@@ -173,45 +173,58 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
     <span className="v3-ref-help" title={label} aria-label={label}>?</span>
   );
 
-  const captureSummary = capture == null
-    ? 'Profit capture needs excursion data before it can be scored.'
-    : capture >= captureGoal
-      ? `You capture a solid portion of your winners.`
-      : capture < 0
-        ? 'Winning moves are being fully surrendered before exit.'
-        : 'Too much of the available move is being given back before exit.';
+  const captureSummary = !captureUsable
+    ? 'No contract-level market path is available yet for this window.'
+    : captureConfidence === 'LOW'
+      ? `Low coverage: ${captureN} of ${totalWinners} winning trades across ${captureDays} day${captureDays === 1 ? '' : 's'}. No capture diagnosis yet.`
+      : captureConfidence === 'DEVELOPING'
+        ? `Developing sample: ${captureN} of ${totalWinners} winning trades. Treat this as directional, not proven.`
+        : capture >= captureGoal
+          ? 'You are retaining a solid share of the favorable move on covered winners.'
+          : 'Covered winners are giving back more of the favorable move than your goal allows.';
 
-  const holdSummary = holdRatio == null
-    ? 'More timestamped closed trades are needed to compare holding behavior.'
-    : holdLeak
-      ? 'You hold losers longer than winners.'
-      : 'Losers are not being held materially longer than winners.';
+  const holdSummary = !holdEnough
+    ? `Broker CSV has only ${winnerHoldN} winners and ${loserHoldN} losers with usable timestamps; more trades are needed.`
+    : holdMixed
+      ? 'Average and median hold times disagree, so there is no strong holding-time diagnosis yet.'
+      : holdLeak
+        ? 'Both average and median hold times show losers being held longer than winners.'
+        : 'The broker CSV does not show a consistent loser-holding leak in this window.';
 
-  const captureSplitSummary = capture == null
-    ? 'There is not enough excursion data to compare captured movement with giveback.'
-    : leftOnTable <= 40
-      ? 'You’re capturing a good portion of the available move.'
-      : capture < 0
-        ? 'Favorable movement is being fully surrendered before exit.'
-        : 'A large share of the favorable move is being left on the table.';
+  const captureSplitSummary = !captureUsable
+    ? 'Left-on-table analysis needs actual instrument price-path coverage.'
+    : captureConfidence === 'LOW'
+      ? 'This split is shown for context only because market-path coverage is too thin.'
+      : captureConfidence === 'DEVELOPING'
+        ? 'This split is developing and should not drive a rule change yet.'
+        : leftOnTable <= 40
+          ? 'Covered winners are retaining most of the available favorable move.'
+          : 'Covered winners are leaving a large share of the favorable move on the table.';
 
   const bottomCopy = (() => {
-    const captureSentence = capture == null
-      ? 'Profit capture is not yet measurable in this window.'
-      : capture >= captureGoal
-        ? `You’re doing a good job capturing winners, with ${capture.toFixed(0)}% of the available move versus your ${captureGoal.toFixed(0)}% goal.`
-        : `Profit capture is ${capture.toFixed(0)}%, below your ${captureGoal.toFixed(0)}% goal.`;
+    const brokerBase = `Broker CSV: ${totalTrades} closed trades in the ${rangeCopy}.`;
 
     if (holdLeak) {
-      return `${captureSentence} The main issue is holding losing trades too long — losers average ${loserHold.toFixed(1)} minutes while winners average ${winnerHold.toFixed(1)} minutes. Focus on cutting losing trades faster to improve overall performance.`;
+      return `${brokerBase} The strongest verified management issue is hold time: losers average ${loserHold.toFixed(1)} minutes and winners ${winnerHold.toFixed(1)} minutes, with the medians pointing the same way. Cut invalidated losers faster.`;
     }
+
+    if (captureActionable && capture < captureGoal) {
+      return `${brokerBase} Hold-time behavior does not show a consistent loser-holding leak. Supplemental contract-level market data is reliable enough to flag profit capture at ${capture.toFixed(0)}%, below your ${captureGoal.toFixed(0)}% goal.`;
+    }
+
     if (riskLeak) {
-      return `${captureSentence} The main issue is adverse excursion: trades move farther against you than for you on average. Tighten invalidation and position-risk discipline.`;
+      return `${brokerBase} Hold-time behavior does not show a consistent loser-holding leak. Reliable market-path coverage shows adverse movement exceeding favorable movement on average; tighten entry quality and invalidation discipline.`;
     }
-    if (capture != null && capture < captureGoal) {
-      return `${captureSentence} The clearest improvement is preserving more of the favorable move with a more mechanical exit process.`;
+
+    if (holdMixed) {
+      return `${brokerBase} Hold-time evidence is mixed: average and median behavior do not agree, so no strong hold-time leak is verified. Market-path coverage is ${excursionN}/${excursionTotalN} trades (${excursionCoverage.toFixed(0)}%) across ${excursionDays} day${excursionDays === 1 ? '' : 's'}.`;
     }
-    return `${captureSentence} No single management leak dominates this window, so protect the same exit discipline and keep the process repeatable.`;
+
+    if (holdEnough) {
+      return `${brokerBase} The broker CSV does not show a consistent loser-holding leak. ${captureActionable || riskActionable ? 'Supplemental market-path coverage is reliable and does not identify a stronger management leak.' : `Supplemental market-path coverage is ${excursionN}/${excursionTotalN} trades (${excursionCoverage.toFixed(0)}%) across ${excursionDays} day${excursionDays === 1 ? '' : 's'}, so no additional diagnosis is promoted yet.`}`;
+    }
+
+    return `${brokerBase} There is not enough timestamped winner/loser history to make a strong management diagnosis. Supplemental market-path metrics remain secondary until coverage improves.`;
   })();
 
   return (
