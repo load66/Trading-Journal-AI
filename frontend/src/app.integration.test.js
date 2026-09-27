@@ -587,7 +587,7 @@ test('Tags uses the Settings library and adds a saved mistake tag', async () => 
   expect(await screen.findByText('Trade Tags')).toBeVisible();
   expect(screen.queryByLabelText('Tag value')).not.toBeInTheDocument();
 
-  const category = screen.getByRole('button', { name: /^Mistake\s+2$/ });
+  const category = screen.getByRole('button', { name: 'Mistake' });
   expect(category).toHaveAttribute('aria-pressed', 'true');
 
   const savedTag = screen.getByRole('combobox', { name: 'Saved tag' });
