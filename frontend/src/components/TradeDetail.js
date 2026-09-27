@@ -729,7 +729,12 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         || target.isContentEditable
       )) return;
 
-      const file = Array.from(event.clipboardData?.files || [])
+      const clipboardFiles = Array.from(event.clipboardData?.files || []);
+      const itemFiles = Array.from(event.clipboardData?.items || [])
+        .filter(item => item.kind === 'file' && String(item.type || '').startsWith('image/'))
+        .map(item => item.getAsFile?.())
+        .filter(Boolean);
+      const file = [...clipboardFiles, ...itemFiles]
         .find(item => String(item.type || '').startsWith('image/'));
       if (!file) return;
 
