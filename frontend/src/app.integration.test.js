@@ -442,11 +442,12 @@ test('Reports surfaces setup context, coverage, custom emotion, and saved-risk R
 
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Psychology' }));
   expect(screen.getAllByText('Focused').length).toBeGreaterThan(0);
-  expect(screen.getByText('Entered Too Close to Resistance')).toBeVisible();
+  expect(screen.getByText('Mistake Frequency')).toBeVisible();
 
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Execution' }));
-  expect(screen.getByText('Realized R')).toBeVisible();
-  expect(screen.getByText(/1 \/ 191/)).toBeVisible();
+  const realizedR = screen.getByText('Realized R').closest('.report-coverage-item');
+  expect(realizedR).toBeTruthy();
+  expect(within(realizedR).getByText('1 / 191')).toBeVisible();
 });
 
 test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key navigation', async () => {
