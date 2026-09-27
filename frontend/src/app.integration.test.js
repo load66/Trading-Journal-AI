@@ -536,13 +536,62 @@ test('Chart Review replaces What If and uploads a TradingView screenshot', async
   expect(screen.getByText('PMH / PML dashed')).toBeVisible();
 
   const input = document.querySelector('.td-chart-review-upload input[type="file"]');
-  const file = new File(['chart'], 'qqq-review.png', { type: 'image/png' });
+  const file = new File(['chart'], 'qqq-review.webp', { type: 'image/webp' });
   fireEvent.change(input, { target: { files: [file] } });
 
   await waitFor(() => expect(tradesApi.uploadChartScreenshot).toHaveBeenCalled());
   const [group, formData] = tradesApi.uploadChartScreenshot.mock.calls.at(-1);
   expect(group).toBeTruthy();
-  expect(formData.get('file').name).toBe('qqq-review.png');
+  expect(formData.get('file').name).toBe('qqq-review.webp');
+  expect(screen.getByText(/Paste with Ctrl\+V or upload/i)).toBeVisible();
+});
+
+test('trade screenshot can be pasted from clipboard without saving a local file', async () => {
+  tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: {}, tags: [] } });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
+  fireEvent.click(row);
+
+  const pasted = new File(['clipboard-chart'], 'clipboard.webp', { type: 'image/webp' });
+  fireEvent.paste(document.body, {
+    clipboardData: {
+      files: [pasted],
+      items: [],
+    },
+  });
+
+  await waitFor(() => expect(tradesApi.uploadChartScreenshot).toHaveBeenCalled());
+  const [, formData] = tradesApi.uploadChartScreenshot.mock.calls.at(-1);
+  expect(formData.get('file').type).toBe('image/webp');
+});
+
+test('saved chart screenshot sits below Tags as a compact click-to-enlarge preview', async () => {
+  URL.createObjectURL.mockImplementation(() => 'blob:trade-chart-review');
+  tradesApi.getAnalysis.mockResolvedValue({
+    data: {
+      analysis: { chart_screenshot_path: 'trade-review/test/chart.webp' },
+      tags: [{ id: 1, tag_type: 'setup', tag_value: 'PDH Break' }],
+    },
+  });
+  tradesApi.getChartScreenshot.mockResolvedValue({
+    data: new Blob(['image'], { type: 'image/webp' }),
+  });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
+  fireEvent.click(row);
+
+  await waitFor(() => expect(tradesApi.getChartScreenshot).toHaveBeenCalled());
+  expect(await screen.findByText('Chart screenshot')).toBeVisible();
+  const preview = await screen.findByTitle('Click to enlarge');
+  expect(preview).toBeVisible();
+  fireEvent.click(preview);
+  expect(await screen.findByRole('dialog', { name: 'TradingView screenshot' })).toBeVisible();
 });
 
 test('guided Review quick picks generate journal text and actionable correction', async () => {

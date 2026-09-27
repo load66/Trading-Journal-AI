@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, Maximize2 } from 'lucide-react';
 import { tradesApi } from '../api';
 import TradingChart from './TradingChart';
@@ -16,6 +16,85 @@ const fmtSigned$ = (v) => {
   const n = Number(v);
   return (n >= 0 ? '+$' : '-$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+
+const SCREENSHOT_MAX_DIMENSION = 1600;
+const SCREENSHOT_TARGET_BYTES = 900 * 1024;
+
+function canvasBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (blob) resolve(blob);
+      else reject(new Error('Could not compress screenshot.'));
+    }, type, quality);
+  });
+}
+
+async function loadScreenshotImage(file) {
+  if (typeof createImageBitmap === 'function') {
+    const bitmap = await createImageBitmap(file);
+    return {
+      source: bitmap,
+      width: bitmap.width,
+      height: bitmap.height,
+      close: () => bitmap.close?.(),
+    };
+  }
+
+  const url = URL.createObjectURL(file);
+  const image = new Image();
+  image.decoding = 'async';
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = () => reject(new Error('Could not read screenshot image.'));
+    image.src = url;
+  });
+  URL.revokeObjectURL(url);
+  return { source: image, width: image.naturalWidth, height: image.naturalHeight, close: () => {} };
+}
+
+export async function optimizeChartScreenshot(file) {
+  if (!file || !String(file.type || '').startsWith('image/')) {
+    throw new Error('Paste or choose an image file.');
+  }
+  if (file.type === 'image/webp' && file.size <= SCREENSHOT_TARGET_BYTES) return file;
+
+  const image = await loadScreenshotImage(file);
+  try {
+    const originalLongEdge = Math.max(image.width, image.height);
+    const dimensionSteps = [SCREENSHOT_MAX_DIMENSION, 1400, 1200]
+      .map(maxDimension => Math.min(maxDimension, originalLongEdge))
+      .filter((value, index, arr) => value > 0 && arr.indexOf(value) === index);
+    const qualitySteps = [0.82, 0.72, 0.62];
+
+    let bestBlob = null;
+    for (const maxDimension of dimensionSteps) {
+      const scale = Math.min(1, maxDimension / originalLongEdge);
+      const width = Math.max(1, Math.round(image.width * scale));
+      const height = Math.max(1, Math.round(image.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Screenshot compression is unavailable in this browser.');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(image.source, 0, 0, width, height);
+
+      for (const quality of qualitySteps) {
+        const blob = await canvasBlob(canvas, 'image/webp', quality);
+        if (!bestBlob || blob.size < bestBlob.size) bestBlob = blob;
+        if (blob.size <= SCREENSHOT_TARGET_BYTES) {
+          return new File([blob], 'trade-review.webp', { type: 'image/webp', lastModified: Date.now() });
+        }
+      }
+    }
+
+    if (!bestBlob) throw new Error('Could not compress screenshot.');
+    return new File([bestBlob], 'trade-review.webp', { type: 'image/webp', lastModified: Date.now() });
+  } finally {
+    image.close();
+  }
+}
 
 function parseExecs(trade) {
   const raw = trade.executions;
@@ -504,6 +583,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [chartScreenshotUploading, setChartScreenshotUploading] = useState(false);
   const [chartScreenshotError, setChartScreenshotError] = useState(null);
   const [chartScreenshotExpanded, setChartScreenshotExpanded] = useState(false);
+  const [chartScreenshotRevision, setChartScreenshotRevision] = useState(0);
 
   // Stats edit
   const [editingStats, setEditingStats]   = useState(false);
@@ -701,23 +781,51 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [trade.trade_group, analysis?.chart_screenshot_path]);
+  }, [trade.trade_group, analysis?.chart_screenshot_path, chartScreenshotRevision]);
 
-  const handleChartScreenshotUpload = async (file) => {
+  const handleChartScreenshotUpload = useCallback(async (file) => {
     if (!file) return;
     setChartScreenshotUploading(true);
     setChartScreenshotError(null);
     try {
+      const optimized = await optimizeChartScreenshot(file);
       const form = new FormData();
-      form.append('file', file);
+      form.append('file', optimized, optimized.name);
       const res = await tradesApi.uploadChartScreenshot(trade.trade_group, form);
       setAnalysis(prev => ({ ...(prev || {}), chart_screenshot_path: res.data.chart_screenshot_path }));
+      setChartScreenshotRevision(value => value + 1);
     } catch (e) {
       setChartScreenshotError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Upload failed.');
     } finally {
       setChartScreenshotUploading(false);
     }
-  };
+  }, [trade.trade_group]);
+
+  useEffect(() => {
+    const handlePaste = (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && (
+        target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.isContentEditable
+      )) return;
+
+      const clipboardFiles = Array.from(event.clipboardData?.files || []);
+      const itemFiles = Array.from(event.clipboardData?.items || [])
+        .filter(item => item.kind === 'file' && String(item.type || '').startsWith('image/'))
+        .map(item => item.getAsFile?.())
+        .filter(Boolean);
+      const file = [...clipboardFiles, ...itemFiles]
+        .find(item => String(item.type || '').startsWith('image/'));
+      if (!file) return;
+
+      event.preventDefault();
+      handleChartScreenshotUpload(file);
+    };
+
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [handleChartScreenshotUpload]);
 
   const handleChartScreenshotDelete = async () => {
     setChartScreenshotError(null);
@@ -848,64 +956,16 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
 
         <div className="td-main">
-          <section className="td-visual-review" aria-label="Visual trade review">
-            <div className="card td-live-chart">
-              <TradingChart
-                ticker={trade.ticker}
-                date={trade.date}
-                tradeGroup={trade.trade_group}
-                defaultTimeframe="10Min"
-                executions={parseExecs(trade)}
-                side={trade.side}
-                analysis={analysis}
-                height={520}
-              />
-            </div>
-
-            <aside className="card td-chart-screenshot">
-              <div className="td-chart-screenshot-head">
-                <div>
-                  <div className="section-title" style={{ fontSize: 17 }}>TradingView screenshot</div>
-                  <div className="text-muted" style={{ fontSize: 12.5, marginTop: 3 }}>Compare your marked-up plan with the recorded trade.</div>
-                </div>
-                {analysis?.chart_screenshot_path && (
-                  <div className="td-chart-screenshot-actions">
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setChartScreenshotExpanded(true)} title="Open larger">
-                      <Maximize2 size={14} /> View
-                    </button>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={handleChartScreenshotDelete} title="Remove screenshot">
-                      <Trash2 size={14} /> Remove
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <label className={`td-chart-dropzone${chartScreenshotUrl ? ' has-image' : ''}`}>
-                {chartScreenshotLoading ? (
-                  <div className="text-muted">Loading screenshot…</div>
-                ) : chartScreenshotUrl ? (
-                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
-                ) : (
-                  <div className="td-chart-dropzone-empty">
-                    <Upload size={30} />
-                    <strong>{chartScreenshotUploading ? 'Uploading…' : 'Upload TradingView screenshot'}</strong>
-                    <span>PNG, JPG or WEBP · include your long/short position drawing and annotations</span>
-                  </div>
-                )}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  disabled={chartScreenshotUploading}
-                  onChange={e => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    handleChartScreenshotUpload(file);
-                  }}
-                />
-              </label>
-              {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
-              {chartScreenshotUrl && <div className="text-muted td-chart-replace-hint">Click the screenshot to replace it, or use View to inspect it larger.</div>}
-            </aside>
+          <section className="card td-live-chart" aria-label="Trade chart">
+            <TradingChart
+              ticker={trade.ticker}
+              date={trade.date}
+              tradeGroup={trade.trade_group}
+              defaultTimeframe="10Min"
+              executions={parseExecs(trade)}
+              side={trade.side}
+              height={520}
+            />
           </section>
 
           <div className="td-lower">
@@ -1384,7 +1444,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   <span>PMH / PML dashed</span>
                 </div>
                 <label className="btn btn-primary btn-sm td-chart-review-upload">
-                  <Upload size={14} /> {analysis?.chart_screenshot_path ? 'Replace TradingView screenshot' : 'Upload TradingView screenshot'}
+                  <Upload size={14} /> {analysis?.chart_screenshot_path ? 'Replace screenshot' : 'Paste or upload screenshot'}
                   <input
                     type="file"
                     accept="image/png,image/jpeg,image/webp"
@@ -1440,6 +1500,71 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               </div>
             </section>
           )}
+
+          {/* TradingView screenshot — compact until opened */}
+          <section className="card td-chart-screenshot-side" aria-label="TradingView screenshot">
+            <div className="td-chart-screenshot-head">
+              <div>
+                <div className="section-title" style={{ fontSize: 15 }}>Chart screenshot</div>
+                <div className="text-muted" style={{ fontSize: 11.5, marginTop: 2 }}>
+                  Paste with Ctrl+V or upload. Stored images are automatically compressed.
+                </div>
+              </div>
+            </div>
+
+            {chartScreenshotLoading ? (
+              <div className="td-chart-preview-loading text-muted">Loading screenshot…</div>
+            ) : chartScreenshotUrl ? (
+              <>
+                <button
+                  type="button"
+                  className="td-chart-preview"
+                  onClick={() => setChartScreenshotExpanded(true)}
+                  title="Click to enlarge"
+                >
+                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
+                  <span><Maximize2 size={13} /> Click to enlarge</span>
+                </button>
+                <div className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom">
+                  <label className="btn btn-ghost btn-sm td-chart-review-upload">
+                    <Upload size={13} /> Replace
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={chartScreenshotUploading}
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        handleChartScreenshotUpload(file);
+                      }}
+                    />
+                  </label>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={handleChartScreenshotDelete}>
+                    <Trash2 size={13} /> Remove
+                  </button>
+                </div>
+              </>
+            ) : (
+              <label className="td-chart-dropzone td-chart-dropzone-compact">
+                <div className="td-chart-dropzone-empty">
+                  <Upload size={24} />
+                  <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload screenshot'}</strong>
+                  <span>Ctrl+V works anywhere on this trade. Or click here to choose an image.</span>
+                </div>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={chartScreenshotUploading}
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    handleChartScreenshotUpload(file);
+                  }}
+                />
+              </label>
+            )}
+            {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
+          </section>
 
           {/* AI Feedback — only shown when diary analysis exists */}
           {analysis?.ai_feedback && (
