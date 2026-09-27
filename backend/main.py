@@ -385,6 +385,9 @@ class AccountCreate(BaseModel):
     broker: str | None = None
 
 
+ACCOUNT_TYPES = ('day_trading', 'swing_trading', 'mixed_trading', 'investment')
+
+
 @app.get("/api/accounts")
 def list_accounts(conn: sqlite3.Connection = Depends(get_connection)):
     rows = conn.execute("SELECT * FROM accounts ORDER BY created_at").fetchall()
@@ -409,9 +412,8 @@ def update_account(account_id: int, data: AccountUpdate, conn: sqlite3.Connectio
         return row_to_dict(row)
 
     if 'type' in updates:
-        valid_types = {'day_trading', 'swing_trading', 'investment'}
-        if updates['type'] not in valid_types:
-            raise ValueError(f"type must be one of {valid_types}")
+        if updates['type'] not in ACCOUNT_TYPES:
+            raise ValueError(f"type must be one of {', '.join(ACCOUNT_TYPES)}")
 
     set_clause = ', '.join(f"{k}=?" for k in updates)
     conn.execute(f"UPDATE accounts SET {set_clause} WHERE id=?", list(updates.values()) + [account_id])
@@ -423,9 +425,8 @@ def update_account(account_id: int, data: AccountUpdate, conn: sqlite3.Connectio
 
 @app.post("/api/accounts", status_code=201)
 def create_account(data: AccountCreate, conn: sqlite3.Connection = Depends(get_connection)):
-    valid_types = {'day_trading', 'swing_trading', 'investment'}
-    if data.type not in valid_types:
-        raise ValueError(f"type must be one of {valid_types}")
+    if data.type not in ACCOUNT_TYPES:
+        raise ValueError(f"type must be one of {', '.join(ACCOUNT_TYPES)}")
 
     account_id = insert_and_get_id(
         conn,

@@ -19,6 +19,15 @@ const NAV_ITEMS = [
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ];
 
+const ACCOUNT_TYPES = [
+  { value: 'day_trading', label: 'Day Trading' },
+  { value: 'swing_trading', label: 'Swing Trading' },
+  { value: 'mixed_trading', label: 'Mixed Trading' },
+  { value: 'investment', label: 'Investment' },
+];
+
+const accountTypeLabel = (type) => ACCOUNT_TYPES.find(option => option.value === type)?.label || type || 'Unclassified';
+
 const NEW_ACCOUNT_DEFAULT = { name: '', type: 'day_trading', color: '#6366f1', broker: 'Thinkorswim' };
 
 function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCreated }) {
@@ -28,6 +37,7 @@ function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCr
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
+  const [editType, setEditType] = useState('day_trading');
   const rootRef = useRef(null);
   const triggerRef = useRef(null);
 
@@ -59,17 +69,18 @@ function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCr
     e.stopPropagation();
     setEditingId(acct.id);
     setEditName(acct.name);
+    setEditType(acct.type || 'day_trading');
   };
 
   const saveEdit = async (e, acctId) => {
     e.stopPropagation();
     if (!editName.trim()) return;
     try {
-      await accountsApi.update(acctId, { name: editName.trim() });
+      await accountsApi.update(acctId, { name: editName.trim(), type: editType });
       await onAccountCreated();
       setEditingId(null);
     } catch (err) {
-      alert('Failed to rename: ' + (err.response?.data?.error || err.message));
+      alert('Failed to update account: ' + (err.response?.data?.error || err.message));
     }
   };
 
@@ -124,10 +135,10 @@ function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCr
           {accounts.map(acct => (
             <div key={acct.id} className="dropdown-row">
               {editingId === acct.id ? (
-                <div className="dropdown-item" style={{ cursor: 'default' }}>
+                <div className="acct-edit-form">
                   <span className="acct-dot" style={{ background: acct.color }} aria-hidden="true" />
                   <input
-                    aria-label={`New name for ${acct.name}`}
+                    aria-label={`Account name for ${acct.name}`}
                     value={editName}
                     onChange={e => setEditName(e.target.value)}
                     onKeyDown={e => {
@@ -136,14 +147,25 @@ function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCr
                     }}
                     onClick={e => e.stopPropagation()}
                     autoFocus
-                    style={{ flex: 1, minWidth: 0, fontSize: 13, minHeight: 30, padding: '3px 8px' }}
                   />
-                  <button type="button" className="btn btn-ghost btn-icon" onClick={e => saveEdit(e, acct.id)} aria-label="Save account name">
-                    <Check size={15} className="pos" />
-                  </button>
-                  <button type="button" className="btn btn-ghost btn-icon" onClick={e => { e.stopPropagation(); setEditingId(null); }} aria-label="Cancel rename">
-                    <X size={15} />
-                  </button>
+                  <select
+                    aria-label={`Account type for ${acct.name}`}
+                    value={editType}
+                    onChange={e => setEditType(e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {ACCOUNT_TYPES.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <div className="acct-edit-actions">
+                    <button type="button" className="btn btn-ghost btn-icon" onClick={e => saveEdit(e, acct.id)} aria-label="Save account changes">
+                      <Check size={15} className="pos" />
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-icon" onClick={e => { e.stopPropagation(); setEditingId(null); }} aria-label="Cancel account edit">
+                      <X size={15} />
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -155,14 +177,15 @@ function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCr
                     onClick={() => choose(acct.id)}
                   >
                     <span className="acct-dot" style={{ background: acct.color }} aria-hidden="true" />
-                    <span>{acct.name}</span>
+                    <span className="acct-row-name">{acct.name}</span>
+                    <span className="acct-type-badge">{accountTypeLabel(acct.type)}</span>
                   </button>
                   <button
                     type="button"
                     className="btn btn-ghost btn-icon"
                     onClick={e => startEdit(e, acct)}
-                    aria-label={`Rename ${acct.name}`}
-                    title="Rename account"
+                    aria-label={`Edit ${acct.name}`}
+                    title="Edit account"
                   >
                     <Pencil size={13} />
                   </button>
@@ -197,9 +220,9 @@ function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCr
                 value={newAcct.type}
                 onChange={e => setNewAcct(p => ({ ...p, type: e.target.value }))}
               >
-                <option value="day_trading">Day Trading</option>
-                <option value="swing_trading">Swing Trading</option>
-                <option value="investment">Investment</option>
+                {ACCOUNT_TYPES.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
               <div style={{ display: 'flex', gap: 8 }}>
                 <label className="sr-only" htmlFor="new-acct-color">Account color</label>

@@ -77,7 +77,49 @@ def test_existing_legacy_column_is_adopted_into_schema_migrations():
         for row in conn.execute('SELECT migration_id FROM schema_migrations')
     }
     expected = {m.migration_id for m in database.MIGRATIONS}
+    expected.add(database.ACCOUNTS_MIXED_TYPE_MIGRATION_ID)
     assert applied == expected
+
+
+def test_existing_sqlite_accounts_expand_type_constraint_without_losing_references():
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute("""CREATE TABLE accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('day_trading','swing_trading','investment')),
+        color TEXT NOT NULL DEFAULT '#6366f1',
+        broker TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )""")
+    conn.execute("""CREATE TABLE trades (
+        id INTEGER PRIMARY KEY,
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        setup TEXT, setup_grade TEXT, setup_notes TEXT, setup_features TEXT,
+        setup_source TEXT DEFAULT 'auto', mfe_pct REAL, mae_pct REAL,
+        exit_efficiency REAL, excursion_basis TEXT, excursion_calculated_at TEXT,
+        excursion_version TEXT
+    )""")
+    conn.execute("""CREATE TABLE trade_analysis (
+        id INTEGER PRIMARY KEY, target_price REAL, trade_rating INTEGER,
+        idea_source TEXT, chart_screenshot_path TEXT
+    )""")
+    conn.execute("INSERT INTO accounts (id, name, type) VALUES (1, 'Primary', 'day_trading')")
+    conn.execute("INSERT INTO trades (id, account_id) VALUES (10, 1)")
+    conn.commit()
+
+    database.apply_migrations(conn)
+    conn.execute("UPDATE accounts SET type='mixed_trading' WHERE id=1")
+    conn.commit()
+
+    account = conn.execute('SELECT id, name, type FROM accounts').fetchone()
+    trade = conn.execute('SELECT id, account_id FROM trades').fetchone()
+    assert dict(account) == {'id': 1, 'name': 'Primary', 'type': 'mixed_trading'}
+    assert dict(trade) == {'id': 10, 'account_id': 1}
+    assert conn.execute('PRAGMA foreign_key_check').fetchall() == []
+    assert conn.execute('PRAGMA foreign_keys').fetchone()[0] == 1
+    conn.close()
 
 
 def test_migration_error_propagates(monkeypatch):
@@ -105,7 +147,7 @@ def test_init_db_is_idempotent(tmp_path):
     migrations = conn.execute(
         'SELECT COUNT(*) AS n FROM schema_migrations'
     ).fetchone()['n']
-    assert migrations == len(database.MIGRATIONS)
+    assert migrations == len(database.MIGRATIONS) + 1
     conn.close()
 
 

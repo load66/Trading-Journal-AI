@@ -413,7 +413,7 @@ summary:focus-visible {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  width: 290px;
+  width: 340px;
   max-width: calc(100vw - 32px);
   background: var(--surface-panel);
   border: 1px solid var(--divider);
@@ -450,6 +450,27 @@ summary:focus-visible {
 .dropdown-row { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-2); }
 .dropdown-row .dropdown-item { flex: 1; min-width: 0; }
 .dropdown-row .dropdown-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-row-name { flex: 1; min-width: 0; }
+.acct-type-badge {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+}
+.acct-edit-form {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(110px, 0.8fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--space-2) 6px var(--space-3);
+}
+.acct-edit-form input, .acct-edit-form select { min-width: 0; min-height: 32px; padding: 4px 7px; font-size: 12px; }
+.acct-edit-actions { display: flex; align-items: center; gap: 2px; }
 
 /* ============================================================
    Page scaffolding
