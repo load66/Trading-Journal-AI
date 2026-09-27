@@ -1175,6 +1175,8 @@ test('Settings Storage shows R2 free-tier health and refreshes on demand', async
 test('Settings merges one strategy into another', async () => {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
+  const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
+  fireEvent.click(within(tablist).getByRole('tab', { name: /Strategies/ }));
   fireEvent.click(await screen.findByRole('button', { name: 'Merge Continuation RS into another strategy' }));
   fireEvent.change(screen.getByRole('combobox', { name: /Merge "Continuation RS" into/ }), { target: { value: 'VWAP Cross' } });
   fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
