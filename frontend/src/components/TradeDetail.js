@@ -1575,7 +1575,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     alt={`${trade.ticker} TradingView review screenshot`}
                     style={{
                       width: '100%',
-                      height: chartScreenshotExpanded ? 390 : 300,
+                      height: 'auto',
+                      maxHeight: chartScreenshotExpanded ? 390 : 300,
                       objectFit: 'contain',
                     }}
                   />
