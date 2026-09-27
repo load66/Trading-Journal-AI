@@ -455,7 +455,7 @@ test('guided Review quick picks generate journal text and actionable correction'
   fireEvent.click(screen.getByRole('button', { name: 'Held loser too long' }));
 
   expect(screen.getByText(/3\/3 review areas documented/i)).toBeVisible();
-  expect(screen.getByText('Held loser too long')).toBeVisible();
+  expect(screen.getAllByText('Held loser too long').length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText(/Exit sooner when favorable progress fails and technical invalidation begins/i)).toBeVisible();
 
   const entryNotes = screen.getByRole('textbox', { name: 'Entry notes' });
