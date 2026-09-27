@@ -958,7 +958,10 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </div>
 
                 <StatRow label="Side" value={trade.side} />
-                <StatRow label="Stocks traded" value={stats.totalQty || '—'} />
+                <StatRow
+                  label={trade.instrument_type === 'STOCK' ? 'Shares traded' : 'Contracts traded'}
+                  value={stats.totalQty || '—'}
+                />
                 <StatRow label="Commissions & Fees" value={trade.commissions ? fmt$(trade.commissions) : '—'} />
                 <StatRow label="P/L %" value={stats.plPercent != null ? `${stats.plPercent >= 0 ? '+' : ''}${stats.plPercent.toFixed(2)}%` : '—'} valueColor={stats.plPercent != null ? (stats.plPercent >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
                 <StatRow label="Gross P&L" value={trade.gross_pnl != null ? fmt$(trade.gross_pnl) : '—'} valueColor={trade.gross_pnl >= 0 ? 'var(--green)' : 'var(--red)'} />
