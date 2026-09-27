@@ -1429,6 +1429,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         "exit_efficiency_median": med([r["exit_efficiency"] for r in capture_rows]),
         "avg_mfe": avg([r["mfe_pct"] for r in rows]),
         "avg_mae": avg([r["mae_pct"] for r in rows]),
+        "median_mfe": med([r["mfe_pct"] for r in rows]),
+        "median_mae": med([r["mae_pct"] for r in rows]),
         "avg_mae_win": avg([r["mae_pct"] for r in wins]),
         "avg_mae_loss": avg([r["mae_pct"] for r in losses]),
         "excursion_n": excursion_n,

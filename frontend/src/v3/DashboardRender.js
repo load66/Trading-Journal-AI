@@ -132,6 +132,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
 
   const rawMfe = data.avg_mfe == null ? null : Number(data.avg_mfe);
   const rawMae = data.avg_mae == null ? null : Number(data.avg_mae);
+  const medianMfe = data.median_mfe == null ? null : Number(data.median_mfe);
+  const medianMae = data.median_mae == null ? null : Number(data.median_mae);
   const excursionN = Number(data.excursion_n || 0);
   const managementCoverage = Number(data.management_coverage_pct || 0);
   const excursionConfidence = String(data.excursion_confidence || 'LOW').toUpperCase();
@@ -147,7 +149,15 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const adversePct = adverseMove == null ? 0 : Math.max(8, Math.min(100, (adverseMove / moveMax) * 100));
 
   const holdLeak = holdReliable && avgHoldLeak && (winnerMedian == null || loserMedian == null || medianHoldLeak);
-  const riskLeak = riskUsable && adverseMove > favorableMove;
+  const avgRiskPositive = riskUsable && favorableMove > adverseMove * 1.10;
+  const avgRiskLeak = riskUsable && adverseMove > favorableMove * 1.10;
+  const medianRiskPositive = riskUsable && medianMfe != null && medianMae != null && medianMfe > medianMae * 1.10;
+  const medianRiskLeak = riskUsable && medianMfe != null && medianMae != null && medianMae > medianMfe * 1.10;
+  const riskMixed = riskUsable && medianMfe != null && medianMae != null
+    && ((avgRiskPositive && medianRiskLeak) || (avgRiskLeak && medianRiskPositive)
+      || (!avgRiskPositive && !avgRiskLeak) !== (!medianRiskPositive && !medianRiskLeak));
+  const riskLeak = riskUsable && avgRiskLeak && (medianMfe == null || medianMae == null || medianRiskLeak);
+  const riskPositive = riskUsable && avgRiskPositive && (medianMfe == null || medianMae == null || medianRiskPositive);
   const rangeCopy = range === '7D'
     ? 'last 7 days'
     : range === '90D'
@@ -196,9 +206,13 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
     ? 'MFE/MAE diagnosis is withheld until actual-instrument path coverage is sufficient.'
     : excursionConfidence === 'DEVELOPING'
       ? 'MFE/MAE is a developing signal based only on currently covered trades.'
-      : riskLeak
-        ? 'Average adverse excursion exceeds favorable excursion on covered trades.'
-        : 'Average favorable excursion exceeds adverse excursion on covered trades.';
+      : riskMixed
+        ? 'Mean and median excursion disagree, so no firm risk-direction diagnosis is issued.'
+        : riskLeak
+          ? 'Both average and median adverse excursion exceed favorable excursion on covered trades.'
+          : riskPositive
+            ? 'Both average and median favorable excursion exceed adverse excursion on covered trades.'
+            : 'Favorable and adverse excursion are too close for a firm directional diagnosis.';
 
   const bottomCopy = (() => {
     const csvSentence = holdReliable
@@ -221,8 +235,12 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       return csvSentence + ' Profit capture is ' + capture.toFixed(0) + '% on ' + captureN + ' covered winners, below your ' + captureGoal.toFixed(0) + '% goal. That is the strongest excursion-based management leak in this window.';
     }
 
+    if (riskUsable && excursionConfidence === 'RELIABLE' && riskMixed) {
+      return csvSentence + ' Excursion averages and medians disagree, so outliers are affecting the risk picture and no firm MFE/MAE diagnosis is promoted.';
+    }
+
     if (riskUsable && excursionConfidence === 'RELIABLE' && riskLeak) {
-      return csvSentence + ' Covered trades show more adverse than favorable excursion on average, so risk containment is the strongest excursion-based concern.';
+      return csvSentence + ' Covered trades show more adverse than favorable excursion in both average and median behavior, so risk containment is the strongest excursion-based concern.';
     }
 
     if ((captureUsable && captureConfidence === 'DEVELOPING') || (riskUsable && excursionConfidence === 'DEVELOPING')) {
@@ -233,7 +251,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   })();
 
   const captureEvidence = captureN + '/' + captureWinnerTotal + ' winning trades · ' + captureCoverage.toFixed(0) + '% coverage · ' + captureConfidence;
-  const riskEvidence = excursionN + '/' + totalTrades + ' trades · ' + managementCoverage.toFixed(0) + '% coverage · ' + excursionConfidence;
+  const riskEvidence = excursionN + '/' + totalTrades + ' trades · ' + managementCoverage.toFixed(0) + '% coverage · ' + excursionConfidence
+    + (medianMfe != null && medianMae != null ? ' · medians +' + medianMfe.toFixed(2) + '% / -' + medianMae.toFixed(2) + '%' : '');
   const holdEvidence = holdN + '/' + totalTrades + ' trades · ' + holdCoverage.toFixed(0) + '% broker timestamp coverage';
   const bottomTone = holdLeak
     ? 'bad'
@@ -389,7 +408,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <div className="v3-ref-evidence-line">{riskEvidence}</div>
 
           <div className="v3-ref-risk-notes">
-            <p className={!riskUsable ? 'neutral' : riskLeak ? 'bad' : 'good'}><span>{riskUsable && !riskLeak ? '✓' : '!'}</span> {riskSummary}</p>
+            <p className={!riskUsable || riskMixed || (!riskLeak && !riskPositive) ? 'neutral' : riskLeak ? 'bad' : 'good'}><span>{riskUsable && riskPositive && !riskMixed ? '✓' : '!'}</span> {riskSummary}</p>
             <p className="good"><span>✓</span> Realized P&amp;L and fills remain broker-authoritative.</p>
           </div>
         </article>
