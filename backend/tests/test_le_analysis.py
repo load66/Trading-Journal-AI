@@ -351,8 +351,8 @@ def test_market_sign_requires_spy_and_qqq_to_confirm_on_10m_8ema():
 
 def test_market_sign_fails_when_spy_and_qqq_do_not_both_agree():
     underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
-    spy = minute_run((2026, 9, 25), 9, 30, 30, 102.0)
-    qqq = minute_run((2026, 9, 25), 9, 30, 30, 98.0)
+    spy = minute_run((2026, 9, 25), 9, 30, 30, lambda i: 100.0 + i * 0.1)
+    qqq = minute_run((2026, 9, 25), 9, 30, 30, lambda i: 100.0 - i * 0.1)
     trade = base_trade("CALL", entry="08:47:04")
 
     review = review_context(trade, underlying, spy=spy, qqq=qqq)
