@@ -2695,7 +2695,7 @@ def get_calendar(
     month: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    sql = "SELECT date, net_pnl FROM trades WHERE 1=1"
+    sql = "SELECT date, net_pnl, executions FROM trades WHERE 1=1"
     params = []
 
     if account_id is not None:
@@ -2708,12 +2708,13 @@ def get_calendar(
         sql += " AND date >= ? AND date < ?"
         params.extend([date_from, date_to])
 
-    rows = conn.execute(sql, params).fetchall()
+    rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    rows = [r for r in rows if trade_is_closed(r)]
 
     day_stats: dict[str, dict] = {}
     for row in rows:
         d = row['date']
-        pnl = row['net_pnl'] or 0
+        pnl = float(row['net_pnl'] or 0)
         if d not in day_stats:
             day_stats[d] = {'net_pnl': 0.0, 'trade_count': 0, 'winners': 0, 'losers': 0}
         day_stats[d]['net_pnl'] += pnl
@@ -2756,20 +2757,25 @@ def get_yearly_kpis(
     account_id: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    sql = f"SELECT date, net_pnl, gross_pnl FROM trades WHERE {year_filter_clause('date')}"
+    sql = f"SELECT date, net_pnl, gross_pnl, executions FROM trades WHERE {year_filter_clause('date')}"
     params = [str(year)]
     if account_id is not None:
         sql += " AND account_id = ?"
         params.append(account_id)
 
-    rows = conn.execute(sql + " ORDER BY date", params).fetchall()
+    rows = [row_to_dict(r) for r in conn.execute(sql + " ORDER BY date", params).fetchall()]
+    rows = [r for r in rows if trade_is_closed(r)]
 
-    # Bucket trades by month
+    # Bucket closed trades by month.
     from collections import defaultdict
     months: dict[int, list] = defaultdict(list)
     for row in rows:
         m = int(row["date"][5:7])
-        months[m].append({"net_pnl": row["net_pnl"] or 0, "gross_pnl": row["gross_pnl"] or 0, "date": row["date"]})
+        months[m].append({
+            "net_pnl": float(row["net_pnl"] or 0),
+            "gross_pnl": float(row["gross_pnl"] or 0),
+            "date": row["date"],
+        })
 
     result = []
     for m in range(1, 13):
@@ -2789,9 +2795,14 @@ def get_yearly_kpis(
         net_losses      = abs(sum(t["net_pnl"] for t in losers))
         profit_factor  = net_wins / net_losses if net_losses else None
         win_rate       = len(winners) / total * 100 if total else 0
-        trading_days   = len(set(t["date"] for t in trades))
-        positive_days  = len({t["date"] for t in trades if t["net_pnl"] > 0})
-        day_win_rate   = positive_days / trading_days * 100 if trading_days else 0
+        daily_totals: dict[str, float] = {}
+        for trade in trades:
+            daily_totals[trade["date"]] = daily_totals.get(trade["date"], 0.0) + trade["net_pnl"]
+        trading_days = len(daily_totals)
+        positive_days = sum(1 for value in daily_totals.values() if value > 0)
+        negative_days = sum(1 for value in daily_totals.values() if value < 0)
+        flat_days = sum(1 for value in daily_totals.values() if value == 0)
+        day_win_rate = positive_days / trading_days * 100 if trading_days else 0
 
         result.append({
             "month": m,
@@ -2805,6 +2816,9 @@ def get_yearly_kpis(
             "winning_trades": len(winners),
             "losing_trades": len(losers),
             "trading_days": trading_days,
+            "positive_days": positive_days,
+            "negative_days": negative_days,
+            "flat_days": flat_days,
             "day_win_rate": round(day_win_rate, 1),
         })
 
