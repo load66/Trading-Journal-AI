@@ -3105,9 +3105,22 @@ def get_edge_report(
             "avg_pnl": round(d["total_pnl"] / d["count"], 2),
             "avg_r": round(sum(r_vals) / len(r_vals), 2) if r_vals else None,
         })
+    def median_minutes(values):
+        if not values:
+            return None
+        ordered = sorted(values)
+        n = len(ordered)
+        value = ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2
+        return round(value, 1)
+
     hold_time = {
         "winners_avg_min": round(sum(winner_hold) / len(winner_hold), 1) if winner_hold else None,
         "losers_avg_min": round(sum(loser_hold) / len(loser_hold), 1) if loser_hold else None,
+        "winners_median_min": median_minutes(winner_hold),
+        "losers_median_min": median_minutes(loser_hold),
+        "winner_count": len(winner_hold),
+        "loser_count": len(loser_hold),
+        "sample_count": len(winner_hold) + len(loser_hold),
     }
 
     # Expectancy for edge report
