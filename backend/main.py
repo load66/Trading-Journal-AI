@@ -2605,7 +2605,9 @@ async def _calculate_excursions_for_date(
         params.append(account_id)
     sql += " ORDER BY id"
 
-    all_rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    all_rows = canonical_completed_trades(
+        [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    )
     rows = all_rows if force else [t for t in all_rows if _excursion_is_stale(t)]
     if not rows:
         return {"date": date, "computed": 0, "skipped": 0, "already_complete": True}
