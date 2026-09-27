@@ -2,6 +2,7 @@
 
     cd backend && python -m pytest tests -q
 """
+import json
 import sys
 from pathlib import Path
 
@@ -13,7 +14,7 @@ sys.path.insert(0, str(BACKEND))
 from csv_parser import detect_broker, parse_broker_csv, parse_generic_rows  # noqa: E402
 
 TEMPLATES = BACKEND.parent / "frontend" / "public" / "templates"
-HEADER = "date,time,symbol,side,quantity,price,commission,asset_type,expiry,strike,put_call,multiplier\n"
+HEADER = "date,time,symbol,side,quantity,price,commission,asset_type,expiry,strike,put_call,multiplier,timezone\n"
 
 
 def example():
@@ -66,9 +67,9 @@ def test_net_subtracts_every_commission():
 
 def test_aliases_and_extra_columns_are_accepted():
     content = (
-        "Ticker,Action,Qty,Fill Price,Fees,Date,Time,Notes\n"
-        "NVDA,Buy,10,208.00,0.10,2026-08-24,09:40,first\n"
-        "NVDA,Sell,10,209.50,0.10,2026-08-24,09:55,second\n"
+        "Ticker,Action,Qty,Fill Price,Fees,Date,Time,Notes,Time Zone\n"
+        "NVDA,Buy,10,208.00,0.10,2026-08-24,09:40,first,America/Chicago\n"
+        "NVDA,Sell,10,209.50,0.10,2026-08-24,09:55,second,America/Chicago\n"
     )
     assert detect_broker(content) == "generic"
     trades, _ = parse_broker_csv(content, "auto", account_id=1)
@@ -101,11 +102,33 @@ def test_one_bad_row_imports_nothing():
 
 def test_unknown_future_imports_with_a_multiplier_column():
     content = HEADER + (
-        "2026-08-24,09:30,/ZZU26,BUY,1,100,,FUTURE,,,,20\n"
-        "2026-08-24,09:45,/ZZU26,SELL,1,101,,FUTURE,,,,20\n"
+        "2026-08-24,09:30,/ZZU26,BUY,1,100,,FUTURE,,,,20,America/Chicago\n"
+        "2026-08-24,09:45,/ZZU26,SELL,1,101,,FUTURE,,,,20,America/Chicago\n"
     )
     trades, _ = parse_broker_csv(content, "generic", account_id=1)
     assert trades[0]["gross_pnl"] == pytest.approx(20.0)
+
+
+def test_generic_timezone_column_is_dst_aware_and_auditable():
+    content = HEADER + (
+        "2026-09-25,08:47:04,AAPL,BUY,1,200,,STOCK,,,,,America/Chicago\n"
+    )
+    execution = parse_generic_rows(content)[0]
+
+    assert execution["source_timestamp"] == "2026-09-25 08:47:04"
+    assert execution["source_timezone"] == "America/Chicago"
+    assert execution["timezone_detection_method"] == "row_timezone"
+    assert execution["timezone_detection_confidence"] == "high"
+    assert execution["timestamp_utc"] == "2026-09-25T13:47:04Z"
+
+
+def test_generic_import_refuses_unverified_timezone():
+    content = (
+        "date,time,symbol,side,quantity,price\n"
+        "2026-09-25,08:47:04,AAPL,BUY,1,200\n"
+    )
+    with pytest.raises(ValueError, match="Timezone could not be verified"):
+        parse_broker_csv(content, "generic", account_id=1)
 
 
 def test_existing_broker_detection_is_unchanged():
