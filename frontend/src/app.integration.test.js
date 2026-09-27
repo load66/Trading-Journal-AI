@@ -435,7 +435,7 @@ test('Smoking Gun saved report back navigation preserves the loaded library stat
   expect(smokingGunLibraryApi.list).toHaveBeenCalledTimes(callsBeforeOpen);
 });
 
-test('Trade View surfaces option strategy, review status, excursion and missing-risk guidance', async () => {
+test('Trade View surfaces option strategy, review status, excursion and planned R:R status', async () => {
   tradesApi.list.mockResolvedValue({
     data: [{
       id: 565,
@@ -504,7 +504,7 @@ test('Trade View surfaces option strategy, review status, excursion and missing-
   expect(screen.getByText(/Planned R:R:/)).toBeVisible();
   expect(screen.getByLabelText('Planned Risk ($)')).toHaveValue(540);
   expect(screen.getByText(/Auto-filled from total entry premium:/)).toBeVisible();
-  await waitFor(() => expect(stopDistanceInput).toHaveFocus());
+  expect(stopDistanceInput).toHaveValue(1.17);
 });
 
 test('Stats planned risk is explicit and is sent with the saved trade analysis', async () => {
