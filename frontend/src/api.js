@@ -134,6 +134,10 @@ export const libraryApi = {
   remove: (item) => api.post('/api/library/delete', item),
 };
 
+export const storageApi = {
+  health: (force = false) => api.get('/api/storage/health', { params: { force } }),
+};
+
 export const edgeReportApi = {
   get: (params) => api.get('/api/edge-report', { params }),
 };
