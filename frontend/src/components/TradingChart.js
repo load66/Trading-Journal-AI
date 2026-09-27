@@ -24,6 +24,7 @@ function chartTheme() {
     up: cssVar('--result-pos', '#66D7AC'),
     down: cssVar('--result-neg', '#F28B94'),
     vwap: cssVar('--text-secondary', '#96A4B6'),
+    ema8: '#F5C451',
     prevLevel: cssVar('--accent-line', '#91A8FF'),
     premarketLevel: cssVar('--caution', '#E9BA78'),
     stop: cssVar('--caution', '#E9BA78'),
@@ -226,12 +227,13 @@ const SESSION_TFS = new Set(['1Min', '3Min', '5Min', '10Min', '15Min']);
 // times parse as literal UTC.
 const etWallTs = (dateStr, hhmm) => Math.floor(new Date(`${dateStr}T${hhmm}:00Z`).getTime() / 1000);
 // Legend entries that can be switched on and off. Not remembered between trades.
-const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, prevLevels: true, premarketLevels: true, sl: true, target: true };
+const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, ema8: true, prevLevels: true, premarketLevels: true, sl: true, target: true };
 
 // Show or hide the toggleable layers on an existing chart.
 function applyLayers(layers, visible) {
   if (!layers) return;
   (layers.vwap || []).forEach(line => line.applyOptions({ visible: visible.vwap }));
+  if (layers.ema8) layers.ema8.applyOptions({ visible: visible.ema8 });
   (layers.levels || []).forEach(({ line, group, name }) => {
     const shown = visible[group];
     line.applyOptions({
@@ -251,7 +253,7 @@ function applyLayers(layers, visible) {
 }
 
 export default function TradingChart({
-  ticker, date, tradeGroup = null, defaultTimeframe = '5Min',
+  ticker, date, tradeGroup = null, defaultTimeframe = '10Min',
   executions = [], side = 'LONG', analysis = null,
   height = 320,
 }) {
@@ -270,7 +272,7 @@ export default function TradingChart({
   const visibleRef = useRef(DEFAULT_VISIBLE);
   // Handles to everything a legend toggle controls, so toggling never rebuilds
   // the chart (and never loses the current zoom).
-  const layersRef = useRef({ candles: null, vwap: [], levels: [], markers: [], sl: null, target: null });
+  const layersRef = useRef({ candles: null, vwap: [], ema8: null, levels: [], markers: [], sl: null, target: null });
   // Set right before a zoom-out-triggered fetch, holding the visible window so
   // it can be restored once the wider dataset lands — otherwise the chart would
   // jump back to fitContent() every time more history streams in.
@@ -349,7 +351,7 @@ export default function TradingChart({
 
     const barTs = isWide ? toDayTs : toTs;
     const T = chartTheme();
-    layersRef.current = { candles: null, vwap: [], levels: [], markers: [], sl: null, target: null };
+    layersRef.current = { candles: null, vwap: [], ema8: null, levels: [], markers: [], sl: null, target: null };
 
     const chart = createChart(containerRef.current, {
       layout: {
@@ -392,6 +394,27 @@ export default function TradingChart({
     }));
     candleSeries.setData(candleData);
     layersRef.current.candles = candleSeries;
+
+    // ── 8 EMA (10-minute review default) ────────────────────────────────
+    if (timeframe === '10Min' && candleData.length) {
+      const alpha = 2 / (8 + 1);
+      let ema = candleData[0].close;
+      const emaData = candleData.map((point, index) => {
+        ema = index === 0 ? point.close : (point.close * alpha) + (ema * (1 - alpha));
+        return { time: point.time, value: ema };
+      });
+      const emaSeries = chart.addLineSeries({
+        color: T.ema8,
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        title: '8 EMA',
+        crosshairMarkerVisible: true,
+      });
+      emaSeries.setData(emaData);
+      layersRef.current.ema8 = emaSeries;
+    }
 
     // ── VWAP line ─────────────────────────────────────────────────────────
     // Alpaca's per-bar `vw` is just that bar's own volume-weighted price, which
@@ -473,10 +496,10 @@ export default function TradingChart({
     // by LE Review, so the visual chart and rule analysis share one source.
     if (!isWide) {
       const levelSpecs = [
-        { name: 'PDH', value: leLevels?.PDH, group: 'prevLevels', color: T.prevLevel, style: LineStyle.Dashed },
-        { name: 'PDL', value: leLevels?.PDL, group: 'prevLevels', color: T.prevLevel, style: LineStyle.Dashed },
-        { name: 'PMH', value: leLevels?.PMH, group: 'premarketLevels', color: T.premarketLevel, style: LineStyle.Dotted },
-        { name: 'PML', value: leLevels?.PML, group: 'premarketLevels', color: T.premarketLevel, style: LineStyle.Dotted },
+        { name: 'PDH', value: leLevels?.PDH, group: 'prevLevels', color: T.prevLevel, style: LineStyle.Solid },
+        { name: 'PDL', value: leLevels?.PDL, group: 'prevLevels', color: T.prevLevel, style: LineStyle.Solid },
+        { name: 'PMH', value: leLevels?.PMH, group: 'premarketLevels', color: T.premarketLevel, style: LineStyle.Dashed },
+        { name: 'PML', value: leLevels?.PML, group: 'premarketLevels', color: T.premarketLevel, style: LineStyle.Dashed },
       ];
 
       layersRef.current.levels = levelSpecs
@@ -591,8 +614,9 @@ export default function TradingChart({
     { key: 'buy', label: 'Buy fill', swatch: { width: 9, height: 9, borderRadius: '50%', background: 'var(--result-pos)' } },
     { key: 'sell', label: 'Sell fill', swatch: { width: 9, height: 9, borderRadius: '50%', background: 'var(--result-neg)' } },
     !isWide && { key: 'vwap', label: 'VWAP', swatch: { width: 16, height: 2, background: 'var(--text-secondary)' } },
-    !isWide && hasPrevLevels && { key: 'prevLevels', label: 'PDH / PDL', swatch: { width: 16, height: 2, borderTop: '2px dashed var(--accent-line)' } },
-    !isWide && hasPremarketLevels && { key: 'premarketLevels', label: 'PMH / PML', swatch: { width: 16, height: 2, borderTop: '2px dotted var(--caution)' } },
+    timeframe === '10Min' && { key: 'ema8', label: '8 EMA', swatch: { width: 16, height: 2, background: '#F5C451' } },
+    !isWide && hasPrevLevels && { key: 'prevLevels', label: 'PDH / PDL', swatch: { width: 16, height: 2, background: 'var(--accent-line)' } },
+    !isWide && hasPremarketLevels && { key: 'premarketLevels', label: 'PMH / PML', swatch: { width: 16, height: 2, borderTop: '2px dashed var(--caution)' } },
     analysis?.stop_loss && { key: 'sl', label: 'SL', swatch: { width: 16, height: 2, background: 'var(--caution)' } },
     analysis?.target_price && { key: 'target', label: 'Target', swatch: { width: 16, height: 2, background: 'var(--accent-line)' } },
   ].filter(Boolean);
