@@ -220,7 +220,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                 <th className="num" title="Planned reward-to-risk. Realized R appears underneath when available.">Planned R:R</th>
                 <th title="Best move in your favor versus worst move against you while the trade was open.">Best / Worst Move</th>
                 <th title="How much of the favorable move you kept when you exited.">Exit Capture</th>
-                {sortTh('net_pnl', 'P&L Result', 'num')}
+                {sortTh('net_pnl', 'Profit / Loss', 'num')}
                 <th><span className="sr-only">Open trade</span></th>
               </tr>
             </thead>
