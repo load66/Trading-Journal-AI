@@ -496,6 +496,8 @@ test('Trade View surfaces option strategy, review status, excursion and missing-
   expect(stopDistanceInput).toBeVisible();
   expect(screen.getByLabelText('Target Distance ($)')).toBeVisible();
   expect(screen.getByText(/Planned R:R:/)).toBeVisible();
+  expect(screen.getByLabelText('Planned Risk ($)')).toHaveValue(540);
+  expect(screen.getByText(/Auto-filled from total entry premium:/)).toBeVisible();
   await waitFor(() => expect(stopDistanceInput).toHaveFocus());
 });
 
