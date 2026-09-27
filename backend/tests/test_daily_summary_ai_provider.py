@@ -137,3 +137,31 @@ def test_daily_summary_groq_failure_is_not_mislabeled_as_missing_anthropic(monke
 
     with pytest.raises(RuntimeError, match="Groq daily coaching failed"):
         daily_summary.generate_daily_summary(context())
+
+def test_daily_context_signature_changes_when_day_evidence_changes():
+    base = context()
+    first = daily_summary.daily_context_signature(base)
+
+    changed = context()
+    changed["trades"][0]["stop_loss"] = 499.5
+    assert daily_summary.daily_context_signature(changed) != first
+
+    diary_changed = context()
+    diary_changed["diary_summary"] = {
+        "overall_summary": "Waited for the planned setup.",
+        "patterns_identified": [],
+        "improvement_areas": [],
+    }
+    assert daily_summary.daily_context_signature(diary_changed) != first
+
+
+def test_daily_context_signature_ignores_unrelated_all_time_benchmark_changes():
+    base = context()
+    first = daily_summary.daily_context_signature(base)
+
+    later_history = context()
+    later_history["alltime_kpis"]["win_rate"] = 61.2
+    later_history["alltime_kpis"]["profit_factor"] = 1.9
+
+    assert daily_summary.daily_context_signature(later_history) == first
+
