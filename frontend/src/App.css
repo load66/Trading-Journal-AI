@@ -403,9 +403,11 @@
 
 .td-chart-preview img {
   display: block;
-  width: 100%;
+  width: auto;
   height: auto;
+  max-width: 100%;
   max-height: 620px;
+  margin: 0 auto;
   object-fit: contain;
   background: #020c13;
   cursor: zoom-in;
@@ -464,12 +466,24 @@
   }
 
   .td-chart-review-stage {
-    min-height: 280px;
-    padding: 10px;
+    min-height: 0;
+    padding: 8px;
+  }
+
+  .td-chart-preview {
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .td-chart-preview img {
-    max-height: 420px;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: min(420px, 52dvh);
+    object-fit: contain;
   }
 
   .td-chart-review-empty,
@@ -510,6 +524,8 @@
   padding: 56px 72px 42px;
   background: rgba(0, 7, 12, .72);
   cursor: zoom-out;
+  touch-action: pan-x pan-y pinch-zoom;
+  overscroll-behavior: contain;
 }
 .td-image-modal-stage img {
   display: block;
@@ -583,11 +599,14 @@
     width: 100%;
   }
   .td-image-modal-stage {
-    padding: 58px 12px 18px;
+    padding: max(54px, env(safe-area-inset-top)) 8px max(12px, env(safe-area-inset-bottom));
   }
   .td-image-modal-stage img {
-    max-width: 100%;
-    max-height: calc(100vh - 82px);
+    width: auto;
+    height: auto;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - max(74px, env(safe-area-inset-top)) - max(18px, env(safe-area-inset-bottom)));
+    object-fit: contain;
   }
   .td-image-modal-close {
     top: 10px;
