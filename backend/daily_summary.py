@@ -30,6 +30,11 @@ Rules:
 - mistakes should include the most important trading mistakes you identify, even when they were not manually recorded in the diary.
 - mental_game should give your best professional read of the trader's decision-making/behavior during the session. Do not replace it with a generic "insufficient evidence" message.
 - Deterministic behavior_flags are reliable execution observations and should be incorporated where useful, but they do not limit what else you may diagnose.
+- highlights.good and highlights.bad are presentation cues, not extra conclusions. Each item MUST be an exact verbatim substring copied from either narrative or mental_game.
+- highlights.good should mark only concise phrases describing clearly positive execution, discipline, edge, or effective decisions.
+- highlights.bad should mark only concise phrases describing mistakes, process lapses, behavioral flags, weak risk control, or poor decisions.
+- Keep highlights selective: normally 1-3 good phrases and 1-3 bad phrases, preferably 4-16 words each. Do not highlight whole paragraphs.
+- Never put the same phrase in both good and bad.
 - Be direct, specific, and useful.
 - Return ONLY valid JSON — no markdown fences, no explanation.
 
@@ -37,6 +42,10 @@ Required JSON schema:
 {
   "narrative": "2-3 paragraph overview of the trading day — what happened, the flow of the session, and notable moments",
   "mental_game": "1-2 sentences with your professional read of decision-making and behavioral quality during the session",
+  "highlights": {
+    "good": ["exact verbatim positive phrase copied from narrative or mental_game"],
+    "bad": ["exact verbatim mistake/risk phrase copied from narrative or mental_game"]
+  },
   "strengths": ["specific thing done well 1", "specific thing done well 2"],
   "mistakes": ["specific mistake with detail 1", "specific mistake with detail 2"],
   "coaching": ["specific actionable coaching point 1", "specific actionable coaching point 2", "specific actionable coaching point 3"],
@@ -259,6 +268,41 @@ def _anthropic_daily_summary(user_content: str) -> dict:
     return json.loads(_strip_json_fence(response_text(response)))
 
 
+def _normalize_highlights(result: dict) -> dict:
+    """Keep only short highlight phrases that actually occur in rendered prose."""
+    raw = result.get("highlights")
+    raw = raw if isinstance(raw, dict) else {}
+    source = "\n".join(
+        str(result.get(key) or "")
+        for key in ("narrative", "mental_game")
+    )
+    source_lower = source.lower()
+
+    normalized = {"good": [], "bad": []}
+    used = set()
+    for tone in ("good", "bad"):
+        values = raw.get(tone)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            phrase = " ".join(value.split()).strip()
+            key = phrase.lower()
+            if (
+                len(phrase) < 4
+                or len(phrase) > 220
+                or key in used
+                or key not in source_lower
+            ):
+                continue
+            normalized[tone].append(phrase)
+            used.add(key)
+            if len(normalized[tone]) >= 4:
+                break
+    return normalized
+
+
 def generate_daily_summary(context: dict) -> dict:
     """Generate a structured daily summary with Groq first, Anthropic fallback."""
     date = context["date"]
@@ -378,6 +422,7 @@ Generate the daily coaching summary JSON."""
     result.setdefault("tomorrow_focus", [])
     result.setdefault("patterns", [])
     result.setdefault("mental_game", "")
+    result["highlights"] = _normalize_highlights(result)
 
     # The AI diagnosis is intentionally not filtered or rewritten after generation.
     # Deterministic flags and recorded observations remain attached as supplemental
