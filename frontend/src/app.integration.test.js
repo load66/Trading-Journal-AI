@@ -1365,7 +1365,7 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   expect(screen.getByRole('heading', { name: /Holding behavior/i })).toBeVisible();
   expect(screen.getByRole('heading', { name: /Profit vs\. left on table/i })).toBeVisible();
   expect(screen.getByRole('heading', { name: /Risk during trade/i })).toBeVisible();
-  expect(screen.getByRole('heading', { name: /Bottom line/i })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Generate AI Analysis/i })).toBeVisible();
   expect(screen.getByText('ABOVE GOAL')).toBeVisible();
   expect(screen.getByText('64% Captured')).toBeVisible();
   expect(screen.getByText('36% Left')).toBeVisible();
@@ -1434,34 +1434,79 @@ test('Dashboard generates an evidence-locked Trade Management AI review on deman
       },
     },
   });
-  tradeManagementAnalysisApi.get.mockResolvedValue({
-    data: {
-      range: '30D',
-      headline: 'Early invalidation is the clearest improvement candidate.',
-      diagnosis: 'Same-session holding behavior is healthy; adverse excursion is the stronger improvement signal.',
-      next_focus: 'Review failed trades that cannot make favorable progress.',
-      evidence_locked: true,
-      ai_provider: 'groq',
-    },
+  tradeManagementAnalysisApi.get.mockImplementation((params = {}) => {
+    if (params.cached_only) {
+      return Promise.resolve({ data: { cached: false, cache_miss: true, range: '30D' } });
+    }
+    return Promise.resolve({
+      data: {
+        range: '30D',
+        headline: 'Early invalidation is the clearest improvement candidate.',
+        diagnosis: 'Same-session holding behavior is healthy; adverse excursion is the stronger improvement signal.',
+        next_focus: 'Review failed trades that cannot make favorable progress.',
+        evidence_locked: true,
+        ai_provider: 'groq',
+      },
+    });
   });
 
   await renderApp();
 
-  const button = await screen.findByRole('button', { name: /Generate AI Analysis/i });
+  await waitFor(() => expect(tradeManagementAnalysisApi.get).toHaveBeenCalledWith(
+    expect.objectContaining({ range: '30D', cached_only: true })
+  ));
+
+  const button = await screen.findByRole('button', { name: /^Generate$/i });
   fireEvent.click(button);
 
-  await waitFor(() => expect(tradeManagementAnalysisApi.get).toHaveBeenCalled());
-  expect(tradeManagementAnalysisApi.get.mock.calls[0][0]).toEqual(
-    expect.objectContaining({ range: '30D' })
-  );
+  await waitFor(() => {
+    const generationCalls = tradeManagementAnalysisApi.get.mock.calls
+      .map(([params]) => params)
+      .filter((params) => !params?.cached_only);
+    expect(generationCalls).toHaveLength(1);
+  });
+  const generationCalls = tradeManagementAnalysisApi.get.mock.calls
+    .map(([params]) => params)
+    .filter((params) => !params?.cached_only);
+  expect(generationCalls[0]).toEqual(expect.objectContaining({ range: '30D' }));
   expect(await screen.findByText('Early invalidation is the clearest improvement candidate.')).toBeVisible();
   expect(screen.getByText(/Same-session holding behavior is healthy/i)).toBeVisible();
 
   fireEvent.click(screen.getByRole('button', { name: /Re-run/i }));
-  await waitFor(() => expect(tradeManagementAnalysisApi.get).toHaveBeenCalledTimes(2));
-  expect(tradeManagementAnalysisApi.get.mock.calls[1][0]).toEqual(
-    expect.objectContaining({ range: '30D', force: true })
-  );
+  await waitFor(() => {
+    const nonCacheCalls = tradeManagementAnalysisApi.get.mock.calls
+      .map(([params]) => params)
+      .filter((params) => !params?.cached_only);
+    expect(nonCacheCalls).toHaveLength(2);
+    expect(nonCacheCalls[1]).toEqual(expect.objectContaining({ range: '30D', force: true }));
+  });
+});
+
+
+test('Dashboard restores a cached Trade Management AI diagnosis on page load', async () => {
+  tradeManagementAnalysisApi.get.mockImplementation((params = {}) => Promise.resolve({
+    data: params.cached_only
+      ? {
+          cached: true,
+          range: '30D',
+          headline: 'Cached management diagnosis',
+          diagnosis: 'This diagnosis survived the page refresh.',
+          next_focus: 'Keep monitoring verified management evidence.',
+          evidence_locked: true,
+          ai_provider: 'groq',
+        }
+      : { cached: false, cache_miss: true },
+  }));
+
+  await renderApp();
+
+  await waitFor(() => expect(tradeManagementAnalysisApi.get).toHaveBeenCalledWith(
+    expect.objectContaining({ range: '30D', cached_only: true })
+  ));
+  expect(await screen.findByText('Cached management diagnosis')).toBeVisible();
+  expect(screen.getByText('This diagnosis survived the page refresh.')).toBeVisible();
+  expect(screen.getByRole('button', { name: /Re-run/i })).toBeVisible();
+  expect(screen.queryByRole('button', { name: /^Generate$/i })).not.toBeInTheDocument();
 });
 
 

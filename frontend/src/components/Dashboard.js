@@ -220,11 +220,31 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   }, [accountId, managementRange, buildManagementParams, reloadKey]);
 
   useEffect(() => {
-    managementAiRun.current += 1;
+    const run = ++managementAiRun.current;
     setManagementAi(null);
     setManagementAiError('');
     setManagementAiLoading(false);
-  }, [accountId, managementRange]);
+
+    // Restore a previously generated diagnosis after refresh/account/range
+    // changes without triggering a fresh provider request. The backend only
+    // returns cached content when its evidence fingerprint still matches.
+    const params = {
+      ...buildManagementParams(),
+      range: managementRange,
+      cached_only: true,
+    };
+    tradeManagementAnalysisApi.get(params)
+      .then((response) => {
+        if (run !== managementAiRun.current) return;
+        if (response.data?.cached && response.data?.diagnosis) {
+          setManagementAi(response.data);
+        }
+      })
+      .catch(() => {
+        // Cache restore is opportunistic. Deterministic cards remain usable
+        // and Generate can still be clicked if the cache probe is unavailable.
+      });
+  }, [accountId, managementRange, buildManagementParams, reloadKey]);
 
   const handleManagementAi = useCallback(async (force = false) => {
     const run = ++managementAiRun.current;

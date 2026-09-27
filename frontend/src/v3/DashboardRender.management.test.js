@@ -47,7 +47,7 @@ const EDGE = {
 };
 
 
-test('Trade Management replaces Analysis window copy with Generate AI Analysis', () => {
+test('Trade Management uses Generate AI Analysis as the section title', () => {
   const onAiGenerate = jest.fn();
 
   render(
@@ -66,10 +66,11 @@ test('Trade Management replaces Analysis window copy with Generate AI Analysis',
   );
 
   expect(screen.queryByText(/Analysis window/i)).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /Generate AI Analysis/i })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Generate AI Analysis/i })).toBeVisible();
+  expect(screen.getByRole('button', { name: /^Generate$/i })).toBeVisible();
   expect(screen.getByText(/last 7 days · 47 closed trades/i)).toBeVisible();
 
-  fireEvent.click(screen.getByRole('button', { name: /Generate AI Analysis/i }));
+  fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
   expect(onAiGenerate).toHaveBeenCalledWith(false);
 });
 
@@ -127,6 +128,7 @@ test('Trade Management preserves deterministic bottom line when AI is unavailabl
   );
 
   expect(screen.getByText(/AI provider unavailable/i)).toBeVisible();
-  expect(screen.getByRole('button', { name: /Generate AI Analysis/i })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Generate AI Analysis/i })).toBeVisible();
+  expect(screen.getByRole('button', { name: /^Generate$/i })).toBeVisible();
   expect(screen.getByText(/currently covered excursion data|clearest improvement candidate|Winners average/i)).toBeVisible();
 });

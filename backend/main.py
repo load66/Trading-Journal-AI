@@ -3641,6 +3641,7 @@ def get_trade_management_analysis(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     force: bool = Query(False),
+    cached_only: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     normalized_range = str(range_key or "30D").upper()
@@ -3730,6 +3731,20 @@ def get_trade_management_analysis(
                     return cached
             except Exception:
                 pass
+
+    # Page refreshes should restore an existing valid diagnosis without silently
+    # spending another AI request. cached_only is a read-only cache probe: if
+    # current evidence no longer matches the saved fingerprint, report a miss.
+    if cached_only:
+        return {
+            "range": normalized_range,
+            "date_from": date_from,
+            "date_to": date_to,
+            "cached": False,
+            "cache_miss": True,
+            "input_signature": input_signature,
+            "evidence": evidence,
+        }
 
     if not performance_ai_is_configured():
         return {
