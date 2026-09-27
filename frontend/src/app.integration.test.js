@@ -668,7 +668,7 @@ test('chart image opens a native fullscreen dialog from the image surface', asyn
   await waitFor(() => expect(lightbox).not.toHaveAttribute('open'));
 });
 
-test('guided Review quick picks generate journal text and actionable correction', async () => {
+test('professional Review quick picks stay separate from the full journal note', async () => {
   tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: {}, tags: [] } });
 
   await renderApp();
@@ -680,15 +680,15 @@ test('guided Review quick picks generate journal text and actionable correction'
   const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Review' }));
 
-  expect(await screen.findByText(/Guided journal/i)).toBeVisible();
-  expect(screen.getByText(/0\/3 review areas documented/i)).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: /Start review/i }));
+  expect(await screen.findByText(/Professional review workspace/i)).toBeVisible();
+  expect(screen.getByText(/0\/4 review areas documented/i)).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: /Start blank review/i }));
 
   fireEvent.click(screen.getByRole('button', { name: 'Break + retest' }));
   fireEvent.click(screen.getByRole('button', { name: 'HOD trim + 8 EMA trail' }));
   fireEvent.click(screen.getByRole('button', { name: 'Held loser too long' }));
 
-  expect(screen.getByText(/3\/3 review areas documented/i)).toBeVisible();
+  expect(screen.getByText(/3\/4 review areas documented/i)).toBeVisible();
   expect(screen.getAllByText('Held loser too long').length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText(/Exit sooner when favorable progress fails and technical invalidation begins/i)).toBeVisible();
 
@@ -707,6 +707,51 @@ test('guided Review quick picks generate journal text and actionable correction'
   expect(payload.entry_reason).toContain('Entered after the breakout level held on a retest.');
   expect(payload.exit_reason).toContain('8 EMA on the 10-minute timeframe');
   expect(payload.mistakes).toContain('Held a losing trade too long');
+  expect(payload.notes).toBeNull();
+});
+
+test('LE Complete Review template prebuilds the journal without overwriting analytics fields', async () => {
+  tradesApi.getAnalysis.mockResolvedValue({
+    data: {
+      analysis: {
+        strategy: 'LE Model',
+        stop_loss: 0.50,
+        target_price: 1.25,
+        risk_per_trade: 100,
+        entry_reason: 'Existing structured entry',
+        exit_reason: 'Existing structured exit',
+        mistakes: 'Existing structured improvement',
+      },
+      tags: [],
+    },
+  });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  fireEvent.click((await screen.findAllByText('TSLA'))[0].closest('tr'));
+
+  const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Review' }));
+
+  const completeTemplate = await screen.findByRole('button', { name: /LE Complete Review/i });
+  fireEvent.click(completeTemplate);
+
+  const journal = screen.getByRole('textbox', { name: 'Trade journal note' });
+  expect(journal.value).toContain('LE COMPLETE TRADE REVIEW');
+  expect(journal.value).toContain('13-POINT LE PRE-TRADE AUDIT');
+  expect(journal.value).toContain('LE END-OF-TRADE JOURNAL');
+  expect(journal.value).toContain('Planned R:R: 1:2.50');
+  expect(screen.getByText(/4\/4 review areas documented/i)).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: /Save review/i }));
+  await waitFor(() => expect(tradesApi.updateAnalysis).toHaveBeenCalled());
+
+  const [, payload] = tradesApi.updateAnalysis.mock.calls.at(-1);
+  expect(payload.notes).toContain('NEXT-TRADE RULE');
+  expect(payload.entry_reason).toBe('Existing structured entry');
+  expect(payload.exit_reason).toBe('Existing structured exit');
+  expect(payload.mistakes).toBe('Existing structured improvement');
 });
 
 test('Import keeps broker CSV import and diary analysis, with keyboard dropzones', async () => {
