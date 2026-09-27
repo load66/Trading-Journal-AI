@@ -74,7 +74,7 @@ function ExcursionCell({ trade }) {
       <span className="pos">{hasMfe ? `+${Math.abs(mfe).toFixed(1)}` : '—'}</span>
       <span className="trade-excursion-sep">/</span>
       <span className="neg">{hasMae ? `-${Math.abs(mae).toFixed(1)}` : '—'}</span>
-      <small>% MFE / MAE</small>
+      <small>% best / worst</small>
     </div>
   );
 }
