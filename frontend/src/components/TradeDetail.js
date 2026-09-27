@@ -669,7 +669,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       rrPlanInputRef.current?.focus();
       rrPlanInputRef.current?.select?.();
     }, 0);
-  }, [focusPlannedRisk, analysis]);
+  }, [focusPlannedRisk, analysis, trade]);
 
   // ── Execution handlers ────────────────────────────────────────────────────
 
