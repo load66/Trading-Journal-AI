@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload } from 'lucide-react';
 import { tradesApi } from '../api';
 import TradingChart from './TradingChart';
@@ -614,25 +613,34 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [chartScreenshotLoading, setChartScreenshotLoading] = useState(false);
   const [chartScreenshotUploading, setChartScreenshotUploading] = useState(false);
   const [chartScreenshotError, setChartScreenshotError] = useState(null);
-  const [chartScreenshotExpanded, setChartScreenshotExpanded] = useState(false);
   const [chartScreenshotRevision, setChartScreenshotRevision] = useState(0);
+  const chartScreenshotDialogRef = useRef(null);
+  const chartScreenshotBodyOverflowRef = useRef('');
 
-  useEffect(() => {
-    if (!chartScreenshotExpanded) return undefined;
+  const restoreChartScreenshotScroll = useCallback(() => {
+    document.body.style.overflow = chartScreenshotBodyOverflowRef.current;
+  }, []);
 
-    const previousOverflow = document.body.style.overflow;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') setChartScreenshotExpanded(false);
-    };
-
+  const openChartScreenshot = useCallback(() => {
+    const dialog = chartScreenshotDialogRef.current;
+    if (!dialog || dialog.open) return;
+    chartScreenshotBodyOverflowRef.current = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    document.addEventListener('keydown', handleKeyDown);
 
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [chartScreenshotExpanded]);
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }, []);
+
+  const closeChartScreenshot = useCallback(() => {
+    const dialog = chartScreenshotDialogRef.current;
+    if (!dialog?.open && !dialog?.hasAttribute('open')) return;
+
+    if (typeof dialog.close === 'function') dialog.close();
+    else {
+      dialog.removeAttribute('open');
+      restoreChartScreenshotScroll();
+    }
+  }, [restoreChartScreenshotScroll]);
 
   // Stats edit
   const [editingStats, setEditingStats]   = useState(false);
@@ -906,7 +914,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     try {
       await tradesApi.deleteChartScreenshot(trade.trade_group);
       setAnalysis(prev => ({ ...(prev || {}), chart_screenshot_path: null }));
-      setChartScreenshotExpanded(false);
+      closeChartScreenshot();
     } catch (e) {
       setChartScreenshotError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Could not remove screenshot.');
     }
@@ -1636,13 +1644,20 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               <div className="td-chart-preview-loading text-muted">Loading screenshot…</div>
             ) : chartScreenshotUrl ? (
               <>
-                <button
-                  type="button"
+                <div
                   className="td-chart-preview"
-                  onClick={() => setChartScreenshotExpanded(true)}
+                  role="button"
+                  tabIndex={0}
                   title="Open screenshot full screen"
                   aria-label="Open chart screenshot full screen"
                   aria-haspopup="dialog"
+                  onClick={openChartScreenshot}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      openChartScreenshot();
+                    }
+                  }}
                   style={{
                     width: 800,
                     maxWidth: '100%',
@@ -1653,6 +1668,10 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   <img
                     src={chartScreenshotUrl}
                     alt={`${trade.ticker} TradingView review screenshot`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openChartScreenshot();
+                    }}
                     style={{
                       width: '100%',
                       height: 'auto',
@@ -1660,7 +1679,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       objectFit: 'contain',
                     }}
                   />
-                </button>
+                </div>
                 <div
                   className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
                   style={{
@@ -1752,33 +1771,36 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
       </div>
 
-      {chartScreenshotExpanded && chartScreenshotUrl && typeof document !== 'undefined' && createPortal(
-        <div
-          className="td-image-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label="TradingView screenshot"
-          data-testid="chart-screenshot-lightbox"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setChartScreenshotExpanded(false);
-          }}
+      <dialog
+        ref={chartScreenshotDialogRef}
+        className="td-image-modal"
+        aria-label="TradingView screenshot"
+        data-testid="chart-screenshot-lightbox"
+        onClose={restoreChartScreenshotScroll}
+        onCancel={(event) => {
+          event.preventDefault();
+          closeChartScreenshot();
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closeChartScreenshot();
+        }}
+      >
+        <div className="td-image-modal-hint">Click outside the chart or press Esc to close</div>
+        <button
+          type="button"
+          className="td-image-modal-close"
+          aria-label="Close screenshot"
+          onClick={closeChartScreenshot}
         >
-          <div className="td-image-modal-hint">Click outside or press Esc to close</div>
-          <button
-            type="button"
-            className="td-image-modal-close"
-            aria-label="Close screenshot"
-            onClick={() => setChartScreenshotExpanded(false)}
-          >
-            ×
-          </button>
+          ×
+        </button>
+        {chartScreenshotUrl && (
           <img
             src={chartScreenshotUrl}
             alt={`${trade.ticker} TradingView review screenshot full screen`}
           />
-        </div>,
-        document.body
-      )}
+        )}
+      </dialog>
     </div>
   );
 }
