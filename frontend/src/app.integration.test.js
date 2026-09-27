@@ -735,7 +735,7 @@ test('LE Complete Review template prebuilds the journal without overwriting anal
   const completeTemplate = await screen.findByRole('button', { name: /LE Complete Review/i });
   fireEvent.click(completeTemplate);
 
-  const journal = screen.getByRole('textbox', { name: /Write what happened/i });
+  const journal = screen.getByRole('textbox', { name: 'Trade journal note' });
   expect(journal.value).toContain('LE COMPLETE TRADE REVIEW');
   expect(journal.value).toContain('13-POINT LE PRE-TRADE AUDIT');
   expect(journal.value).toContain('LE END-OF-TRADE JOURNAL');
