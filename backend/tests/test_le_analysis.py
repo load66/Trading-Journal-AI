@@ -14,6 +14,7 @@ from le_analysis import (
     _session_vwap_snapshot,
     analyze_context,
     build_le_levels,
+    build_le_review,
     entry_datetime,
     exit_datetime,
     market_direction,
@@ -182,6 +183,40 @@ def test_fetch_alpaca_falls_back_when_recent_sip_is_restricted(monkeypatch):
     assert rows
     assert feed == "delayed_sip"
     assert calls == ["sip", "delayed_sip"]
+
+
+def test_build_le_review_fetches_spy_and_qqq_for_market_sign(monkeypatch):
+    calls = []
+
+    async def fake_fetch(symbol, when, through_dt=None):
+        calls.append((symbol, through_dt))
+        if symbol == "SPY":
+            rows = market_bars(current=102.0)
+        elif symbol == "QQQ":
+            rows = market_bars(current=103.0)
+        else:
+            rows = market_bars(pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0)
+        return rows, "sip"
+
+    async def fake_calendar(when):
+        return verified_calendar()
+
+    import le_analysis
+    monkeypatch.setattr(le_analysis, "_fetch_alpaca_1m", fake_fetch)
+    monkeypatch.setattr(le_analysis, "_fetch_market_calendar", fake_calendar)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    result = asyncio.run(build_le_review(base_trade("CALL")))
+
+    assert result["available"] is True
+    assert {symbol for symbol, _ in calls} == {"TEST", "SPY", "QQQ"}
+    assert result["evidence"]["market_sign"]["verified"] is True
+    assert result["evidence"]["market_sign"]["status"] == "confirmed"
+    assert result["evidence"]["market_data_feed"] == {
+        "underlying": "sip",
+        "spy": "sip",
+        "qqq": "sip",
+    }
 
 
 def test_build_le_levels_returns_same_reference_levels_without_ai(monkeypatch):
