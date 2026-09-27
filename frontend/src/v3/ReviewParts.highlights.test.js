@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
 import { Coaching } from './ReviewParts';
@@ -42,7 +42,7 @@ test('Coaching highlights positive and negative diagnosis phrases', () => {
   const strength = screen.getByText('QCOM setup was executed well.').closest('li');
   expect(strength).toHaveClass('good');
 
-  screen.getByRole('tab', { name: 'Mistakes' }).click();
+  fireEvent.click(screen.getByRole('tab', { name: 'Mistakes' }));
   const mistake = screen.getByText('WMT was averaged down.').closest('li');
   expect(mistake).toHaveClass('bad');
 
