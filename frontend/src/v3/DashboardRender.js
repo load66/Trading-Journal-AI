@@ -107,6 +107,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const captureBar = capture == null ? 0 : Math.max(0, Math.min(100, capture));
   const captureGoal = Number(goals?.exit_efficiency ?? 60);
   const leftOnTable = capture == null ? null : Math.max(0, 100 - Math.min(100, capture));
+  const leftBar = capture == null ? 0 : Math.max(0, 100 - captureBar);
 
   const winnerHold = hold.winners_avg_min == null ? null : Number(hold.winners_avg_min);
   const loserHold = hold.losers_avg_min == null ? null : Number(hold.losers_avg_min);
@@ -116,69 +117,86 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const mae = data.avg_mae == null ? null : Number(data.avg_mae);
   const excursionN = Number(data.excursion_n || 0);
   const holdMax = Math.max(winnerHold || 0, loserHold || 0, 1);
-  const winnerHoldPct = winnerHold == null ? 0 : Math.max(6, Math.min(100, (winnerHold / holdMax) * 100));
-  const loserHoldPct = loserHold == null ? 0 : Math.max(6, Math.min(100, (loserHold / holdMax) * 100));
+  const winnerHoldPct = winnerHold == null ? 0 : Math.max(8, Math.min(100, (winnerHold / holdMax) * 100));
+  const loserHoldPct = loserHold == null ? 0 : Math.max(8, Math.min(100, (loserHold / holdMax) * 100));
   const favorableMove = mfe == null ? null : Math.abs(mfe);
   const adverseMove = mae == null ? null : Math.abs(mae);
   const moveMax = Math.max(favorableMove || 0, adverseMove || 0, 1);
-  const favorablePct = favorableMove == null ? 0 : Math.max(6, Math.min(100, (favorableMove / moveMax) * 100));
-  const adversePct = adverseMove == null ? 0 : Math.max(6, Math.min(100, (adverseMove / moveMax) * 100));
+  const favorablePct = favorableMove == null ? 0 : Math.max(8, Math.min(100, (favorableMove / moveMax) * 100));
+  const adversePct = adverseMove == null ? 0 : Math.max(8, Math.min(100, (adverseMove / moveMax) * 100));
 
   const captureState = capture == null
     ? { tone: 'neutral', label: 'NEED DATA' }
     : capture >= captureGoal
       ? { tone: 'good', label: 'ABOVE GOAL' }
-      : { tone: 'caution', label: 'BELOW GOAL' };
+      : { tone: capture < 0 ? 'bad' : 'caution', label: 'BELOW GOAL' };
 
-  const holdState = holdRatio == null
-    ? { tone: 'neutral', label: 'NEED DATA' }
-    : holdRatio > 1.05
-      ? { tone: 'bad', label: 'LOSERS HELD LONGER' }
-      : { tone: 'good', label: 'CONTROLLED' };
+  const holdLeak = holdRatio != null && holdRatio > 1.05;
+  const riskLeak = favorableMove != null && adverseMove != null && adverseMove > favorableMove;
+  const rangeCopy = range === '7D'
+    ? 'last 7 days'
+    : range === '90D'
+      ? 'last 90 days'
+      : range === 'ALL'
+        ? 'all available trades'
+        : 'last 30 days';
 
-  const riskState = favorableMove == null || adverseMove == null
-    ? { tone: 'neutral', label: 'NEED DATA' }
-    : adverseMove > favorableMove
-      ? { tone: 'bad', label: 'ADVERSE > FAVORABLE' }
-      : { tone: 'good', label: 'FAVORABLE > ADVERSE' };
+  const HelpDot = ({ label }) => (
+    <span className="v3-ref-help" title={label} aria-label={label}>?</span>
+  );
 
-  const primaryInsight = (() => {
-    if (holdRatio != null && holdRatio > 1.05) {
-      return {
-        tone: 'bad',
-        title: 'Cut losing trades faster',
-        copy: 'The clearest management leak is excess time spent in losing trades. Treat invalidation as a decision point, not a negotiation.',
-      };
+  const captureSummary = capture == null
+    ? 'Profit capture needs excursion data before it can be scored.'
+    : capture >= captureGoal
+      ? `You capture a solid portion of your winners.`
+      : capture < 0
+        ? 'Winning moves are being fully surrendered before exit.'
+        : 'Too much of the available move is being given back before exit.';
+
+  const holdSummary = holdRatio == null
+    ? 'More timestamped closed trades are needed to compare holding behavior.'
+    : holdLeak
+      ? 'You hold losers longer than winners.'
+      : 'Losers are not being held materially longer than winners.';
+
+  const captureSplitSummary = capture == null
+    ? 'There is not enough excursion data to compare captured movement with giveback.'
+    : leftOnTable <= 40
+      ? 'You’re capturing a good portion of the available move.'
+      : capture < 0
+        ? 'Favorable movement is being fully surrendered before exit.'
+        : 'A large share of the favorable move is being left on the table.';
+
+  const bottomCopy = (() => {
+    const captureSentence = capture == null
+      ? 'Profit capture is not yet measurable in this window.'
+      : capture >= captureGoal
+        ? `You’re doing a good job capturing winners, with ${capture.toFixed(0)}% of the available move versus your ${captureGoal.toFixed(0)}% goal.`
+        : `Profit capture is ${capture.toFixed(0)}%, below your ${captureGoal.toFixed(0)}% goal.`;
+
+    if (holdLeak) {
+      return `${captureSentence} The main issue is holding losing trades too long — losers average ${loserHold.toFixed(1)} minutes while winners average ${winnerHold.toFixed(1)} minutes. Focus on cutting losing trades faster to improve overall performance.`;
+    }
+    if (riskLeak) {
+      return `${captureSentence} The main issue is adverse excursion: trades move farther against you than for you on average. Tighten invalidation and position-risk discipline.`;
     }
     if (capture != null && capture < captureGoal) {
-      return {
-        tone: 'caution',
-        title: 'Improve winner monetization',
-        copy: 'Your next management priority is preserving more of the favorable move without trying to capture the exact high.',
-      };
+      return `${captureSentence} The clearest improvement is preserving more of the favorable move with a more mechanical exit process.`;
     }
-    if (mfe != null && mae != null && mae > mfe) {
-      return {
-        tone: 'bad',
-        title: 'Reduce adverse excursion',
-        copy: 'Trades are moving farther against you than for you on average. Tighten invalidation and position-risk discipline.',
-      };
-    }
-    return {
-      tone: 'good',
-      title: 'Protect the process',
-      copy: 'No single management leak dominates this window. Keep the same exit discipline and focus on repeatability.',
-    };
+    return `${captureSentence} No single management leak dominates this window, so protect the same exit discipline and keep the process repeatable.`;
   })();
 
   return (
-    <>
-      <div className="v3-sec-head v3-management-head">
-        <div>
-          <h2 className="v3-h v3-icon-title"><Target size={18} /> Trade management</h2>
-          <p className="v3-h-sub">How well do you manage trades after you enter?</p>
+    <div className="v3-ref-management">
+      <div className="v3-ref-management-head">
+        <div className="v3-ref-management-title">
+          <span className="v3-ref-title-icon"><Target size={19} /></span>
+          <div>
+            <h2>Trade management <HelpDot label="How well you manage trades after entry" /></h2>
+            <p>How well do you manage trades after you enter?</p>
+          </div>
         </div>
-        <div className="v3-management-range" role="group" aria-label="Trade management range">
+        <div className="v3-management-range v3-ref-range" role="group" aria-label="Trade management range">
           {['7D', '30D', '90D', 'ALL'].map((option) => (
             <button
               key={option}
@@ -193,21 +211,25 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
         </div>
       </div>
 
-      <div className="v3-management-grid v3-management-grid-clean">
-        <article className="v3-management-card v3-management-card-feature v3-management-card-capture">
-          <div className="v3-management-card-top">
-            <div className="v3-management-label"><Trophy size={17} /><span>Profit capture</span></div>
-            <span className={'v3-management-status ' + captureState.tone}>{captureState.label}</span>
+      <div className="v3-ref-card-grid">
+        <article className="v3-ref-card v3-ref-card-capture">
+          <div className="v3-ref-card-heading">
+            <span className="v3-ref-card-icon green"><Trophy size={20} /></span>
+            <div>
+              <h3>Profit capture <HelpDot label="Exit efficiency: how much favorable movement you retain" /></h3>
+              <p>How much of the available move you actually keep on winning trades.</p>
+            </div>
           </div>
-          <p className="v3-management-question">How much of the available favorable move are you actually keeping?</p>
 
-          <div className="v3-capture-score">
+          <div className="v3-ref-capture-line">
             <strong className={capture != null && capture >= 0 ? 'v3-pos' : 'v3-neg'}>
               {capture == null ? 'N/A' : capture.toFixed(0) + '%'}
             </strong>
+            <span className={'v3-ref-goal-badge ' + captureState.tone}>{captureState.label}</span>
           </div>
+
           <div
-            className={`v3-management-progress v3-capture-progress${capture == null ? ' is-empty' : ''}`}
+            className={`v3-ref-meter${capture == null ? ' is-empty' : ''}`}
             role={capture == null ? 'status' : 'meter'}
             aria-label={capture == null ? 'Profit capture unavailable' : 'Profit capture'}
             aria-valuemin={capture == null ? undefined : 0}
@@ -215,143 +237,117 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             aria-valuenow={capture == null ? undefined : captureBar}
             aria-valuetext={capture == null ? undefined : `${capture.toFixed(0)}% exit efficiency; goal ${captureGoal.toFixed(0)}%`}
           >
-            <i style={{ '--w': captureBar + '%' }} aria-hidden="true" />
-            <span className="v3-capture-goal" style={{ '--goal': Math.max(0, Math.min(100, captureGoal)) + '%' }} aria-hidden="true" />
+            <i className="green" style={{ '--w': captureBar + '%' }} aria-hidden="true" />
           </div>
+          <div className="v3-ref-goal">Goal ≥ {captureGoal.toFixed(0)}%</div>
 
-          <div className="v3-management-meta">
-            <span>Goal ≥ {captureGoal.toFixed(0)}%</span>
-            <span>{excursionN ? excursionN + ' measured trades' : 'No excursion sample'}</span>
-          </div>
-
-          <div className={'v3-management-callout ' + (capture != null && capture >= captureGoal ? 'good' : capture != null && capture < 0 ? 'bad' : 'caution')}>
-            <b>What it means:</b>{' '}
-            {capture == null
-              ? 'Excursion data is required before profit capture can be scored.'
-              : capture >= captureGoal
-                ? 'You are retaining enough of the favorable move to clear your current target.'
-                : capture < 0
-                  ? 'The favorable move was fully given back before exit on average. Exit discipline is the immediate priority.'
-                  : 'Too much of the favorable move is being given back before exit. Improve exit structure, not prediction.'}
+          <div className={'v3-ref-message ' + (capture != null && capture >= captureGoal ? 'good' : capture != null && capture < 0 ? 'bad' : 'caution')}>
+            <span className="v3-ref-message-icon">{capture != null && capture >= captureGoal ? '✓' : '!'}</span>
+            <p>{captureSummary}</p>
           </div>
         </article>
 
-        <article className="v3-management-card">
-          <div className="v3-management-card-top">
-            <div className="v3-management-label"><Clock3 size={17} /><span>Holding behavior</span></div>
-            <span className={'v3-management-status ' + holdState.tone}>{holdState.label}</span>
-          </div>
-          <p className="v3-management-question">Are you giving losing trades more time than winning trades?</p>
-
-          <div className="v3-comparison-list" aria-label="Average hold time comparison">
-            <div className="v3-comparison-row">
-              <div className="v3-comparison-value">
-                <span>Winning trades</span>
-                <strong className="v3-pos">{winnerHold == null ? 'N/A' : winnerHold.toFixed(1) + ' min'}</strong>
-              </div>
-              <div className="v3-comparison-track" aria-hidden="true"><i className="pos" style={{ '--w': winnerHoldPct + '%' }} /></div>
-            </div>
-            <div className="v3-comparison-row">
-              <div className="v3-comparison-value">
-                <span>Losing trades</span>
-                <strong className="v3-neg">{loserHold == null ? 'N/A' : loserHold.toFixed(1) + ' min'}</strong>
-              </div>
-              <div className="v3-comparison-track" aria-hidden="true"><i className="neg" style={{ '--w': loserHoldPct + '%' }} /></div>
+        <article className="v3-ref-card v3-ref-card-hold">
+          <div className="v3-ref-card-heading">
+            <span className="v3-ref-card-icon amber"><Clock3 size={20} /></span>
+            <div>
+              <h3>Holding behavior <HelpDot label="Average hold time for winning trades versus losing trades" /></h3>
+              <p>How long you hold winners vs. losers.</p>
             </div>
           </div>
 
-          <div className={'v3-management-callout ' + (holdRatio != null && holdRatio > 1.05 ? 'bad' : 'good')}>
-            <b>What it means:</b>{' '}
-            {holdRatio == null
-              ? 'Closed trades need usable entry and exit timestamps before holding behavior can be compared.'
-              : holdRatio > 1.05
-                ? 'Losing trades are being given more time. Faster invalidation is the clearest correction.'
-                : 'Losing trades are not being held materially longer than winners.'}
+          <div className="v3-ref-dual">
+            <div>
+              <span>Winners</span>
+              <strong className="v3-pos">{winnerHold == null ? 'N/A' : winnerHold.toFixed(1) + ' min'}</strong>
+              <div className="v3-ref-mini-track"><i className="green" style={{ '--w': winnerHoldPct + '%' }} /></div>
+            </div>
+            <div>
+              <span>Losers</span>
+              <strong className="v3-neg">{loserHold == null ? 'N/A' : loserHold.toFixed(1) + ' min'}</strong>
+              <div className="v3-ref-mini-track"><i className="red" style={{ '--w': loserHoldPct + '%' }} /></div>
+            </div>
+          </div>
+
+          <div className={'v3-ref-message ' + (holdLeak ? 'bad' : 'good')}>
+            <span className="v3-ref-message-icon">{holdLeak ? '!' : '✓'}</span>
+            <p><b>{holdSummary}</b>{holdLeak ? ' Try to cut losing trades faster.' : ''}</p>
           </div>
         </article>
 
-        <article className="v3-management-card v3-management-card-giveback">
-          <div className="v3-management-card-top">
-            <div className="v3-management-label"><Target size={17} /><span>Left on table</span></div>
-            <span className={'v3-management-status ' + (leftOnTable == null ? 'neutral' : leftOnTable <= 40 ? 'good' : 'caution')}>
-              {leftOnTable == null ? 'NEED DATA' : leftOnTable <= 40 ? 'LOW GIVEBACK' : 'HIGH GIVEBACK'}
+        <article className="v3-ref-card v3-ref-card-split">
+          <div className="v3-ref-card-heading">
+            <span className="v3-ref-card-icon purple"><Target size={20} /></span>
+            <div>
+              <h3>Profit vs. left on table <HelpDot label="Captured favorable movement compared with movement surrendered before exit" /></h3>
+              <p>On winning trades, how much you captured vs. how much was left.</p>
+            </div>
+          </div>
+
+          <div className="v3-ref-split-bar" aria-label="Captured movement versus left on table">
+            <span className="captured" style={{ '--w': captureBar + '%' }}>
+              {capture == null ? 'No data' : capture.toFixed(0) + '% Captured'}
+            </span>
+            <span className="left" style={{ '--w': leftBar + '%' }}>
+              {leftOnTable == null ? '' : leftOnTable.toFixed(0) + '% Left'}
             </span>
           </div>
-          <p className="v3-management-question">How much favorable movement are you giving back before exit?</p>
 
-          <div className="v3-giveback-score">
-            <strong className={leftOnTable != null && leftOnTable > 40 ? 'v3-neg' : 'v3-pos'}>
-              {leftOnTable == null ? 'N/A' : leftOnTable.toFixed(0) + '%'}
-            </strong>
-            <span>unretained favorable movement</span>
+          <div className="v3-ref-split-values">
+            <div><span className="v3-pos">Captured</span><strong className="v3-pos">{capture == null ? 'N/A' : capture.toFixed(0) + '%'}</strong></div>
+            <div><span>Left on Table</span><strong>{leftOnTable == null ? 'N/A' : leftOnTable.toFixed(0) + '%'}</strong></div>
           </div>
 
-          <div className="v3-giveback-track" aria-hidden="true">
-            <i style={{ '--w': leftOnTable == null ? '0%' : Math.max(0, Math.min(100, leftOnTable)) + '%' }} />
-          </div>
-
-          <div className={'v3-management-callout ' + (leftOnTable != null && leftOnTable <= 40 ? 'good' : 'caution')}>
-            <b>What it means:</b>{' '}
-            {leftOnTable == null
-              ? 'There is not enough excursion data to measure giveback.'
-              : leftOnTable <= 40
-                ? 'Giveback is contained; most of the favorable move is being retained.'
-                : capture < 0
-                  ? 'Exit efficiency is negative in this window, meaning gains were fully surrendered and then some before exit.'
-                  : 'A large share of the favorable move is being surrendered before exit.'}
+          <div className={'v3-ref-message ' + (leftOnTable != null && leftOnTable <= 40 ? 'good' : 'caution')}>
+            <span className="v3-ref-message-icon">{leftOnTable != null && leftOnTable <= 40 ? '✓' : '!'}</span>
+            <p>{captureSplitSummary}</p>
           </div>
         </article>
 
-        <article className="v3-management-card">
-          <div className="v3-management-card-top">
-            <div className="v3-management-label"><ShieldAlert size={17} /><span>Risk during trade</span></div>
-            <span className={'v3-management-status ' + riskState.tone}>{riskState.label}</span>
-          </div>
-          <p className="v3-management-question">How far do trades move for you versus against you before exit?</p>
-
-          <div className="v3-comparison-list" aria-label="Favorable and adverse move comparison">
-            <div className="v3-comparison-row">
-              <div className="v3-comparison-value">
-                <span>Favorable move <small>MFE</small></span>
-                <strong className="v3-pos">{favorableMove == null ? 'N/A' : '+' + favorableMove.toFixed(2) + '%'}</strong>
-              </div>
-              <div className="v3-comparison-track" aria-hidden="true"><i className="pos" style={{ '--w': favorablePct + '%' }} /></div>
-            </div>
-            <div className="v3-comparison-row">
-              <div className="v3-comparison-value">
-                <span>Adverse move <small>MAE</small></span>
-                <strong className="v3-neg">{adverseMove == null ? 'N/A' : '-' + adverseMove.toFixed(2) + '%'}</strong>
-              </div>
-              <div className="v3-comparison-track" aria-hidden="true"><i className="neg" style={{ '--w': adversePct + '%' }} /></div>
+        <article className="v3-ref-card v3-ref-card-risk">
+          <div className="v3-ref-card-heading">
+            <span className="v3-ref-card-icon red"><ShieldAlert size={20} /></span>
+            <div>
+              <h3>Risk during trade <HelpDot label="Average favorable and adverse excursion before exit" /></h3>
+              <p>How much trades move for and against you before you exit (average).</p>
             </div>
           </div>
 
-          <div className={'v3-management-callout ' + (riskState.tone === 'bad' ? 'bad' : 'caution')}>
-            <b>What it means:</b>{' '}
-            {excursionN
-              ? (adverseMove != null && favorableMove != null && adverseMove > favorableMove
-                ? 'Trades are moving farther against you than for you on average. Tighten invalidation and position risk.'
-                : 'Favorable excursion is at least as large as adverse excursion in this window.')
-                + ' Based on ' + excursionN + ' measured trades.'
-                + (data.excursion_option_n ? ' Options use the underlying directional path.' : '')
-              : 'No measured excursion sample is available in this window.'}
+          <div className="v3-ref-dual v3-ref-risk-dual">
+            <div>
+              <strong className="v3-pos">{favorableMove == null ? 'N/A' : '+' + favorableMove.toFixed(2) + '%'}</strong>
+              <div className="v3-ref-mini-track"><i className="green" style={{ '--w': favorablePct + '%' }} /></div>
+              <span>Avg Favorable Move<br /><small>(MFE)</small></span>
+            </div>
+            <div>
+              <strong className="v3-neg">{adverseMove == null ? 'N/A' : '-' + adverseMove.toFixed(2) + '%'}</strong>
+              <div className="v3-ref-mini-track"><i className="red" style={{ '--w': adversePct + '%' }} /></div>
+              <span>Avg Adverse Move<br /><small>(MAE)</small></span>
+            </div>
+          </div>
+
+          <div className="v3-ref-risk-notes">
+            <p className="good"><span>✓</span> Winners have good upside potential.</p>
+            <p className={riskLeak ? 'bad' : 'good'}><span>{riskLeak ? '!' : '✓'}</span> {riskLeak ? 'Manage drawdown to still meaningful levels.' : 'Adverse movement is staying contained.'}</p>
           </div>
         </article>
       </div>
 
-      <div className={'v3-bottom-line v3-bottom-line-clean ' + primaryInsight.tone}>
-        <div className="v3-bottom-line-head">
-          <Lightbulb size={20} />
-          <div><strong>Bottom line</strong><span>Your single most important management priority</span></div>
+      <div className="v3-ref-bottom-line">
+        <div className="v3-ref-bottom-label">
+          <span className="v3-ref-bulb"><Lightbulb size={24} /></span>
+          <div>
+            <h3>Bottom line</h3>
+            <p>Analysis based on your {rangeCopy}</p>
+            <span>({excursionN || 0} qualifying trades)</span>
+          </div>
         </div>
-        <div className="v3-bottom-line-copy">
-          <p>
-            <CheckCircle2 size={15} />
-            <span><b>{primaryInsight.title}.</b> {primaryInsight.copy}</span>
-          </p>
+        <div className="v3-ref-bottom-copy">
+          <span className="v3-ref-bottom-check">✓</span>
+          <p>{bottomCopy}</p>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
