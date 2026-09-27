@@ -278,42 +278,35 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           </div>
         </article>
 
-        <article className="v3-management-card v3-management-card-split">
+        <article className="v3-management-card v3-management-card-giveback">
           <div className="v3-management-card-top">
-            <div className="v3-management-label"><Target size={17} /><span>Profit vs. left on table</span></div>
-            <span className="v3-management-status neutral">MOVE SPLIT</span>
+            <div className="v3-management-label"><Target size={17} /><span>Left on table</span></div>
+            <span className={'v3-management-status ' + (leftOnTable == null ? 'neutral' : leftOnTable <= 40 ? 'good' : 'caution')}>
+              {leftOnTable == null ? 'NEED DATA' : leftOnTable <= 40 ? 'LOW GIVEBACK' : 'HIGH GIVEBACK'}
+            </span>
           </div>
-          <p className="v3-management-question">On winning opportunities, how much of the move did you keep versus give back?</p>
+          <p className="v3-management-question">How much favorable movement are you giving back before exit?</p>
 
-          <div
-            className={`v3-capture-split v3-capture-split-clean${capture == null ? ' is-empty' : ''}`}
-            role={capture == null ? 'status' : 'meter'}
-            aria-label={capture == null ? 'Profit versus left on table unavailable' : 'Profit versus left on table'}
-            aria-valuemin={capture == null ? undefined : 0}
-            aria-valuemax={capture == null ? undefined : 100}
-            aria-valuenow={capture == null ? undefined : captureBar}
-            aria-valuetext={capture == null
-              ? undefined
-              : `${captureBar.toFixed(0)}% retained visually; ${Math.max(0, 100 - captureBar).toFixed(0)}% of the normalized move not retained`}
-          >
-            <div className="captured" style={{ '--w': captureBar + '%' }} aria-hidden="true" />
-            <div className="left" aria-hidden="true" />
+          <div className="v3-giveback-score">
+            <strong className={leftOnTable != null && leftOnTable > 40 ? 'v3-neg' : 'v3-pos'}>
+              {leftOnTable == null ? 'N/A' : leftOnTable.toFixed(0) + '%'}
+            </strong>
+            <span>unretained favorable movement</span>
           </div>
 
-          <div className="v3-split-key">
-            <div><i className="captured-dot" /><span>Captured</span></div>
-            <div><i className="left-dot" /><span>Left on table</span><strong>{leftOnTable == null ? '—' : leftOnTable.toFixed(0) + '%'}</strong></div>
+          <div className="v3-giveback-track" aria-hidden="true">
+            <i style={{ '--w': leftOnTable == null ? '0%' : Math.max(0, Math.min(100, leftOnTable)) + '%' }} />
           </div>
 
-          <div className={'v3-management-callout ' + (capture != null && capture >= 50 ? 'good' : 'caution')}>
+          <div className={'v3-management-callout ' + (leftOnTable != null && leftOnTable <= 40 ? 'good' : 'caution')}>
             <b>What it means:</b>{' '}
-            {capture == null
-              ? 'There is not enough excursion data to compare captured versus unretained movement.'
-              : capture >= 50
-                ? 'You are keeping the larger share of the available favorable move.'
+            {leftOnTable == null
+              ? 'There is not enough excursion data to measure giveback.'
+              : leftOnTable <= 40
+                ? 'Giveback is contained; most of the favorable move is being retained.'
                 : capture < 0
-                  ? 'The normalized captured share is zero because exit efficiency is negative in this window.'
-                  : 'More of the favorable move is being left on the table than retained.'}
+                  ? 'Exit efficiency is negative in this window, meaning gains were fully surrendered and then some before exit.'
+                  : 'A large share of the favorable move is being surrendered before exit.'}
           </div>
         </article>
 
