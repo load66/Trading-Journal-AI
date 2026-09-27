@@ -44,6 +44,32 @@ function dayReviewCacheKey(accountId, date) {
   return `${accountId ?? 'all'}:${date}`;
 }
 
+function journalTodayKey() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function getRememberedSummary(key) {
+  const entry = dayReviewSummaryCache.get(key);
+  if (!entry || entry.loadedDay !== journalTodayKey()) {
+    if (entry) dayReviewSummaryCache.delete(key);
+    return null;
+  }
+  return entry.summary;
+}
+
+function rememberSummary(key, summary) {
+  if (!summary?.generated_at) return;
+  dayReviewSummaryCache.set(key, {
+    summary,
+    loadedDay: journalTodayKey(),
+  });
+}
+
 // ── R-Multiple chart ──────────────────────────────────────────────────────────
 function RMultipleChart({ trades }) {
   const data = trades.filter(t => t.r_multiple != null).map(t => ({
@@ -129,7 +155,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
   const fetchDay = useCallback(async (d) => {
     const requestId = ++dayRequestRef.current;
     const cacheKey = dayReviewCacheKey(accountId, d);
-    const cachedSummary = dayReviewSummaryCache.get(cacheKey) || null;
+    const cachedSummary = getRememberedSummary(cacheKey);
 
     setLoading(true);
     setSummaryLoading(!cachedSummary);
@@ -208,7 +234,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
       try {
         const sumRes = await fetchSummary(d);
         if (requestId !== dayRequestRef.current) return;
-        dayReviewSummaryCache.set(cacheKey, sumRes.data);
+        rememberSummary(cacheKey, sumRes.data);
         setSummary(sumRes.data);
       } catch (e) {
         if (requestId !== dayRequestRef.current) return;
@@ -244,7 +270,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
     try {
       const res = await fetchSummary(requestedDate, { force: true });
       if (requestId !== dayRequestRef.current) return;
-      dayReviewSummaryCache.set(dayReviewCacheKey(accountId, requestedDate), res.data);
+      rememberSummary(dayReviewCacheKey(accountId, requestedDate), res.data);
       setSummary(res.data);
     } catch (e) {
       if (requestId !== dayRequestRef.current) return;
@@ -267,7 +293,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
     try {
       const res = await fetchSummary(requestedDate);
       if (requestId !== dayRequestRef.current) return;
-      dayReviewSummaryCache.set(dayReviewCacheKey(accountId, requestedDate), res.data);
+      rememberSummary(dayReviewCacheKey(accountId, requestedDate), res.data);
       setSummary(res.data);
     } catch (e) {
       if (requestId !== dayRequestRef.current) return;
