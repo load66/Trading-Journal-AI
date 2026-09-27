@@ -5561,3 +5561,352 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   .le-risk-date-row label { flex: 1; }
   .le-risk-contract-result { grid-template-columns: 64px minmax(0,1fr); }
 }
+
+
+/* ============================================================
+   Dashboard planning row
+   Calendar + LE risk plan live below Trade Management so the
+   operational workflow reads top-to-bottom and remains legible.
+   ============================================================ */
+.v3-dashboard-core {
+  display: block;
+  border-bottom: 0;
+}
+.v3-dashboard-main {
+  width: 100%;
+  min-width: 0;
+}
+.v3-dashboard-planning {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(460px, .85fr);
+  align-items: start;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  border-top: 1px solid var(--accent-line-soft);
+  border-bottom: 1px solid var(--accent-line-soft);
+  background:
+    radial-gradient(80% 140% at 50% -50%, rgba(0, 174, 255, .045), transparent 58%),
+    var(--surface-page);
+}
+.v3-planning-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--accent-line-soft);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(6, 25, 39, .94), rgba(3, 18, 29, .96));
+  box-shadow:
+    inset 0 1px 0 rgba(108, 213, 255, .055),
+    0 10px 28px rgba(0, 0, 0, .10);
+}
+.v3-planning-calendar .v3-cal-head {
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.v3-planning-calendar .v3-cal-month {
+  font-size: 25px;
+  line-height: 1.1;
+}
+.v3-planning-calendar .v3-cal-tot {
+  font-size: 12px;
+}
+.v3-planning-calendar .v3-cal-tot b {
+  font-size: 19px;
+}
+.v3-planning-calendar .v3-cal-five {
+  min-width: 0;
+  width: 100%;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(82px, 1fr);
+}
+.v3-planning-calendar .v3-dow {
+  padding-bottom: 8px;
+  font-size: 11px;
+  letter-spacing: .10em;
+}
+.v3-planning-calendar .v3-day {
+  min-height: 82px;
+  padding: 9px 9px 10px;
+  background: rgba(2, 15, 25, .78);
+}
+.v3-planning-calendar .v3-day .d {
+  font-size: 11.5px;
+}
+.v3-planning-calendar .v3-day .v {
+  font-size: 18px;
+}
+.v3-planning-calendar .v3-day .c {
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.v3-planning-calendar .v3-share-toggle {
+  min-height: 31px;
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* Readability pass: planner no longer inherits sidebar micro-type. */
+.v3-planning-risk .le-risk-planner {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.v3-planning-risk .le-risk-icon {
+  width: 34px;
+  height: 34px;
+}
+.v3-planning-risk .le-risk-heading {
+  gap: 11px;
+}
+.v3-planning-risk .le-risk-heading h3,
+.v3-planning-risk .le-three-head h4 {
+  font-size: 16px;
+  line-height: 1.25;
+}
+.v3-planning-risk .le-risk-heading p {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.v3-planning-risk .le-risk-save {
+  min-width: 54px;
+  font-size: 10.5px;
+}
+.v3-planning-risk .le-risk-date-row {
+  margin-top: 14px;
+}
+.v3-planning-risk .le-risk-date-row label > span,
+.v3-planning-risk .le-risk-capital > span,
+.v3-planning-risk .le-risk-fields label > span {
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+.v3-planning-risk .le-risk-date-row input,
+.v3-planning-risk .le-risk-fields input,
+.v3-planning-risk .le-risk-fields select {
+  min-height: 39px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+.v3-planning-risk .le-risk-reset {
+  min-height: 39px;
+  padding: 7px 11px;
+  font-size: 11.5px;
+}
+.v3-planning-risk .le-risk-capital {
+  margin-top: 13px;
+}
+.v3-planning-risk .le-risk-money-input {
+  min-height: 48px;
+}
+.v3-planning-risk .le-risk-money-input b {
+  padding-left: 13px;
+  font-size: 17px;
+}
+.v3-planning-risk .le-risk-money-input input {
+  height: 46px;
+  font-size: 20px;
+}
+.v3-planning-risk .le-risk-rule-grid {
+  gap: 8px;
+  margin-top: 11px;
+}
+.v3-planning-risk .le-risk-rule-grid > div {
+  padding: 10px;
+}
+.v3-planning-risk .le-risk-rule-grid span,
+.v3-planning-risk .le-risk-rule-grid small {
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.v3-planning-risk .le-risk-rule-grid strong {
+  margin: 4px 0 3px;
+  font-size: 15px;
+}
+.v3-planning-risk .le-risk-sizing {
+  margin-top: 11px;
+}
+.v3-planning-risk .le-risk-sizing > summary {
+  min-height: 43px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+.v3-planning-risk .le-risk-sizing > summary small {
+  font-size: 10.5px;
+}
+.v3-planning-risk .le-risk-sizing-body {
+  padding: 12px;
+}
+.v3-planning-risk .le-risk-fields {
+  gap: 10px;
+}
+.v3-planning-risk .le-risk-contract-result {
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  padding: 11px;
+}
+.v3-planning-risk .le-risk-contract-primary span,
+.v3-planning-risk .le-risk-contract-primary small {
+  font-size: 10.5px;
+}
+.v3-planning-risk .le-risk-contract-primary strong {
+  font-size: 32px;
+}
+.v3-planning-risk .le-risk-contract-result dl {
+  gap: 7px;
+}
+.v3-planning-risk .le-risk-contract-result dl > div {
+  font-size: 11px;
+}
+.v3-planning-risk .le-risk-contract-result dd small {
+  font-size: 10px;
+}
+.v3-planning-risk .le-risk-inline-warning,
+.v3-planning-risk .le-risk-target-check {
+  gap: 7px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.v3-planning-risk .le-three-rule {
+  margin-top: 12px;
+  padding: 12px;
+}
+.v3-planning-risk .le-three-kicker {
+  margin-bottom: 3px;
+  font-size: 10px;
+}
+.v3-planning-risk .le-three-max {
+  min-width: 48px;
+  padding: 5px 7px;
+  font-size: 10px;
+}
+.v3-planning-risk .le-rule-commit {
+  gap: 8px;
+  margin-top: 11px;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.v3-planning-risk .le-rule-commit input {
+  width: 16px;
+  height: 16px;
+}
+.v3-planning-risk .le-risk-result-row {
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 9px;
+  margin-top: 9px;
+}
+.v3-planning-risk .le-risk-result-row > span {
+  font-size: 11px;
+}
+.v3-planning-risk .le-risk-seg button {
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.v3-planning-risk .le-three-status {
+  gap: 4px;
+  margin-top: 11px;
+  padding: 10px 11px;
+}
+.v3-planning-risk .le-three-status strong {
+  font-size: 11px;
+}
+.v3-planning-risk .le-three-status span {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* Keep the report visually connected to the planning workflow. */
+.v3-dashboard-planning + .v3-smoking-band {
+  margin-top: 0;
+}
+
+@media (max-width: 1280px) {
+  .v3-dashboard-planning {
+    grid-template-columns: 1fr;
+  }
+  .v3-planning-calendar .v3-cal-five {
+    grid-auto-rows: minmax(86px, 1fr);
+  }
+  .v3-planning-risk .le-risk-rule-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .v3-planning-risk .le-risk-fields {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .v3-planning-risk .le-risk-fields label.wide {
+    grid-column: span 2;
+  }
+}
+@media (max-width: 760px) {
+  .v3-dashboard-planning {
+    gap: 10px;
+    padding: 12px;
+  }
+  .v3-planning-card {
+    padding: 13px;
+  }
+  .v3-planning-calendar .v3-cal-month {
+    font-size: 21px;
+  }
+  .v3-planning-calendar .v3-cal-five {
+    grid-auto-rows: minmax(68px, 1fr);
+  }
+  .v3-planning-calendar .v3-day {
+    min-height: 68px;
+    padding: 7px 6px 8px;
+  }
+  .v3-planning-calendar .v3-day .v {
+    font-size: 16px;
+  }
+  .v3-planning-calendar .v3-day .c {
+    font-size: 10px;
+  }
+  .v3-planning-risk .le-risk-rule-grid,
+  .v3-planning-risk .le-risk-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .v3-planning-risk .le-risk-fields label.wide {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 480px) {
+  .v3-dashboard-planning {
+    padding: 10px 8px;
+  }
+  .v3-planning-card {
+    padding: 11px 10px;
+  }
+  .v3-planning-calendar .v3-cal-head {
+    align-items: center;
+  }
+  .v3-planning-calendar .v3-cal-tot {
+    width: 100%;
+    margin-left: 0;
+  }
+  .v3-planning-calendar .v3-share-toggle {
+    margin-left: 0;
+  }
+  .v3-planning-calendar .v3-cal-five {
+    grid-auto-rows: minmax(62px, 1fr);
+  }
+  .v3-planning-calendar .v3-day {
+    min-height: 62px;
+    padding: 6px 5px 7px;
+  }
+  .v3-planning-calendar .v3-day .d {
+    font-size: 10.5px;
+  }
+  .v3-planning-calendar .v3-day .v {
+    font-size: 14px;
+  }
+  .v3-planning-calendar .v3-day .c {
+    font-size: 9.5px;
+  }
+  .v3-planning-risk .le-risk-heading h3,
+  .v3-planning-risk .le-three-head h4 {
+    font-size: 15px;
+  }
+}
