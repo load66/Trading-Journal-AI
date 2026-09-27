@@ -493,6 +493,7 @@ export function executionTimeETMinutes(dateStr, timeStr) {
 
 
 const TABS = ['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'Chart Review'];
+const TRADE_DETAIL_TAB_KEY = 'trading-journal:trade-detail-tab';
 
 const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', date: '', time: '' };
 
@@ -564,9 +565,24 @@ function DaySidebar({ currentTrade, onOpenDetail }) {
 
 export default function TradeDetail({ trade: initialTrade, tradeNavList = [], onBack, onTradeUpdate, onNavigate, onOpenDetail, focusPlannedRisk = false }) {
   const [trade, setTrade] = useState(initialTrade);
-  const [tab, setTab] = useState('Stats');
+  const [tab, setTab] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(TRADE_DETAIL_TAB_KEY);
+      return TABS.includes(saved) ? saved : 'Stats';
+    } catch {
+      return 'Stats';
+    }
+  });
   const [analysis, setAnalysis] = useState(null);
   const [tags, setTags] = useState([]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(TRADE_DETAIL_TAB_KEY, tab);
+    } catch {
+      // Preserve normal review behavior if browser storage is unavailable.
+    }
+  }, [tab]);
 
   // Executions
   const [showAddExec, setShowAddExec]     = useState(false);
