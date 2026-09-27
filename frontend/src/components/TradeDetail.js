@@ -616,6 +616,23 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [chartScreenshotExpanded, setChartScreenshotExpanded] = useState(false);
   const [chartScreenshotRevision, setChartScreenshotRevision] = useState(0);
 
+  useEffect(() => {
+    if (!chartScreenshotExpanded) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setChartScreenshotExpanded(false);
+    };
+
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [chartScreenshotExpanded]);
+
   // Stats edit
   const [editingStats, setEditingStats]   = useState(false);
   const [statsForm, setStatsForm]         = useState({});
@@ -1597,12 +1614,12 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               <>
                 <button
                   type="button"
-                  className={`td-chart-preview${chartScreenshotExpanded ? ' is-expanded' : ''}`}
-                  onClick={() => setChartScreenshotExpanded(value => !value)}
-                  title={chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}
-                  aria-pressed={chartScreenshotExpanded}
+                  className="td-chart-preview"
+                  onClick={() => setChartScreenshotExpanded(true)}
+                  title="Open screenshot full screen"
+                  aria-haspopup="dialog"
                   style={{
-                    width: chartScreenshotExpanded ? 680 : 520,
+                    width: 800,
                     maxWidth: '100%',
                     alignSelf: 'flex-start',
                     flex: '0 0 auto',
@@ -1614,16 +1631,16 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     style={{
                       width: '100%',
                       height: 'auto',
-                      maxHeight: chartScreenshotExpanded ? 390 : 300,
+                      maxHeight: 600,
                       objectFit: 'contain',
                     }}
                   />
-                  <span><Maximize2 size={13} /> {chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}</span>
+                  <span><Maximize2 size={13} /> Open full screen</span>
                 </button>
                 <div
                   className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
                   style={{
-                    width: chartScreenshotExpanded ? 680 : 520,
+                    width: 800,
                     maxWidth: '100%',
                     justifyContent: 'flex-start',
                   }}
@@ -1649,7 +1666,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             ) : (
               <label
                 className="td-chart-dropzone td-chart-dropzone-compact"
-                style={{ width: 520, maxWidth: '100%', minHeight: 180, alignSelf: 'flex-start' }}
+                style={{ width: 800, maxWidth: '100%', minHeight: 240, alignSelf: 'flex-start' }}
               >
                 <div className="td-chart-dropzone-empty">
                   <Upload size={24} />
@@ -1711,6 +1728,31 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
       </div>
 
+      {chartScreenshotExpanded && chartScreenshotUrl && (
+        <div
+          className="td-image-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="TradingView screenshot"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setChartScreenshotExpanded(false);
+          }}
+        >
+          <div className="td-image-modal-hint">Click outside or press Esc to close</div>
+          <button
+            type="button"
+            className="td-image-modal-close"
+            aria-label="Close screenshot"
+            onClick={() => setChartScreenshotExpanded(false)}
+          >
+            ×
+          </button>
+          <img
+            src={chartScreenshotUrl}
+            alt={`${trade.ticker} TradingView review screenshot full screen`}
+          />
+        </div>
+      )}
     </div>
   );
 }
