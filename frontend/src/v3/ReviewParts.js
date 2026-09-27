@@ -7,14 +7,6 @@ import { tradeHoldSeconds, tradeMarketHour, tradeStats } from '../tradeMetrics';
 const OPEN = 9.5;
 const CLOSE = 16;
 
-function tradeExecutions(t) {
-  let execs = t.executions || [];
-  if (!Array.isArray(execs)) {
-    try { execs = JSON.parse(execs || '[]'); } catch { execs = []; }
-  }
-  return execs;
-}
-
 function tradeHoldLabel(t) {
   const secRaw = tradeHoldSeconds(t);
   if (secRaw == null) return '—';
