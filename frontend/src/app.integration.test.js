@@ -731,7 +731,7 @@ test('management backfill refresh survives same-range dashboard rerenders', asyn
   });
 
   expect(await screen.findByText(/117\/159 trades · 74% coverage · RELIABLE/i)).toBeVisible();
-  expect(screen.getByText(/62\/81 winning trades · 77% coverage · RELIABLE/i)).toBeVisible();
+  expect(screen.getAllByText(/62\/81 winning trades · 77% coverage · RELIABLE/i).length).toBeGreaterThanOrEqual(2);
   expect(screen.queryByText(/12\/159 trades · 8% coverage · LOW/i)).not.toBeInTheDocument();
 });
 
