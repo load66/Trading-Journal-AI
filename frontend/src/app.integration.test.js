@@ -559,7 +559,7 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
 
   fireEvent.click(within(tablist).getByRole('tab', { name: 'LE Review' }));
   await waitFor(() => expect(tradesApi.getLeReview).toHaveBeenCalled());
-  expect(screen.getByText(/LE review unavailable/)).toBeInTheDocument();
+  expect(screen.getByText(/LE chart evidence is unavailable/)).toBeInTheDocument();
 
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Executions' }));
   expect(screen.getByRole('button', { name: /Add Execution/ })).toBeInTheDocument();
