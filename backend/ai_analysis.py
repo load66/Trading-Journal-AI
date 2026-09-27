@@ -18,6 +18,7 @@ load_dotenv()
 MODEL = "claude-opus-5"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 
 DIARY_SYSTEM_PROMPT = """You are an expert trading coach analyzing a trader's handwritten or typed diary entry.
 
@@ -196,37 +197,63 @@ def raise_if_truncated(response, what: str = "analysis") -> None:
         )
 
 
+def _groq_diary_json(messages: list[dict], api_key: str, model: str) -> dict:
+    """Run a diary extraction through Groq and require a JSON object response."""
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_completion_tokens": DIARY_MAX_TOKENS,
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1,
+    }
+    response = httpx.post(
+        GROQ_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=120.0,
+    )
+    response.raise_for_status()
+    body = response.json()
+    try:
+        raw = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("Groq returned an unexpected diary-analysis response shape.") from exc
+    return json.loads(_strip_json_fence(raw))
+
+
+def _finalize_diary_result(result: dict, entry_date: str, provider: str, model: str) -> dict:
+    """Apply the stable diary schema and retain provider metadata for auditing."""
+    if not isinstance(result, dict):
+        raise ValueError("Diary AI returned a non-object JSON response.")
+    result.setdefault("diary_date", entry_date)
+    result.setdefault("overall_summary", "")
+    result.setdefault("patterns_identified", [])
+    result.setdefault("improvement_areas", [])
+    result.setdefault("trade_analyses", [])
+    result["ai_provider"] = provider
+    result["ai_model"] = model
+    return result
+
+
 def analyze_diary_entry(image_path: str, entry_date: str, trades_context: list[dict]) -> dict:
-    """
-    Send diary screenshot + trades context to Claude for analysis.
-
-    Args:
-        image_path: absolute path to the uploaded image
-        entry_date: ISO date string e.g. '2026-05-19'
-        trades_context: list of trade dicts for that date with:
-            trade_group, ticker, instrument_type, side, avg_entry, avg_exit,
-            first_entry_time, last_exit_time, net_pnl
-    Returns:
-        Parsed dict with diary_date, overall_summary, patterns_identified,
-        improvement_areas, trade_analyses
-    """
-    client = get_client()
-
-    # Read and encode image
+    """Analyze a diary screenshot with Groq vision first, Anthropic as fallback."""
+    # Read and encode image once; both providers can consume the same local file.
     image_bytes = Path(image_path).read_bytes()
-    image_b64 = base64.standard_b64encode(image_bytes).decode('utf-8')
+    image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     ext = Path(image_path).suffix.lower()
     media_type_map = {
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.webp': 'image/webp',
-        '.gif': 'image/gif',
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
     }
-    media_type = media_type_map.get(ext, 'image/jpeg')
+    media_type = media_type_map.get(ext, "image/jpeg")
 
-    # Build trades context string
     context_lines = []
     for t in trades_context:
         line = (
@@ -239,8 +266,7 @@ def analyze_diary_entry(image_path: str, entry_date: str, trades_context: list[d
         )
         context_lines.append(line)
 
-    trades_context_str = '\n'.join(context_lines) if context_lines else "No trades found for this date."
-
+    trades_context_str = "\n".join(context_lines) if context_lines else "No trades found for this date."
     user_text = f"""Entry date: {entry_date}
 
 Trades executed on this date (use these to match diary mentions):
@@ -254,39 +280,76 @@ Please analyze this trading diary screenshot. For each trade you find mentioned:
 
 Return only the JSON object."""
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=DIARY_MAX_TOKENS,
-        system=DIARY_SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": [
+    groq_key = _valid_api_key("GROQ_API_KEY")
+    anthropic_key = _valid_api_key("ANTHROPIC_API_KEY", "your_anthropic_api_key_here")
+    errors = []
+
+    if groq_key:
+        try:
+            result = _groq_diary_json(
+                [
+                    {"role": "system", "content": DIARY_SYSTEM_PROMPT},
                     {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_b64,
-                        },
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": user_text},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{media_type};base64,{image_b64}",
+                                },
+                            },
+                        ],
                     },
+                ],
+                groq_key,
+                GROQ_VISION_MODEL,
+            )
+            return _finalize_diary_result(result, entry_date, "groq", GROQ_VISION_MODEL)
+        except Exception as exc:
+            errors.append(f"Groq: {exc}")
+            if not anthropic_key:
+                raise RuntimeError("Groq diary image analysis failed. " + errors[-1]) from exc
+
+    if anthropic_key:
+        try:
+            client = anthropic.Anthropic(api_key=anthropic_key)
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=DIARY_MAX_TOKENS,
+                system=DIARY_SYSTEM_PROMPT,
+                messages=[
                     {
-                        "type": "text",
-                        "text": user_text,
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": image_b64,
+                                },
+                            },
+                            {"type": "text", "text": user_text},
+                        ],
                     }
                 ],
-            }
-        ],
-    )
+            )
+            raise_if_truncated(response, "diary photo analysis")
+            result = _parse_response(response_text(response), entry_date)
+            return _finalize_diary_result(result, entry_date, "anthropic", MODEL)
+        except Exception as exc:
+            errors.append(f"Anthropic: {exc}")
+            raise RuntimeError("Diary AI analysis failed. " + " | ".join(errors)) from exc
 
-    raise_if_truncated(response, "diary photo analysis")
-    return _parse_response(response_text(response), entry_date)
+    raise ValueError(
+        "Diary AI is not configured. Add GROQ_API_KEY to the server environment "
+        "(recommended), or ANTHROPIC_API_KEY as an optional fallback."
+    )
 
 
 def analyze_diary_text(text_content: str, entry_date: str, trades_context: list[dict]) -> dict:
-    """Analyze typed/CSV diary notes (no image) using Claude text API."""
-    client = get_client()
-
+    """Analyze typed/CSV diary notes with Groq first, Anthropic as fallback."""
     context_lines = []
     for t in trades_context:
         line = (
@@ -297,15 +360,9 @@ def analyze_diary_text(text_content: str, entry_date: str, trades_context: list[
             f"net_pnl: ${t.get('net_pnl', 0):.2f}"
         )
         context_lines.append(line)
-    trades_context_str = '\n'.join(context_lines) if context_lines else "No trades found for this date."
+    trades_context_str = "\n".join(context_lines) if context_lines else "No trades found for this date."
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=DIARY_MAX_TOKENS,
-        system=DIARY_SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": f"""Entry date: {entry_date}
+    user_content = f"""Entry date: {entry_date}
 
 Trades executed on this date (match diary lines to these):
 {trades_context_str}
@@ -315,22 +372,47 @@ Typed diary notes to analyze:
 
 Parse each diary line, match to the trade records above, and return the JSON analysis.
 For each "Source: X" note create a tag with type "source". Return only the JSON object."""
-        }],
+
+    groq_key = _valid_api_key("GROQ_API_KEY")
+    anthropic_key = _valid_api_key("ANTHROPIC_API_KEY", "your_anthropic_api_key_here")
+    errors = []
+
+    if groq_key:
+        try:
+            result = _groq_diary_json(
+                [
+                    {"role": "system", "content": DIARY_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                groq_key,
+                GROQ_MODEL,
+            )
+            return _finalize_diary_result(result, entry_date, "groq", GROQ_MODEL)
+        except Exception as exc:
+            errors.append(f"Groq: {exc}")
+            if not anthropic_key:
+                raise RuntimeError("Groq diary text analysis failed. " + errors[-1]) from exc
+
+    if anthropic_key:
+        try:
+            client = anthropic.Anthropic(api_key=anthropic_key)
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=DIARY_MAX_TOKENS,
+                system=DIARY_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            raise_if_truncated(response, "diary analysis")
+            result = _parse_response(response_text(response), entry_date)
+            return _finalize_diary_result(result, entry_date, "anthropic", MODEL)
+        except Exception as exc:
+            errors.append(f"Anthropic: {exc}")
+            raise RuntimeError("Diary AI analysis failed. " + " | ".join(errors)) from exc
+
+    raise ValueError(
+        "Diary AI is not configured. Add GROQ_API_KEY to the server environment "
+        "(recommended), or ANTHROPIC_API_KEY as an optional fallback."
     )
-
-    raise_if_truncated(response, "diary analysis")
-    raw = response_text(response)
-    if raw.startswith('```'):
-        raw = re.sub(r'^```(?:json)?\n?', '', raw)
-        raw = re.sub(r'\n?```$', '', raw)
-
-    result = json.loads(raw)
-    result.setdefault('diary_date', entry_date)
-    result.setdefault('overall_summary', '')
-    result.setdefault('patterns_identified', [])
-    result.setdefault('improvement_areas', [])
-    result.setdefault('trade_analyses', [])
-    return result
 
 
 def _parse_response(raw_text: str, entry_date: str) -> dict:
