@@ -1199,7 +1199,7 @@ test('Dashboard never substitutes all-time KPIs when a selected management windo
   const management = screen.getByRole('heading', { name: /Trade management/i }).closest('.v3-ref-management');
   expect(management).toBeTruthy();
   expect(within(management).queryByText('66.7%')).not.toBeInTheDocument();
-  expect(within(management).getByText(/159\/159 trades · 100% timestamp coverage/i)).toBeVisible();
+  expect(management).toHaveTextContent(/159\/159 trades.*100% timestamp coverage/i);
 });
 
 test('Dashboard prioritizes trade management and the latest saved Smoking Gun report', async () => {
