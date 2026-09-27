@@ -82,7 +82,7 @@ function ItemList({ kind, tagType = '', title, sub, noun, items, onChanged }) {
   const others = (name) => items.filter(i => i.name !== name);
 
   return (
-    <section className="card panel-flush" aria-label={title}>
+    <section className="card panel-flush settings-item-list" aria-label={title}>
       <div className="settings-head">
         <div style={{ minWidth: 0 }}>
           <h2 className="section-title">{title} <span className="text-muted num" style={{ fontWeight: 500, fontSize: 14 }}>{items.length}</span></h2>
@@ -126,8 +126,8 @@ function ItemList({ kind, tagType = '', title, sub, noun, items, onChanged }) {
         </div>
       )}
 
-      <div className="table-container">
-        <table style={{ minWidth: 640 }}>
+      <div className="table-container settings-items-table-wrap">
+        <table className="settings-items-table">
           <thead>
             <tr>
               <th style={{ paddingLeft: 20 }}>Name</th>
@@ -141,8 +141,8 @@ function ItemList({ kind, tagType = '', title, sub, noun, items, onChanged }) {
               const active = mode && mode.name === item.name ? mode.type : null;
               const fixed = false;
               return [
-                <tr key={item.name} className={active ? 'row-selected' : undefined}>
-                  <td style={{ paddingLeft: 20, fontWeight: 600 }}>
+                <tr key={item.name} className={`settings-item-row ${active ? 'row-selected' : ''}`}>
+                  <td className="settings-item-name" style={{ paddingLeft: 20, fontWeight: 600 }}>
                     {item.name}
                     {item.aliases?.length > 0 && (
                       <div className="text-muted" style={{ fontSize: 12.5, fontWeight: 400, marginTop: 2 }}>
@@ -150,9 +150,9 @@ function ItemList({ kind, tagType = '', title, sub, noun, items, onChanged }) {
                       </div>
                     )}
                   </td>
-                  <td className="text-muted" style={{ fontSize: 14 }}>{item.description || ''}</td>
-                  <td className="num">{item.trades}</td>
-                  <td className="num" style={{ paddingRight: 20, whiteSpace: 'nowrap' }}>
+                  <td className="text-muted settings-item-description" style={{ fontSize: 14 }}>{item.description || ''}</td>
+                  <td className="num settings-item-trades"><span className="settings-mobile-label">Trades</span>{item.trades}</td>
+                  <td className="num settings-item-actions" style={{ paddingRight: 20, whiteSpace: 'nowrap' }}>
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => open('edit', item)} aria-label={`Edit ${item.name}`}>
                       <Pencil size={13} /> Edit
                     </button>
