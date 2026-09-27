@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v6_10M_EMA_REVIEW"
+LE_RULESET_VERSION = "LE_2026_09_v7_MARKET_SIGN"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
@@ -51,6 +51,7 @@ _RULE_TAGS = {
     ("mistake", "Airgapped from 8 EMA"),
     ("mistake", "No Level Break"),
     ("mistake", "Traded Chop"),
+    ("mistake", "No Market Sign"),
     ("outcome", "Break-Even"),
 }
 
@@ -412,21 +413,46 @@ def _session_vwap_snapshot(bars: list[dict], entry_dt: datetime) -> dict:
     }
 
 
-def _market_sign_status(direction: str, spy: dict, qqq: dict) -> str:
-    positions = [spy.get("position_vs_vwap"), qqq.get("position_vs_vwap")]
-    if any(p in (None, "unknown") for p in positions):
-        return "unknown"
+def _market_index_snapshot(
+    bars: list[dict],
+    entry_dt: datetime,
+    direction: str,
+) -> dict:
+    """Return the LE market-sign snapshot for SPY or QQQ at the trade entry."""
+    vwap = _session_vwap_snapshot(bars, entry_dt)
+    price = vwap.get("price")
+    ema_points = _ema_series_10m(_aggregate_10m(bars))
+    completed = [point for point in ema_points if point["end"] < entry_dt]
+    ema8 = float(completed[-1]["ema8"]) if completed else None
+    ema_aligned = _directionally_aligned(direction, price, ema8)
 
-    if direction == "bullish":
-        confirms = [p == "above" for p in positions]
-        opposes = [p == "below" for p in positions]
+    if price is None or vwap.get("vwap") is None:
+        vwap_aligned = None
+    elif direction == "bullish":
+        vwap_aligned = price >= float(vwap["vwap"])
     else:
-        confirms = [p == "below" for p in positions]
-        opposes = [p == "above" for p in positions]
+        vwap_aligned = price <= float(vwap["vwap"])
 
-    if all(confirms):
+    return {
+        "price": price,
+        "ema8_10m": ema8,
+        "position_vs_ema": _price_position(price, ema8),
+        "ema_aligned": ema_aligned,
+        "vwap": vwap.get("vwap"),
+        "position_vs_vwap": vwap.get("position_vs_vwap"),
+        "vwap_aligned": vwap_aligned,
+    }
+
+
+def _market_sign_status(direction: str, spy: dict, qqq: dict) -> str:
+    """Both SPY and QQQ must agree with the trade on the primary 10m 8 EMA."""
+    del direction  # Direction is already encoded in each index snapshot's ema_aligned field.
+    alignments = [spy.get("ema_aligned"), qqq.get("ema_aligned")]
+    if any(value is None for value in alignments):
+        return "unknown"
+    if all(value is True for value in alignments):
         return "confirmed"
-    if all(opposes):
+    if all(value is False for value in alignments):
         return "failed"
     return "mixed"
 
@@ -558,6 +584,22 @@ def analyze_context(
     trade_day = entry_dt.date()
     direction = market_direction(trade)
     dated = [(b, _bar_dt(b)) for b in underlying_bars]
+
+    spy_snapshot = _market_index_snapshot(spy_bars, entry_dt, direction)
+    qqq_snapshot = _market_index_snapshot(qqq_bars, entry_dt, direction)
+    spy_sign_status = _level_status(spy_feed, True, entry_dt - timedelta(minutes=1))
+    qqq_sign_status = _level_status(qqq_feed, True, entry_dt - timedelta(minutes=1))
+    market_sign_verified = (
+        _status_is_verified(spy_sign_status)
+        and _status_is_verified(qqq_sign_status)
+        and spy_snapshot.get("ema_aligned") is not None
+        and qqq_snapshot.get("ema_aligned") is not None
+    )
+    market_sign_status = (
+        _market_sign_status(direction, spy_snapshot, qqq_snapshot)
+        if market_sign_verified
+        else "unknown"
+    )
 
     calendar_verified = bool((market_calendar or {}).get("verified"))
     current_session = (market_calendar or {}).get("current")
@@ -837,6 +879,20 @@ def analyze_context(
                 else "Premarket range could not be verified."
             ),
         },
+        "market_sign": {
+            "status": (
+                "pass" if market_sign_status == "confirmed"
+                else "fail" if market_sign_status in {"mixed", "failed"}
+                else "unverified"
+            ),
+            "detail": (
+                "SPY and QQQ both confirmed the trade direction on the 10m 8 EMA."
+                if market_sign_status == "confirmed"
+                else "SPY and QQQ did not both confirm the trade direction."
+                if market_sign_status in {"mixed", "failed"}
+                else "Consolidated SPY/QQQ market-sign evidence was unavailable."
+            ),
+        },
     }
     evaluated_checks = [
         item["status"] for item in entry_checks.values()
@@ -921,6 +977,14 @@ def analyze_context(
             "Underlying was inside the PMH–PML range at entry.",
         )
 
+    if market_sign_verified and market_sign_status in {"mixed", "failed"}:
+        spy_state = spy_snapshot.get("position_vs_ema") or "unknown"
+        qqq_state = qqq_snapshot.get("position_vs_ema") or "unknown"
+        add_rule_tag(
+            "mistake", "No Market Sign",
+            f"SPY was {spy_state} its 10m 8 EMA and QQQ was {qqq_state}; both did not confirm the {direction} trade.",
+        )
+
     pnl = trade.get("net_pnl")
     if pnl is not None and abs(float(pnl)) < 0.01:
         add_rule_tag("outcome", "Break-Even", "Realized net P&L was approximately flat.")
@@ -949,6 +1013,10 @@ def analyze_context(
     elif not _status_is_verified(ema_status):
         data_warnings.append(
             f"10-minute 8 EMA is {ema_status}; EMA-dependent automatic mistake tags are disabled."
+        )
+    if not market_sign_verified:
+        data_warnings.append(
+            "SPY/QQQ Market Sign could not be verified from consolidated 10-minute 8 EMA evidence."
         )
 
     evidence = {
@@ -988,6 +1056,12 @@ def analyze_context(
         "bars_since_level_break": bars_since_level_break,
         "entry_structure_status": structure_status,
         "entry_checks": entry_checks,
+        "market_sign": {
+            "status": market_sign_status,
+            "verified": market_sign_verified,
+            "spy": {**spy_snapshot, "integrity_status": spy_sign_status},
+            "qqq": {**qqq_snapshot, "integrity_status": qqq_sign_status},
+        },
         "management_10m8ema": management_ema,
         "net_pnl": trade.get("net_pnl"),
         "instrument_type": trade.get("instrument_type"),
@@ -1246,8 +1320,9 @@ Tag rules:
 - The deterministic rule engine already handles Outside/Inside Day, level breaks, first-10m, airgapped >1%, no-level-break, chop-range, and break-even. Do not repeat those.
 - Treat PDH/PDL/PMH/PML as usable only when the corresponding level_meta status is VERIFIED or VERIFIED_HISTORICAL.
 - Treat 10-minute 8 EMA evidence as usable only when ema_integrity_status is VERIFIED or VERIFIED_HISTORICAL.
-- Suggest A++ Level + EMA only when broken-level and EMA confluence is genuinely supported.
-- Use entry_checks, ema_alignment_valid, ema_extension_state, ema_slope_direction, and ema_vs_broken_level as the primary 10-minute structure evidence.
+- The LE system requires Flag + Line + Sign. Market Sign is confirmed only when both SPY and QQQ agree with the trade direction on their 10-minute 8 EMA; VWAP is supporting context, not the primary sign.
+- Suggest A++ Level + EMA or Clean Entry only when market_sign.status is confirmed in addition to the required setup evidence.
+- Use entry_checks, market_sign, ema_alignment_valid, ema_extension_state, ema_slope_direction, and ema_vs_broken_level as the primary 10-minute structure evidence.
 - For an E-entry or Purple Profits classification, the 10-minute 8 EMA must be directionally aligned AND already beyond the verified broken level; otherwise return NONE or a more appropriate setup.
 - Suggest Clean/Early/Late Entry, Chased Entry, or Forced Setup only when the objective entry evidence supports the claim.
 - Suggest Sold Too Early only when management_10m8ema shows the final exit occurred before the first confirmed 10-minute 8 EMA break and the post-exit underlying continued favorably. Do not estimate the option's unrealized return.
@@ -1462,19 +1537,42 @@ async def build_le_review(trade: dict) -> dict:
             "ai": None,
         }
 
+    spy_bars: list[dict] = []
+    qqq_bars: list[dict] = []
+    spy_feed = None
+    qqq_feed = None
+    market_sign_error = None
+    try:
+        spy_result, qqq_result = await asyncio.gather(
+            _fetch_alpaca_1m("SPY", when),
+            _fetch_alpaca_1m("QQQ", when),
+        )
+        spy_bars, spy_feed = spy_result
+        qqq_bars, qqq_feed = qqq_result
+    except Exception as exc:
+        market_sign_error = str(exc)
+
     context = analyze_context(
         trade,
         underlying_bars,
-        [],
-        [],
+        spy_bars,
+        qqq_bars,
         market_calendar=market_calendar,
         underlying_feed=underlying_feed,
+        spy_feed=spy_feed,
+        qqq_feed=qqq_feed,
     )
     if context.get("available"):
         context["evidence"]["market_data_feed"] = {
             "underlying": underlying_feed,
+            "spy": spy_feed,
+            "qqq": qqq_feed,
         }
-        feeds = {underlying_feed}
+        if market_sign_error:
+            context["data_warnings"].append(
+                f"SPY/QQQ Market Sign data could not be loaded: {market_sign_error}"
+            )
+        feeds = {feed for feed in (underlying_feed, spy_feed, qqq_feed) if feed}
         if "iex" in feeds:
             context["data_warnings"].append(
                 "Historical SIP was unavailable, so LE Review fell back to IEX. "
@@ -1496,6 +1594,7 @@ async def build_le_review(trade: dict) -> dict:
         verified_flags.extend([
             _status_is_verified(ev.get("ema_integrity_status")),
             ev.get("underlying_price_last_completed_1m") is not None,
+            bool((ev.get("market_sign") or {}).get("verified")),
         ])
         verified_count = sum(bool(flag) for flag in verified_flags)
         completeness_pct = round(verified_count / len(verified_flags) * 100)
