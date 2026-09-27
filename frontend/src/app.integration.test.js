@@ -662,7 +662,9 @@ test('chart image opens a native fullscreen dialog from the image surface', asyn
 
   fireEvent.click(previewImage);
   await waitFor(() => expect(lightbox).toHaveAttribute('open'));
-  fireEvent.click(lightbox);
+  const stage = screen.getByTestId('chart-screenshot-stage');
+  expect(stage).toBeVisible();
+  fireEvent.click(stage);
   await waitFor(() => expect(lightbox).not.toHaveAttribute('open'));
 });
 

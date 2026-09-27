@@ -1781,10 +1781,21 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           event.preventDefault();
           closeChartScreenshot();
         }}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) closeChartScreenshot();
-        }}
       >
+        <div
+          className="td-image-modal-stage"
+          data-testid="chart-screenshot-stage"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeChartScreenshot();
+          }}
+        >
+          {chartScreenshotUrl && (
+            <img
+              src={chartScreenshotUrl}
+              alt={`${trade.ticker} TradingView review screenshot full screen`}
+            />
+          )}
+        </div>
         <div className="td-image-modal-hint">Click outside the chart or press Esc to close</div>
         <button
           type="button"
@@ -1794,12 +1805,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         >
           ×
         </button>
-        {chartScreenshotUrl && (
-          <img
-            src={chartScreenshotUrl}
-            alt={`${trade.ticker} TradingView review screenshot full screen`}
-          />
-        )}
       </dialog>
     </div>
   );
