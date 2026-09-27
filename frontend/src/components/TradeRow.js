@@ -147,7 +147,7 @@ function ExitQuality({ trade }) {
   const cls = value >= 60 ? 'pos' : value >= 35 ? 'caution' : 'neg';
   return (
     <div className="trade-exit-quality" title="How much of the covered favorable move was retained at exit">
-      <span className={`num ${cls}`}>{value.toFixed(0)}%</span>
+      <span className={`num ${cls}`}>{value.toFixed(1)}%</span>
       <small>capture</small>
     </div>
   );
