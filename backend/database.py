@@ -11,7 +11,7 @@ from config import Settings
 
 load_dotenv()
 
-APPLICATION_SCHEMA_VERSION = '20260927_004_trade_chart_screenshot'
+APPLICATION_SCHEMA_VERSION = '20260927_005_excursion_engine_version'
 
 
 class DBAPIRow(Mapping[str, Any]):
@@ -176,6 +176,7 @@ MIGRATIONS = (
     Migration('012_trades_excursion_basis', 'trades', 'excursion_basis', 'ALTER TABLE trades ADD COLUMN excursion_basis TEXT'),
     Migration('013_trades_excursion_calculated_at', 'trades', 'excursion_calculated_at', 'ALTER TABLE trades ADD COLUMN excursion_calculated_at TEXT'),
     Migration('014_trade_analysis_chart_screenshot_path', 'trade_analysis', 'chart_screenshot_path', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_path TEXT'),
+    Migration('015_trades_excursion_version', 'trades', 'excursion_version', 'ALTER TABLE trades ADD COLUMN excursion_version TEXT'),
 )
 
 
