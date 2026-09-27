@@ -3514,7 +3514,7 @@ def get_weekly_summary(
                 pass
 
     sql = """
-        SELECT t.trade_group, t.ticker, t.side, t.net_pnl, t.date,
+        SELECT t.trade_group, t.ticker, t.side, t.net_pnl, t.date, t.executions,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.entry_reason, ta.exit_reason
         FROM trades t
@@ -3529,6 +3529,7 @@ def get_weekly_summary(
 
     rows = conn.execute(sql, params).fetchall()
     trades = [row_to_dict(r) for r in rows]
+    trades = [t for t in trades if trade_is_closed(t)]
 
     if not trades:
         return {"error": "No trades found for this week", "week_label": week_label,
