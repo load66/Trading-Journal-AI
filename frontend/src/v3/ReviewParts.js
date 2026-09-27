@@ -269,19 +269,6 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
   );
 }
 
-function EvidenceBadge({ level }) {
-  if (!level) return null;
-  const normalized = String(level).toUpperCase();
-  const cls = normalized === 'VERIFIED'
-    ? 'verified'
-    : normalized === 'RECORDED'
-      ? 'recorded'
-      : normalized === 'ANALYZED'
-        ? 'analyzed'
-        : 'insufficient';
-  return <span className={`v3-evidence ${cls}`}>{normalized}</span>;
-}
-
 /* ── coaching: the report, with the lists behind tabs ───────────────────── */
 export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
   const [tab, setTab] = useState('strengths');
