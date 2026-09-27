@@ -377,7 +377,8 @@
 .td-chart-preview img {
   display: block;
   width: 100%;
-  height: 300px;
+  height: auto;
+  max-height: 300px;
   object-fit: contain;
   background: #020c13;
 }
@@ -386,7 +387,7 @@
   cursor: zoom-out;
 }
 .td-chart-preview.is-expanded img {
-  height: 390px;
+  max-height: 390px;
 }
 .td-chart-preview > span {
   position: absolute;
