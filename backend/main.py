@@ -815,6 +815,12 @@ async def import_csv(
                         net_pnl=excluded.net_pnl,
                         commissions=excluded.commissions,
                         executions=excluded.executions,
+                        mfe_pct=NULL,
+                        mae_pct=NULL,
+                        exit_efficiency=NULL,
+                        excursion_basis=NULL,
+                        excursion_calculated_at=NULL,
+                        excursion_version=NULL,
                         imported_at=CURRENT_TIMESTAMP
                 """, (
                     trade['account_id'], trade['trade_group'], trade['date'],
@@ -1230,9 +1236,24 @@ def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
         trade_date = sorted_exits[-1].get('date', trade['date'])
 
     conn.execute(
-        "UPDATE trades SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=? WHERE id=?",
+        """UPDATE trades
+           SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=?,
+               mfe_pct=NULL, mae_pct=NULL, exit_efficiency=NULL,
+               excursion_basis=NULL, excursion_calculated_at=NULL, excursion_version=NULL
+           WHERE id=?""",
         (json.dumps(execs), gross_pnl, net_pnl, commissions, trade_date, trade_id)
     )
+    account_id = trade.get("account_id")
+    for summary_date in {str(trade.get("date") or ""), str(trade_date or "")}:
+        if not summary_date:
+            continue
+        if account_id is None:
+            conn.execute("DELETE FROM daily_summaries WHERE summary_date=?", (summary_date,))
+        else:
+            conn.execute(
+                "DELETE FROM daily_summaries WHERE summary_date=? AND account_id=?",
+                (summary_date, account_id),
+            )
     conn.commit()
     return row_to_dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone())
 
