@@ -634,13 +634,13 @@ test('saved chart screenshot sits below Tags as a compact inline expandable prev
   const preview = await screen.findByTitle('Enlarge preview');
   expect(preview).toBeVisible();
   expect(preview).not.toHaveClass('is-expanded');
-  expect(preview).toHaveStyle({ width: '300px', maxWidth: '100%' });
-  expect(within(preview).getByRole('img')).toHaveStyle({ height: '110px' });
+  expect(preview).toHaveStyle({ width: '520px', maxWidth: '100%' });
+  expect(within(preview).getByRole('img')).toHaveStyle({ height: 'auto', maxHeight: '300px' });
   fireEvent.click(preview);
   expect(preview).toHaveClass('is-expanded');
   expect(preview).toHaveAttribute('title', 'Reduce preview');
-  expect(preview).toHaveStyle({ width: '480px' });
-  expect(within(preview).getByRole('img')).toHaveStyle({ height: '270px' });
+  expect(preview).toHaveStyle({ width: '680px' });
+  expect(within(preview).getByRole('img')).toHaveStyle({ height: 'auto', maxHeight: '390px' });
   expect(screen.queryByRole('dialog', { name: 'TradingView screenshot' })).not.toBeInTheDocument();
 });
 

@@ -1585,7 +1585,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   title={chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}
                   aria-pressed={chartScreenshotExpanded}
                   style={{
-                    width: chartScreenshotExpanded ? 480 : 300,
+                    width: chartScreenshotExpanded ? 680 : 520,
                     maxWidth: '100%',
                     alignSelf: 'flex-start',
                     flex: '0 0 auto',
@@ -1596,7 +1596,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     alt={`${trade.ticker} TradingView review screenshot`}
                     style={{
                       width: '100%',
-                      height: chartScreenshotExpanded ? 270 : 110,
+                      height: 'auto',
+                      maxHeight: chartScreenshotExpanded ? 390 : 300,
                       objectFit: 'contain',
                     }}
                   />
@@ -1605,7 +1606,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 <div
                   className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
                   style={{
-                    width: chartScreenshotExpanded ? 480 : 300,
+                    width: chartScreenshotExpanded ? 680 : 520,
                     maxWidth: '100%',
                     justifyContent: 'flex-start',
                   }}
@@ -1631,7 +1632,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             ) : (
               <label
                 className="td-chart-dropzone td-chart-dropzone-compact"
-                style={{ width: 300, maxWidth: '100%', minHeight: 110, alignSelf: 'flex-start' }}
+                style={{ width: 520, maxWidth: '100%', minHeight: 180, alignSelf: 'flex-start' }}
               >
                 <div className="td-chart-dropzone-empty">
                   <Upload size={24} />
