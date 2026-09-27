@@ -20,7 +20,8 @@ const GOAL_FIELDS = [
   { key: 'profit_factor', label: 'Profit Factor', suffix: '', step: 0.1, min: 0 },
   { key: 'avg_win_loss_ratio', label: 'Win / Loss Size', suffix: '', step: 0.1, min: 0 },
   { key: 'exit_efficiency', label: 'Exit Efficiency', suffix: '%', step: 1, min: 0, max: 100 },
-  { key: 'expectancy', label: 'Expectancy ($)', prefix: '
+  { key: 'expectancy', label: 'Expectancy ($)', prefix: '$', suffix: '', step: 5, min: 0 },
+];
 
 function GoalsPanel({ draft, onChange, onSave, onCancel, accountLabel, saving, error }) {
   return (
