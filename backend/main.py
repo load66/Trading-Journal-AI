@@ -2954,8 +2954,8 @@ def get_yearly_kpis(
 _DOW_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 _SETUP_LABEL_MAP = {'NONE': 'No setup'}
 _HOLD_ORDER = ['0-5 min', '5-15 min', '15-30 min', '30-60 min', '1-2 hrs', '2+ hrs']
-_SESSION_ORDER = ['08:30-08:45', '08:45-09:30', '09:30-10:00',
-                  '10:00-12:30', '12:30-14:30', '14:30-15:00']
+_SESSION_ORDER = ['Pre-market', '08:30-08:45', '08:45-09:30', '09:30-10:00',
+                  '10:00-12:30', '12:30-14:30', '14:30-15:00', 'After-hours']
 
 
 def _mins_of(t):
@@ -3182,6 +3182,8 @@ def get_reports(
         t = r['entry_min']
         if t is None:
             return None
+        if t < 8 * 60 + 30:
+            return 'Pre-market'
         if t < 8 * 60 + 45:
             return '08:30-08:45'
         if t < 9 * 60 + 30:
@@ -3192,7 +3194,9 @@ def get_reports(
             return '10:00-12:30'
         if t < 14 * 60 + 30:
             return '12:30-14:30'
-        return '14:30-15:00'
+        if t < 15 * 60:
+            return '14:30-15:00'
+        return 'After-hours'
 
     def management_bucket(r):
         if r['n_exits'] > 1:
@@ -3222,9 +3226,11 @@ def get_reports(
         if r['net_pnl'] > 0:
             cur = cur + 1 if cur > 0 else 1
             best_win = max(best_win, cur)
-        else:
+        elif r['net_pnl'] < 0:
             cur = cur - 1 if cur < 0 else -1
             worst_loss = min(worst_loss, cur)
+        else:
+            cur = 0
 
     # Tags per trade (strategy and source tags mirror their fields, so they are left out).
     # A trade with several tags counts once under each of them.
