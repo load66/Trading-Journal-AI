@@ -5,6 +5,7 @@ import json
 import hashlib
 import sqlite3
 import aiofiles
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -16,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from PIL import Image, UnidentifiedImageError
 
 from config import Settings
 import httpx
@@ -1211,10 +1213,15 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
     trade_group = trade['trade_group']
 
     analysis_row = conn.execute(
-        "SELECT chart_screenshot_path FROM trade_analysis WHERE trade_group=?",
+        "SELECT chart_screenshot_path, chart_screenshot_provider FROM trade_analysis WHERE trade_group=?",
         (trade_group,),
     ).fetchone()
     screenshot_path = analysis_row["chart_screenshot_path"] if analysis_row else None
+    screenshot_provider = (
+        analysis_row["chart_screenshot_provider"]
+        if analysis_row and analysis_row["chart_screenshot_provider"]
+        else ("supabase" if SETTINGS.supabase_url and SETTINGS.supabase_secret_key else SETTINGS.storage_mode)
+    )
 
     conn.execute("DELETE FROM trade_tags WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trade_analysis WHERE trade_group=?", (trade_group,))
@@ -1222,7 +1229,7 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
 
     if screenshot_path:
         try:
-            DIARY_STORAGE.delete(screenshot_path)
+            DIARY_STORAGE.delete(screenshot_path, provider=screenshot_provider)
         except Exception:
             logger.warning("Could not remove trade screenshot %s", screenshot_path, exc_info=True)
     conn.commit()
@@ -1275,6 +1282,28 @@ def _trade_screenshot_object_name(trade_group: str, ext: str) -> str:
     return f"trade-review/{digest}/chart{ext}"
 
 
+def _legacy_screenshot_provider() -> str:
+    # Production screenshots created before provider metadata existed were saved
+    # in Supabase Storage. Local/test installs keep using their configured mode.
+    if SETTINGS.supabase_url and SETTINGS.supabase_secret_key:
+        return "supabase"
+    return SETTINGS.storage_mode
+
+
+def _screenshot_provider(row) -> str:
+    if row and row["chart_screenshot_provider"]:
+        return row["chart_screenshot_provider"]
+    return _legacy_screenshot_provider()
+
+
+def _image_dimensions(raw: bytes) -> tuple[int | None, int | None]:
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            return int(image.width), int(image.height)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None, None
+
+
 @app.post("/api/trades/{trade_group:path}/chart-screenshot")
 async def upload_trade_chart_screenshot(
     trade_group: str,
@@ -1293,28 +1322,60 @@ async def upload_trade_chart_screenshot(
 
     _ensure_trade_analysis_row(conn, trade_group)
     current = conn.execute(
-        "SELECT chart_screenshot_path FROM trade_analysis WHERE trade_group=?",
+        "SELECT chart_screenshot_path, chart_screenshot_provider FROM trade_analysis WHERE trade_group=?",
         (trade_group,),
     ).fetchone()
     old_path = current["chart_screenshot_path"] if current else None
+    old_provider = _screenshot_provider(current) if old_path else None
 
     object_name = _trade_screenshot_object_name(trade_group, ext)
     content_type = file.content_type or "application/octet-stream"
-    DIARY_STORAGE.save(object_name, raw, content_type)
+    provider = DIARY_STORAGE.current_provider
+    width, height = _image_dimensions(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    uploaded_at = datetime.now(ZoneInfo("UTC")).isoformat()
+
+    DIARY_STORAGE.save(object_name, raw, content_type, provider=provider)
 
     conn.execute(
-        "UPDATE trade_analysis SET chart_screenshot_path=? WHERE trade_group=?",
-        (object_name, trade_group),
+        """UPDATE trade_analysis
+           SET chart_screenshot_path=?,
+               chart_screenshot_provider=?,
+               chart_screenshot_bytes=?,
+               chart_screenshot_width=?,
+               chart_screenshot_height=?,
+               chart_screenshot_content_type=?,
+               chart_screenshot_sha256=?,
+               chart_screenshot_uploaded_at=?
+           WHERE trade_group=?""",
+        (
+            object_name,
+            provider,
+            len(raw),
+            width,
+            height,
+            content_type,
+            digest,
+            uploaded_at,
+            trade_group,
+        ),
     )
     conn.commit()
 
-    if old_path and old_path != object_name:
+    if old_path and (old_path != object_name or old_provider != provider):
         try:
-            DIARY_STORAGE.delete(old_path)
+            DIARY_STORAGE.delete(old_path, provider=old_provider)
         except Exception:
             logger.warning("Could not remove replaced trade screenshot %s", old_path, exc_info=True)
 
-    return {"chart_screenshot_path": object_name, "filename": file.filename}
+    return {
+        "chart_screenshot_path": object_name,
+        "chart_screenshot_provider": provider,
+        "chart_screenshot_bytes": len(raw),
+        "chart_screenshot_width": width,
+        "chart_screenshot_height": height,
+        "filename": file.filename,
+    }
 
 
 @app.get("/api/trades/{trade_group:path}/chart-screenshot")
@@ -1323,13 +1384,13 @@ def get_trade_chart_screenshot(
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     row = conn.execute(
-        "SELECT chart_screenshot_path FROM trade_analysis WHERE trade_group=?",
+        "SELECT chart_screenshot_path, chart_screenshot_provider FROM trade_analysis WHERE trade_group=?",
         (trade_group,),
     ).fetchone()
     path = row["chart_screenshot_path"] if row else None
     if not path:
         raise HTTPException(status_code=404, detail="No chart screenshot saved for this trade.")
-    data, content_type = DIARY_STORAGE.read(path)
+    data, content_type = DIARY_STORAGE.read(path, provider=_screenshot_provider(row))
     return Response(content=data, media_type=content_type)
 
 
@@ -1339,20 +1400,88 @@ def delete_trade_chart_screenshot(
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     row = conn.execute(
-        "SELECT chart_screenshot_path FROM trade_analysis WHERE trade_group=?",
+        "SELECT chart_screenshot_path, chart_screenshot_provider FROM trade_analysis WHERE trade_group=?",
         (trade_group,),
     ).fetchone()
     path = row["chart_screenshot_path"] if row else None
     if not path:
         return {"deleted": False}
 
-    DIARY_STORAGE.delete(path)
+    DIARY_STORAGE.delete(path, provider=_screenshot_provider(row))
     conn.execute(
-        "UPDATE trade_analysis SET chart_screenshot_path=NULL WHERE trade_group=?",
+        """UPDATE trade_analysis
+           SET chart_screenshot_path=NULL,
+               chart_screenshot_provider=NULL,
+               chart_screenshot_bytes=NULL,
+               chart_screenshot_width=NULL,
+               chart_screenshot_height=NULL,
+               chart_screenshot_content_type=NULL,
+               chart_screenshot_sha256=NULL,
+               chart_screenshot_uploaded_at=NULL
+           WHERE trade_group=?""",
         (trade_group,),
     )
     conn.commit()
     return {"deleted": True}
+
+
+@app.get("/api/storage-health")
+def get_storage_health(conn: sqlite3.Connection = Depends(get_connection)):
+    rows = conn.execute(
+        """SELECT chart_screenshot_provider, chart_screenshot_bytes
+           FROM trade_analysis
+           WHERE chart_screenshot_path IS NOT NULL"""
+    ).fetchall()
+
+    current_provider = DIARY_STORAGE.current_provider
+    legacy_provider = _legacy_screenshot_provider()
+    by_provider: dict[str, dict[str, int]] = {}
+    untracked_count = 0
+
+    for row in rows:
+        provider = row["chart_screenshot_provider"] or legacy_provider
+        item = by_provider.setdefault(provider, {"count": 0, "bytes": 0})
+        item["count"] += 1
+        if row["chart_screenshot_bytes"] is None:
+            untracked_count += 1
+        else:
+            item["bytes"] += int(row["chart_screenshot_bytes"])
+
+    active = by_provider.get(current_provider, {"count": 0, "bytes": 0})
+    capacity = int(SETTINGS.screenshot_storage_capacity_bytes)
+    active_bytes = int(active["bytes"])
+    active_count = int(active["count"])
+    avg_bytes = int(active_bytes / active_count) if active_count else 500 * 1024
+    remaining_bytes = max(0, capacity - active_bytes)
+    usage_pct = round((active_bytes / capacity) * 100, 2) if capacity else 0.0
+    estimated_remaining = int(remaining_bytes / avg_bytes) if avg_bytes > 0 else None
+
+    if usage_pct >= 95:
+        status = "critical"
+    elif usage_pct >= 85:
+        status = "high"
+    elif usage_pct >= 70:
+        status = "watch"
+    else:
+        status = "healthy"
+
+    return {
+        "active_provider": current_provider,
+        "provider_label": DIARY_STORAGE.current_provider_label,
+        "capacity_bytes": capacity,
+        "used_bytes": active_bytes,
+        "remaining_bytes": remaining_bytes,
+        "usage_pct": usage_pct,
+        "screenshot_count": active_count,
+        "average_bytes": avg_bytes if active_count else 0,
+        "estimated_remaining_screenshots": estimated_remaining,
+        "untracked_count": untracked_count,
+        "status": status,
+        "by_provider": [
+            {"provider": provider, **values}
+            for provider, values in sorted(by_provider.items())
+        ],
+    }
 
 
 @app.get("/api/trades/{trade_group:path}/le-review")
