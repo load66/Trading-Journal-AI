@@ -601,7 +601,8 @@ test('Tags uses the Settings library and adds a saved mistake tag', async () => 
     expect.any(String),
     { tag_type: 'mistake', tag_value: 'Entered Too Close to Resistance' },
   ));
-  expect(await screen.findByText('Entered Too Close to Resistance')).toBeVisible();
+  const applied = screen.getByRole('region', { name: 'Tags applied to this trade' });
+  expect(await within(applied).findByText('Entered Too Close to Resistance')).toBeVisible();
 });
 
 test('Chart Review is the single professional screenshot workspace', async () => {
