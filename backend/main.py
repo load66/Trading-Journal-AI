@@ -6,6 +6,7 @@ import sqlite3
 import aiofiles
 from pathlib import Path
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query
@@ -2188,11 +2189,15 @@ async def _fetch_alpaca_option_bars(symbols: list[str], date: str) -> dict[str, 
         "APCA-API-KEY-ID": ALPACA_KEY,
         "APCA-API-SECRET-KEY": ALPACA_SECRET,
     }
+    trade_day = datetime.strptime(date, "%Y-%m-%d")
+    market_tz = ZoneInfo("America/New_York")
+    start_dt = trade_day.replace(hour=9, minute=30, second=0, tzinfo=market_tz)
+    end_dt = trade_day.replace(hour=16, minute=0, second=0, tzinfo=market_tz)
     base_params = {
         "symbols": ",".join(sorted(set(symbols))),
         "timeframe": "1Min",
-        "start": f"{date}T09:30:00-04:00",
-        "end": f"{date}T16:00:00-04:00",
+        "start": start_dt.isoformat(),
+        "end": end_dt.isoformat(),
         "limit": 10000,
         "sort": "asc",
     }
