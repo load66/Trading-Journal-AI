@@ -37,7 +37,13 @@ from ai_analysis import (
     generate_performance_diagnosis,
     performance_ai_is_configured,
 )
-from daily_summary import build_daily_context, daily_context_signature, daily_cache_matches, generate_daily_summary
+from daily_summary import (
+    build_daily_context,
+    daily_context_signature,
+    daily_cache_matches,
+    daily_auto_generation_is_fresh,
+    generate_daily_summary,
+)
 from trade_management_ai import (
     build_management_evidence,
     management_context_signature,
@@ -3920,9 +3926,35 @@ def get_daily_summary(
     force: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    # Build the current day evidence first. Day Review should never spend an AI
-    # request on an empty session, and cached coaching is only valid while the
-    # evidence fingerprint still matches the underlying trades/journal data.
+    # First resolve any saved diagnosis. Automatic AI generation is capped at
+    # once per journal-local calendar day. This prevents background enrichment
+    # or tab navigation from repeatedly spending an AI request. force=true is
+    # the explicit user override and always bypasses this guard.
+    if account_id is None:
+        row = conn.execute(
+            "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
+            (date,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id = ?",
+            (date, account_id),
+        ).fetchone()
+
+    if row and not force and daily_auto_generation_is_fresh(row['generated_at']):
+        try:
+            content = json.loads(row['ai_content'])
+            content['date'] = date
+            content['cached'] = True
+            content['cache_reason'] = "daily_generation_limit"
+            content['generated_at'] = row['generated_at']
+            return content
+        except Exception:
+            # Corrupt legacy cache should not block rebuilding a valid review.
+            pass
+
+    # No same-day automatic generation exists, so build the current evidence.
+    # Empty sessions never spend an AI request.
     try:
         context = build_daily_context(conn, date, account_id)
     except Exception as e:
@@ -3938,20 +3970,8 @@ def get_daily_summary(
 
     input_signature = daily_context_signature(context)
 
-    # A saved Day Review is immutable while this date's evidence fingerprint is
-    # unchanged. Code/version bumps alone do not justify another paid AI call.
-    # Only changed evidence or an explicit force=true request regenerates it.
-    if account_id is None:
-        row = conn.execute(
-            "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
-            (date,),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id = ?",
-            (date, account_id),
-        ).fetchone()
-
+    # Outside the once-daily guard, unchanged evidence can reuse an older saved
+    # diagnosis indefinitely. Changed evidence may auto-refresh once today.
     cache_miss_reason = "no_saved_diagnosis"
     if row:
         try:
@@ -3965,7 +3985,7 @@ def get_daily_summary(
             if force:
                 cache_miss_reason = "manual_override"
             elif content.get("input_signature"):
-                cache_miss_reason = "evidence_changed"
+                cache_miss_reason = "evidence_changed_after_daily_window"
             else:
                 cache_miss_reason = "legacy_cache_missing_signature"
         except Exception:
