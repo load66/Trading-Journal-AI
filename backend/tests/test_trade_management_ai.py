@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import main
 import trade_management_ai as tm
 
 
@@ -189,3 +190,88 @@ def test_mixed_holding_evidence_cannot_be_promoted_to_hold_leak():
 
     assert data["holding"]["signal"] == "mixed"
     assert data["deterministic_priority"] == "mixed_evidence"
+
+
+class _FakeCacheConn:
+    def __init__(self, cache_row=None):
+        self.cache_row = cache_row
+
+    def execute(self, sql, params=()):
+        class _Result:
+            def __init__(self, row):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        if "SELECT type FROM accounts" in sql:
+            return _Result({"type": "day_trading"})
+        if "FROM daily_summaries" in sql:
+            return _Result(self.cache_row)
+        raise AssertionError(f"Unexpected SQL in cache-only test: {sql}")
+
+
+def _patch_management_endpoint_inputs(monkeypatch):
+    evidence_payload = evidence()
+    monkeypatch.setattr(main, "get_kpis", lambda **_kwargs: {"total_trades": 47})
+    monkeypatch.setattr(main, "get_edge_report", lambda **_kwargs: {"hold_time": {}})
+    monkeypatch.setattr(main, "get_goals", lambda **_kwargs: {"exit_efficiency": 50})
+    monkeypatch.setattr(main, "build_management_evidence", lambda **_kwargs: evidence_payload)
+    monkeypatch.setattr(main, "management_context_signature", lambda _evidence: "sig-123")
+    return evidence_payload
+
+
+def test_trade_management_cache_only_restores_valid_diagnosis(monkeypatch):
+    _patch_management_endpoint_inputs(monkeypatch)
+    cached = {
+        "diagnosis": "Saved diagnosis",
+        "input_signature": "sig-123",
+        "evidence_version": 1,
+        "analytics_engine_version": main.ANALYTICS_ENGINE_VERSION,
+    }
+    conn = _FakeCacheConn({
+        "ai_content": json.dumps(cached),
+        "generated_at": "2026-09-27T14:00:00",
+    })
+
+    result = main.get_trade_management_analysis(
+        account_id=4,
+        range_key="7D",
+        date_from="2026-09-19",
+        date_to="2026-09-25",
+        force=False,
+        cached_only=True,
+        conn=conn,
+    )
+
+    assert result["cached"] is True
+    assert result["diagnosis"] == "Saved diagnosis"
+    assert result["generated_at"] == "2026-09-27T14:00:00"
+
+
+def test_trade_management_cache_only_miss_never_calls_ai(monkeypatch):
+    _patch_management_endpoint_inputs(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "performance_ai_is_configured",
+        lambda: (_ for _ in ()).throw(AssertionError("provider check should not run")),
+    )
+    monkeypatch.setattr(
+        main,
+        "generate_trade_management_analysis",
+        lambda _evidence: (_ for _ in ()).throw(AssertionError("AI should not run")),
+    )
+
+    result = main.get_trade_management_analysis(
+        account_id=4,
+        range_key="30D",
+        date_from="2026-08-27",
+        date_to="2026-09-25",
+        force=False,
+        cached_only=True,
+        conn=_FakeCacheConn(None),
+    )
+
+    assert result["cached"] is False
+    assert result["cache_miss"] is True
+    assert result["input_signature"] == "sig-123"
