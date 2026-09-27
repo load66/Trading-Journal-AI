@@ -1665,10 +1665,12 @@ def copy_trade_journal(
 ):
     """Copy reusable journal context from one trade to another.
 
-    This intentionally excludes executions, P&L, risk/target fields, emotions,
-    screenshots, and LE evidence because those are specific to the destination
-    trade. Merge fills blank review/setup/strategy fields and adds missing
-    structured tags. Replace overwrites only the selected reusable sections.
+    This intentionally excludes executions, P&L, risk/target fields, the
+    analysis emotional_state field, screenshots, and LE evidence because those
+    are specific to the destination trade. When Tags is selected, every
+    structured tag type is copied, including emotion tags. Merge fills blank
+    review/setup/strategy fields and adds missing tags. Replace overwrites only
+    the selected reusable sections.
     """
     source_group = (body.source_trade_group or "").strip()
     if not source_group:
