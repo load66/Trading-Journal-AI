@@ -470,7 +470,7 @@ export function TradeManagement({ kpis, edge, range, onRangeChange, goals, error
         <div className="v3-ref-bottom-label">
           <span className="v3-ref-bulb"><Lightbulb size={24} /></span>
           <div className="v3-management-ai-control">
-            <h3>Bottom line</h3>
+            <h3>Generate AI Analysis</h3>
             {ai?.diagnosis && !ai?.unavailable && !ai?.no_trades ? (
               <div className="v3-management-ai-meta">
                 <span>AI management review · {range}</span>
@@ -492,7 +492,7 @@ export function TradeManagement({ kpis, edge, range, onRangeChange, goals, error
                 disabled={aiLoading || totalTrades === 0 || Boolean(error)}
               >
                 <Sparkles size={13} aria-hidden="true" />
-                {aiLoading ? 'Analyzing…' : 'Generate AI Analysis'}
+                {aiLoading ? 'Analyzing…' : 'Generate'}
               </button>
             )}
             <span>{rangeCopy} · {totalTrades} closed trades · market-path coverage {excursionN}/{totalTrades}</span>
