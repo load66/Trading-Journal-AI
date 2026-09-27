@@ -269,6 +269,41 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
   );
 }
 
+function escapeHighlightRegExp(value) {
+  return value.replace(/[|\\{}()[\]^$+*?.-]/g, '\\/* ── coaching: the report, with the lists behind tabs ───────────────────── */');
+}
+
+function renderCoachHighlights(text, highlights) {
+  if (!text) return text;
+
+  const candidates = [
+    ...((highlights?.good || []).map((phrase) => ({ phrase, tone: 'good' }))),
+    ...((highlights?.bad || []).map((phrase) => ({ phrase, tone: 'bad' }))),
+  ]
+    .filter((item) => typeof item.phrase === 'string' && item.phrase.trim().length >= 4)
+    .map((item) => ({ ...item, phrase: item.phrase.trim() }))
+    .sort((a, b) => b.phrase.length - a.phrase.length);
+
+  if (!candidates.length) return text;
+
+  const byPhrase = new Map();
+  candidates.forEach((item) => {
+    const key = item.phrase.toLowerCase();
+    if (!byPhrase.has(key)) byPhrase.set(key, item.tone);
+  });
+
+  const pattern = candidates.map((item) => escapeHighlightRegExp(item.phrase)).join('|');
+  if (!pattern) return text;
+
+  const pieces = text.split(new RegExp('(' + pattern + ')', 'gi'));
+  return pieces.map((piece, index) => {
+    const tone = byPhrase.get(piece.toLowerCase());
+    return tone
+      ? <mark className={'coach-highlight ' + tone} key={index + '-' + piece}>{piece}</mark>
+      : piece;
+  });
+}
+
 /* ── coaching: the report, with the lists behind tabs ───────────────────── */
 export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
   const [tab, setTab] = useState('strengths');
@@ -332,11 +367,12 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
   );
   const executionFlags = (summary.behavior_flags || []).map((f) => ({
     text: `${f.title}: ${f.detail}`,
+    tone: 'bad',
   }));
   const recordedRows = wrap(summary.recorded_observations || []);
   const lists = {
-    strengths: wrap(summary.strengths),
-    mistakes: wrap(summary.mistakes),
+    strengths: wrap(summary.strengths).map((r) => ({ ...r, tone: 'good' })),
+    mistakes: wrap(summary.mistakes).map((r) => ({ ...r, tone: 'bad' })),
     focus: wrap((summary.coaching?.length ? summary.coaching : summary.tomorrow_focus) || []),
     patterns: wrap(summary.patterns),
     execution_flags: executionFlags,
@@ -372,9 +408,13 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
       </div>
 
       <div className="v3-cols">
-        {summary.narrative && <p className="v3-narr">{summary.narrative}</p>}
+        {summary.narrative && (
+          <p className="v3-narr">{renderCoachHighlights(summary.narrative, summary.highlights)}</p>
+        )}
         {summary.mental_game && (
-          <p className="v3-narr v3-narr-quiet">{summary.mental_game}</p>
+          <p className="v3-narr v3-narr-quiet">
+            {renderCoachHighlights(summary.mental_game, summary.highlights)}
+          </p>
         )}
       </div>
 
@@ -395,7 +435,18 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
         ) : (
           <ul className="v3-list v3-cols">
             {rows.map((r, i) => (
-              <li key={i} className={tab === 'mistakes' ? 'bad' : tab === 'focus' ? 'next' : 'good'}>
+              <li
+                key={i}
+                className={
+                  r.tone === 'bad' || tab === 'mistakes' || tab === 'execution_flags'
+                    ? 'bad'
+                    : r.tone === 'good' || tab === 'strengths'
+                      ? 'good'
+                      : tab === 'focus'
+                        ? 'next'
+                        : ''
+                }
+              >
                 {r.text}
               </li>
             ))}
