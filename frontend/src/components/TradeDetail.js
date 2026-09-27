@@ -1314,8 +1314,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         />
         <KpiCell
           label="Exit efficiency"
-          value={<span className="num">{trade.exit_efficiency != null ? `${Number(trade.exit_efficiency).toFixed(1)}%` : 'n/a'}</span>}
-          tone={trade.exit_efficiency != null ? (Number(trade.exit_efficiency) >= 50 ? 'pos' : 'neg') : undefined}
+          value={<span className="num">{pnl > 0 && trade.exit_efficiency != null ? `${Number(trade.exit_efficiency).toFixed(1)}%` : 'n/a'}</span>}
+          tone={pnl > 0 && trade.exit_efficiency != null ? (Number(trade.exit_efficiency) >= 50 ? 'pos' : 'neg') : undefined}
         />
       </KpiStrip>
 
@@ -1505,10 +1505,9 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     />
                     <StatRow
                       label="Exit Efficiency"
-                      value={trade.exit_efficiency == null ? null : `${Number(trade.exit_efficiency).toFixed(1)}%`}
-                      valueColor={trade.exit_efficiency == null ? undefined
-                        : trade.exit_efficiency < 0 ? 'var(--result-neg)'
-                          : trade.exit_efficiency >= 50 ? 'var(--result-pos)' : 'var(--caution)'}
+                      value={pnl <= 0 || trade.exit_efficiency == null ? null : `${Number(trade.exit_efficiency).toFixed(1)}%`}
+                      valueColor={pnl <= 0 || trade.exit_efficiency == null ? undefined
+                        : trade.exit_efficiency >= 50 ? 'var(--result-pos)' : 'var(--caution)'}
                     />
                     <StatRow label="Emotional State" value={analysis.emotional_state} />
                   </>
