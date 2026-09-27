@@ -123,6 +123,35 @@ def test_profitable_option_efficiency_is_bounded_by_actual_premium_path():
     assert result["exit_efficiency"] == 100.0
     assert 0.0 <= result["exit_efficiency"] <= 100.0
 
+
+def test_partial_exit_capture_uses_actual_execution_cashflows():
+    d = "2026-09-25"
+    trade = {
+        "trade_group": "scaleout",
+        "date": d,
+        "ticker": "QQQ",
+        "instrument_type": "OPTION",
+        "option_type": "CALL",
+        "side": "LONG",
+        "net_pnl": 350.0,
+        "executions": [
+            fill(d, "09:30:10", "BOT", 10, 1.00),
+            fill(d, "09:31:20", "SOLD", 5, 1.50),
+            fill(d, "09:32:20", "SOLD", 5, 1.20),
+        ],
+    }
+    bars = [
+        {"t": "2026-09-25T13:30:00Z", "o": 1.00, "h": 1.10, "l": 0.95, "c": 1.05},
+        {"t": "2026-09-25T13:31:00Z", "o": 1.05, "h": 1.60, "l": 1.00, "c": 1.40},
+        {"t": "2026-09-25T13:32:00Z", "o": 1.40, "h": 1.45, "l": 1.15, "c": 1.20},
+    ]
+    result = calculate_trade_excursion(trade, bars, bar_basis="option_premium_1m")
+    # Actual per-contract cash flow: -10 + 7.5 + 6 = +3.5.
+    # Best attainable P&L on the actual scale-out path is +5.0 at the first exit.
+    assert result["path_max_pnl_per_unit"] == 5.0
+    assert result["exit_efficiency"] == 70.0
+
+
 def test_behavior_rules_are_execution_based_not_psychological():
     d = "2026-09-25"
     first = stock_trade("loss1", -100, entry="09:30:00", exit="09:31:00", qty=10, entry_price=100, exit_price=90, ticker="SPY")
