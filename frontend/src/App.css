@@ -313,7 +313,7 @@
 /* ---------- Trade chart visual review ---------- */
 .td-visual-review {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, .9fr);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 410px);
   gap: 12px;
   align-items: stretch;
 }
@@ -339,7 +339,8 @@
 }
 .td-chart-dropzone {
   position: relative;
-  min-height: 420px;
+  min-height: 245px;
+  max-height: 315px;
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -366,17 +367,17 @@
 .td-chart-dropzone img {
   width: 100%;
   height: 100%;
-  max-height: 520px;
+  max-height: 315px;
   object-fit: contain;
   background: #020c13;
 }
 .td-chart-dropzone-empty {
-  max-width: 280px;
+  max-width: 300px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 28px 20px;
+  padding: 22px 18px;
   color: var(--text-secondary);
   text-align: center;
 }
@@ -472,11 +473,12 @@
   line-height: 1;
   cursor: pointer;
 }
-@media (max-width: 1180px) {
+@media (max-width: 1120px) {
   .td-visual-review {
     grid-template-columns: 1fr;
   }
   .td-chart-dropzone {
-    min-height: 300px;
+    min-height: 240px;
+    max-height: 320px;
   }
 }
