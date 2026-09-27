@@ -85,7 +85,7 @@ export function DayCurve({ trades, onPick }) {
         </defs>
         {/* the hours */}
         {[10, 11, 12, 13, 14, 15].map((h) => (
-          <g key={h}>
+          <g key={h} className={`v3-hour v3-hour-${h}`}>
             <line x1={geom.X(h)} y1="0" x2={geom.X(h)} y2={H} stroke="var(--divider-soft)" strokeWidth="1"
               vectorEffect="non-scaling-stroke" />
             <text className="v3-tl-lab" x={geom.X(h) + 5} y="12">{h}:00</text>
@@ -461,59 +461,123 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
 export function DayTrades({ trades, gradeMap, loading, onOpen }) {
   if (loading) return <div className="v3-empty">Loading…</div>;
   if (!trades?.length) return <div className="v3-empty">No trades on this day.</div>;
+
+  const gradeTone = (grade) => {
+    const value = String(grade || '').toUpperCase();
+    if (value.startsWith('A')) return 'good';
+    if (value === 'D' || value === 'F') return 'bad';
+    return 'neutral';
+  };
+
   return (
-    <div className="v3-scroll">
-      <table className="v3-t">
-        <thead>
-          <tr>
-            <th>Ticker</th>
-            <th className="v3-hide-s">Side</th>
-            <th className="v3-hide-s">Strategy</th>
-            <th>Grade</th>
-            <th className="r v3-hide-s">Hold</th>
-            <th className="r v3-hide-s">P/L %</th>
-            <th className="r">R</th>
-            <th className="r">P&amp;L</th>
-          </tr>
-        </thead>
-        <tbody>
-          {trades.map((t) => {
-            const pnl = Number(t.net_pnl || 0);
-            const g = gradeMap?.[t.trade_group];
-            const open = () => onOpen && onOpen(t, trades);
-            return (
-              <tr
-                key={t.id}
-                className="clickable"
-                tabIndex={0}
-                onClick={open}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }}
-                aria-label={`Open ${t.ticker} trade`}
-              >
-                <td>
-                  <div className="v3-tick">{t.ticker}</div>
-                  <div className="v3-read">{t.instrument_type}</div>
-                </td>
-                <td className="v3-hide-s v3-side">
-                  {t.side === 'LONG' ? 'Long' : t.side === 'SHORT' ? 'Short' : t.side}
-                </td>
-                <td className="v3-hide-s v3-read">{t.strategy || 'not set'}</td>
-                <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-                  {g ? <Grade grade={g.grade} reason={g.one_line} /> : <span className="v3-flat">&mdash;</span>}
-                </td>
-                <td className="r v3-mono v3-hide-s">{tradeHoldLabel(t)}</td>
-                <td className={`r v3-mono v3-hide-s ${tradePLPercent(t) == null ? 'v3-flat' : tone(tradePLPercent(t))}`}>
-                  {tradePLPercent(t) == null ? '—' : `${tradePLPercent(t) > 0 ? '+' : ''}${tradePLPercent(t).toFixed(1)}%`}
-                </td>
-                <td className={`r v3-mono ${t.r_multiple != null ? tone(t.r_multiple) : 'v3-flat'}`}>
-                  {t.r_multiple != null ? `${t.r_multiple > 0 ? '+' : ''}${Number(t.r_multiple).toFixed(2)}R` : '—'}
-                </td>
-                <td className={`r v3-mono ${tone(pnl)}`} style={{ fontWeight: 600 }}>{money2(pnl)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="v3-scroll v3-trade-table-wrap">
+        <table className="v3-t">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th className="v3-hide-s">Side</th>
+              <th className="v3-hide-s">Strategy</th>
+              <th>Grade</th>
+              <th className="r v3-hide-s">Hold</th>
+              <th className="r v3-hide-s">P/L %</th>
+              <th className="r">R</th>
+              <th className="r">P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.map((t) => {
+              const pnl = Number(t.net_pnl || 0);
+              const g = gradeMap?.[t.trade_group];
+              const open = () => onOpen && onOpen(t, trades);
+              return (
+                <tr
+                  key={t.id}
+                  className="clickable"
+                  tabIndex={0}
+                  onClick={open}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }}
+                  aria-label={`Open ${t.ticker} trade`}
+                >
+                  <td>
+                    <div className="v3-tick">{t.ticker}</div>
+                    <div className="v3-read">{t.instrument_type}</div>
+                  </td>
+                  <td className="v3-hide-s v3-side">
+                    {t.side === 'LONG' ? 'Long' : t.side === 'SHORT' ? 'Short' : t.side}
+                  </td>
+                  <td className="v3-hide-s v3-read">{t.strategy || 'not set'}</td>
+                  <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                    {g ? <Grade grade={g.grade} reason={g.one_line} /> : <span className="v3-flat">&mdash;</span>}
+                  </td>
+                  <td className="r v3-mono v3-hide-s">{tradeHoldLabel(t)}</td>
+                  <td className={`r v3-mono v3-hide-s ${tradePLPercent(t) == null ? 'v3-flat' : tone(tradePLPercent(t))}`}>
+                    {tradePLPercent(t) == null ? '—' : `${tradePLPercent(t) > 0 ? '+' : ''}${tradePLPercent(t).toFixed(1)}%`}
+                  </td>
+                  <td className={`r v3-mono ${t.r_multiple != null ? tone(t.r_multiple) : 'v3-flat'}`}>
+                    {t.r_multiple != null ? `${t.r_multiple > 0 ? '+' : ''}${Number(t.r_multiple).toFixed(2)}R` : '—'}
+                  </td>
+                  <td className={`r v3-mono ${tone(pnl)}`} style={{ fontWeight: 600 }}>{money2(pnl)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="v3-trade-cards" role="list" aria-label="Trades for this day">
+        {trades.map((t) => {
+          const pnl = Number(t.net_pnl || 0);
+          const g = gradeMap?.[t.trade_group];
+          const plPct = tradePLPercent(t);
+          const open = () => onOpen && onOpen(t, trades);
+          const side = t.side === 'LONG' ? 'Long' : t.side === 'SHORT' ? 'Short' : t.side;
+
+          return (
+            <button
+              type="button"
+              role="listitem"
+              key={t.id}
+              className="v3-trade-card"
+              onClick={open}
+              aria-label={`Open ${t.ticker} trade, ${money2(pnl)}`}
+            >
+              <span className="v3-trade-card-top">
+                <span>
+                  <strong className="v3-trade-card-ticker">{t.ticker}</strong>
+                  <span className="v3-trade-card-meta">{t.instrument_type} · {side}</span>
+                </span>
+                <strong className={`v3-trade-card-pnl ${tone(pnl)}`}>{money2(pnl)}</strong>
+              </span>
+
+              <span className="v3-trade-card-grid">
+                <span>
+                  <small>Grade</small>
+                  <b className={`v3-trade-card-grade ${gradeTone(g?.grade)}`}>{g?.grade || '—'}</b>
+                </span>
+                <span>
+                  <small>Hold</small>
+                  <b>{tradeHoldLabel(t)}</b>
+                </span>
+                <span>
+                  <small>P/L %</small>
+                  <b className={plPct == null ? 'v3-flat' : tone(plPct)}>
+                    {plPct == null ? '—' : `${plPct > 0 ? '+' : ''}${plPct.toFixed(1)}%`}
+                  </b>
+                </span>
+                <span>
+                  <small>R</small>
+                  <b className={t.r_multiple != null ? tone(t.r_multiple) : 'v3-flat'}>
+                    {t.r_multiple != null ? `${t.r_multiple > 0 ? '+' : ''}${Number(t.r_multiple).toFixed(2)}R` : '—'}
+                  </b>
+                </span>
+              </span>
+
+              {g?.one_line && <span className="v3-trade-card-reason">{g.one_line}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 }
