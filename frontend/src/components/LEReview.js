@@ -1,9 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import {
+  Activity,
+  CheckCircle2,
+  CircleAlert,
+  Clock3,
+  Gauge,
+  MinusCircle,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+  Target,
+  TrendingUp,
+  XCircle,
+} from 'lucide-react';
 import { tradesApi } from '../api';
+import TradingChart from './TradingChart';
 
 const money = (value) => value == null ? '—' : `$${Number(value).toFixed(2)}`;
-const pct = (value) => value == null ? '—' : `${Number(value).toFixed(2)}%`;
+const pct = (value, digits = 2) => value == null ? '—' : `${Number(value).toFixed(digits)}%`;
+
 const confidenceLabel = (value) => {
   if (value == null) return 'Unknown';
   if (value >= 90) return 'High';
@@ -19,67 +34,141 @@ const feedLabel = (feed) => {
   return feed ? String(feed).toUpperCase() : 'Unknown';
 };
 
+const cleanLabel = (value) => String(value || 'unknown')
+  .replaceAll('_', ' ')
+  .replace(/\b\w/g, char => char.toUpperCase());
+
+const timeEt = (value) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return `${date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+  })} ET`;
+};
+
 const levelStatusLabel = (meta) => {
   if (!meta) return 'UNVERIFIED';
   const status = String(meta.status || 'UNVERIFIED').replaceAll('_', ' ');
-  const feed = feedLabel(meta.feed);
-  return `${status} · ${feed}`;
+  return `${status} · ${feedLabel(meta.feed)}`;
 };
 
-function EvidenceRow({ label, value, tone }) {
-  if (value == null || value === '') return null;
+const parseExecutions = (trade) => {
+  if (Array.isArray(trade?.executions)) return trade.executions;
+  try {
+    const parsed = JSON.parse(trade?.executions || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const checkVisual = (status) => {
+  if (status === 'pass') return { icon: CheckCircle2, tone: 'pass', label: 'Pass' };
+  if (status === 'fail') return { icon: XCircle, tone: 'fail', label: 'Fail' };
+  if (status === 'caution') return { icon: CircleAlert, tone: 'caution', label: 'Caution' };
+  return { icon: MinusCircle, tone: 'neutral', label: 'Unverified' };
+};
+
+function CheckRow({ label, item }) {
+  const visual = checkVisual(item?.status);
+  const Icon = visual.icon;
   return (
-    <div style={{
-      display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
-      gap: 12, padding: '7px 0', borderBottom: '1px solid var(--divider-soft)',
-    }}>
-      <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{label}</span>
-      <span className="num" style={{
-        textAlign: 'right', fontSize: 13, fontWeight: 600,
-        color: tone || 'var(--text-primary)',
-      }}>{value}</span>
+    <div className={`le-check-row ${visual.tone}`}>
+      <span className="le-check-icon"><Icon size={15} /></span>
+      <div className="le-check-copy">
+        <strong>{label}</strong>
+        <span>{item?.detail || 'Evidence unavailable.'}</span>
+      </div>
+      <span className={`le-state-badge ${visual.tone}`}>{visual.label}</span>
+    </div>
+  );
+}
+
+function SignalCard({ label, value, detail, state = 'neutral', icon: Icon = Activity }) {
+  return (
+    <article className={`le-signal-card ${state}`}>
+      <div className="le-signal-icon"><Icon size={15} /></div>
+      <div className="le-signal-copy">
+        <span>{label}</span>
+        <strong>{value}</strong>
+        {detail && <small>{detail}</small>}
+      </div>
+    </article>
+  );
+}
+
+function DataPoint({ label, value, detail, tone }) {
+  return (
+    <div className="le-data-point">
+      <span>{label}</span>
+      <strong className={tone ? `is-${tone}` : ''}>{value ?? '—'}</strong>
+      {detail && <small>{detail}</small>}
     </div>
   );
 }
 
 function ReviewTag({ tag, existing, applying, onApply }) {
   return (
-    <div style={{
-      border: '1px solid var(--divider)', borderRadius: 'var(--radius-md)',
-      padding: 12, background: 'var(--surface-inset)',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
-        <div>
-          <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="chip">{tag.tag_value}</span>
-            <span className="text-muted" style={{ fontSize: 11.5, textTransform: 'uppercase', letterSpacing: '.04em' }}>
-              {tag.tag_type}
-            </span>
-            {tag.source === 'rule' ? (
-              <span className="text-muted" style={{ fontSize: 11.5 }}>RULE</span>
-            ) : tag.confidence != null ? (
-              <span className="text-muted" style={{ fontSize: 11.5 }}>AI confidence: {confidenceLabel(tag.confidence)}</span>
-            ) : null}
-          </div>
-          {tag.reason && (
-            <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 7, color: 'var(--text-secondary)' }}>
-              {tag.reason}
-            </div>
-          )}
+    <article className="le-tag-card">
+      <div className="le-tag-main">
+        <div className="le-tag-meta">
+          <span className="chip">{tag.tag_value}</span>
+          <span>{String(tag.tag_type || '').toUpperCase()}</span>
+          {tag.source === 'rule' ? (
+            <span>RULE</span>
+          ) : tag.confidence != null ? (
+            <span>AI · {confidenceLabel(tag.confidence)}</span>
+          ) : null}
         </div>
-        <button
-          type="button"
-          className={existing ? 'btn btn-ghost btn-sm' : 'btn btn-secondary btn-sm'}
-          disabled={existing || applying}
-          onClick={onApply}
-          style={{ flexShrink: 0 }}
-        >
-          {existing ? <><CheckCircle2 size={13} /> Applied</> : applying ? 'Applying…' : 'Apply'}
-        </button>
+        {tag.reason && <p>{tag.reason}</p>}
       </div>
-    </div>
+      <button
+        type="button"
+        className={existing ? 'btn btn-ghost btn-sm' : 'btn btn-secondary btn-sm'}
+        disabled={existing || applying}
+        onClick={onApply}
+      >
+        {existing ? <><CheckCircle2 size={13} /> Applied</> : applying ? 'Applying…' : 'Apply'}
+      </button>
+    </article>
   );
 }
+
+const CHECK_LABELS = {
+  level_break: 'Directional level broke first',
+  ema_alignment: 'Price aligned with 10m 8 EMA',
+  ema_extension: 'Entry not airgapped',
+  ema_beyond_broken_level: '8 EMA crossed the broken level',
+  chop_range: 'Outside PMH–PML chop',
+};
+
+const exitRelation = (value) => {
+  if (value === 'after_confirmed_break') {
+    return {
+      value: 'After 8 EMA break',
+      detail: 'Final exit followed a confirmed opposing 10-minute close.',
+      state: 'pass',
+    };
+  }
+  if (value === 'before_confirmed_break') {
+    return {
+      value: 'Before 8 EMA break',
+      detail: 'The final exit occurred before the first confirmed opposing 10-minute close.',
+      state: 'caution',
+    };
+  }
+  if (value === 'no_confirmed_break_seen') {
+    return {
+      value: 'No break observed',
+      detail: 'No confirmed opposing 10-minute 8 EMA close appeared in the review window.',
+      state: 'neutral',
+    };
+  }
+  return { value: 'Unavailable', detail: 'Exit/EMA relationship could not be established.', state: 'neutral' };
+};
 
 export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTagsChange }) {
   const [review, setReview] = useState(null);
@@ -167,14 +256,24 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
   };
 
   if (loading) {
-    return <div className="text-muted" role="status" style={{ paddingTop: 12 }}>Building LE evidence from market data…</div>;
+    return (
+      <div className="le-review-pro">
+        <div className="le-review-loading" role="status">
+          <Activity size={18} />
+          <div>
+            <strong>Building 10-minute 8 EMA review…</strong>
+            <span>Reconstructing verified levels, entry structure, and post-entry EMA behavior.</span>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (error && !review) {
     return (
-      <div style={{ paddingTop: 10 }}>
+      <div className="le-review-pro">
         <div className="notice neg" role="alert">{error}</div>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={load} style={{ marginTop: 10 }}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={load}>
           <RefreshCw size={13} /> Retry
         </button>
       </div>
@@ -183,15 +282,18 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
 
   if (!review?.available) {
     return (
-      <div style={{ paddingTop: 10 }}>
-        <div className="notice caution">
-          <strong>LE review unavailable.</strong>{' '}
-          {review?.reason || 'The required evidence could not be established.'}
+      <div className="le-review-pro">
+        <div className="le-review-unavailable">
+          <ShieldCheck size={20} />
+          <div>
+            <strong>LE chart evidence is unavailable.</strong>
+            <p>{review?.reason || 'The required market evidence could not be established.'}</p>
+          </div>
         </div>
-        {(review?.data_warnings || []).map((w, i) => (
-          <div key={i} className="text-muted" style={{ fontSize: 13, marginTop: 7 }}>{w}</div>
+        {(review?.data_warnings || []).map((warning, index) => (
+          <div key={index} className="text-muted" style={{ fontSize: 12.5 }}>{warning}</div>
         ))}
-        <button type="button" className="btn btn-ghost btn-sm" onClick={load} style={{ marginTop: 10 }}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={load}>
           <RefreshCw size={13} /> Refresh evidence
         </button>
       </div>
@@ -202,73 +304,217 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
   const levels = ev.levels || {};
   const levelMeta = ev.level_meta || {};
   const breaks = ev.level_breaks_before_entry || {};
+  const checks = ev.entry_checks || {};
+  const management = ev.management_10m8ema || {};
+  const emaLevel = ev.ema_vs_broken_level || {};
   const proven = review.auto_tags || [];
   const ai = review.ai;
   const strategy = ai?.strategy;
   const aiTags = ai?.suggested_tags || [];
+  const executions = parseExecutions(trade);
+
   const allProvenApplied = proven.length > 0 && proven.every(
-    t => existing.has(`${t.tag_type}::${t.tag_value}`)
+    tag => existing.has(`${tag.tag_type}::${tag.tag_value}`)
   );
 
-  const breakSummary = ['PDH', 'PDL', 'PMH', 'PML']
-    .filter(k => breaks[k])
-    .join(', ') || 'None confirmed';
+  const breakNames = ['PDH', 'PDL', 'PMH', 'PML'].filter(name => breaks[name]);
+  const breakSummary = breakNames.length ? breakNames.join(' + ') : 'None confirmed';
+  const levelBreakState = breakNames.length ? 'pass' : 'fail';
+  const alignmentState = ev.ema_alignment_valid === true ? 'pass' : ev.ema_alignment_valid === false ? 'fail' : 'neutral';
+  const extensionState = ev.ema_extension_state === 'airgapped'
+    ? 'fail'
+    : ev.ema_extension_state === 'within_1pct'
+      ? 'pass'
+      : 'neutral';
+  const emaCrossState = emaLevel.valid === true ? 'pass' : emaLevel.valid === false ? 'fail' : 'neutral';
+  const managementRead = exitRelation(management.exit_relation_to_ema_break);
+  const structureTone = ev.entry_structure_status === 'aligned'
+    ? 'pass'
+    : ev.entry_structure_status === 'conflicted'
+      ? 'fail'
+      : ev.entry_structure_status === 'partial'
+        ? 'caution'
+        : 'neutral';
+  const quality = ev.evidence_quality || {};
+  const slopeDetail = ev.ema_slope_pct == null
+    ? 'Slope unavailable'
+    : `${ev.ema_slope_direction || 'unknown'} · ${Number(ev.ema_slope_pct) >= 0 ? '+' : ''}${Number(ev.ema_slope_pct).toFixed(2)}%`;
 
   return (
-    <div style={{ paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div className="notice accent" style={{ fontSize: 13, lineHeight: 1.55 }}>
-        <strong>Review mode:</strong> nothing is saved automatically. Rule-derived tags come from deterministic LE conditions using the configured market feed;
-        Groq suggestions are interpretation only and require your approval.
+    <div className="le-review-pro">
+      <header className="le-review-hero">
+        <div className="le-review-hero-copy">
+          <span className="le-review-kicker"><ShieldCheck size={13} /> LE system · objective review</span>
+          <h2>10-Minute 8 EMA Structure Review</h2>
+          <p>
+            Review the trade against verified LE structure first: level break, 8 EMA alignment,
+            EMA position versus the broken level, entry extension, and final exit behavior.
+          </p>
+        </div>
+        <div className="le-review-hero-actions">
+          <div className={`le-quality-badge ${String(quality.level || '').toLowerCase()}`}>
+            <span>Evidence</span>
+            <strong>{quality.level || 'Unknown'}</strong>
+            {quality.completeness_pct != null && <small>{quality.completeness_pct}% verified</small>}
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={load}>
+            <RefreshCw size={13} /> Refresh
+          </button>
+        </div>
+      </header>
+
+      <div className="le-review-readonly-note">
+        <ShieldCheck size={14} />
+        <span>
+          Read-only analysis. Deterministic findings are not saved until you apply a tag or strategy.
+          AI interpretation never overrides verified market evidence.
+        </span>
+        <span className="le-ruleset">{review.ruleset_version}</span>
       </div>
 
       {error && <div className="notice neg" role="alert">{error}</div>}
 
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 7 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <ShieldCheck size={16} />
-            <strong style={{ fontSize: 14 }}>LE market evidence</strong>
+      <section className="le-chart-panel" aria-label="Primary LE review chart">
+        <div className="le-section-head">
+          <div>
+            <span className="le-section-kicker">Primary chart</span>
+            <h3>{trade.ticker} · 10-minute execution structure</h3>
+            <p>Timeframe is locked to the LE review timeframe. The blue line is the 8 EMA.</p>
           </div>
-          <span className="chip">{review.ruleset_version}</span>
+          <div className="le-chart-badges">
+            <span>10m locked</span>
+            <span>8 EMA</span>
+            <span>PDH / PDL</span>
+            <span>PMH / PML</span>
+          </div>
         </div>
-        <EvidenceRow label="Directional thesis" value={ev.direction?.toUpperCase()} />
-        <EvidenceRow label="Entry time" value={ev.entry_time_et ? new Date(ev.entry_time_et).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' }) + ' ET' : '—'} />
-        <EvidenceRow label="Broker time zone" value={ev.execution_time_zone} />
-        <EvidenceRow label="Session" value={(ev.session_window || '').replaceAll('_', ' ')} />
-        <EvidenceRow label="PDH" value={`${money(levels.PDH)} · ${levelStatusLabel(levelMeta.PDH)}`} />
-        <EvidenceRow label="PDL" value={`${money(levels.PDL)} · ${levelStatusLabel(levelMeta.PDL)}`} />
-        <EvidenceRow label="PMH" value={`${money(levels.PMH)} · ${levelStatusLabel(levelMeta.PMH)}`} />
-        <EvidenceRow label="PML" value={`${money(levels.PML)} · ${levelStatusLabel(levelMeta.PML)}`} />
-        <EvidenceRow label="Official market calendar" value={ev.market_calendar_verified ? 'VERIFIED' : 'UNVERIFIED'} />
-        <EvidenceRow label="Level breaks before entry" value={breakSummary} />
-        <EvidenceRow label="Last completed 1m close" value={money(ev.underlying_price_last_completed_1m)} />
-        <EvidenceRow label="Last completed 10m 8 EMA" value={`${money(ev.ema8_10m_last_completed)} · ${String(ev.ema_integrity_status || 'UNVERIFIED').replaceAll('_', ' ')}`} />
-        <EvidenceRow label="Distance from 8 EMA" value={pct(ev.ema_distance_pct)} tone={ev.ema_distance_pct > 1 ? 'var(--result-neg)' : undefined} />
-        <EvidenceRow label="Market data feed" value={feedLabel(ev.market_data_feed?.underlying)} />
-        <EvidenceRow
-          label="Verified evidence coverage"
-          value={ev.evidence_quality ? `${ev.evidence_quality.level} · ${ev.evidence_quality.completeness_pct}% verified inputs` : 'Unknown'}
+        <div className="le-chart-frame">
+          <TradingChart
+            ticker={trade.ticker}
+            date={trade.date}
+            tradeGroup={trade.trade_group}
+            executions={executions}
+            side={trade.side}
+            defaultTimeframe="10Min"
+            lockedTimeframe="10Min"
+            showHeader={false}
+            height={430}
+          />
+        </div>
+      </section>
+
+      <section className="le-signal-strip" aria-label="LE structure summary">
+        <SignalCard
+          label="Structure"
+          value={cleanLabel(ev.entry_structure_status)}
+          detail={`${ev.direction?.toUpperCase() || '—'} · ${cleanLabel(ev.session_window)}`}
+          state={structureTone}
+          icon={Target}
         />
+        <SignalCard
+          label="Level break"
+          value={breakSummary}
+          detail={ev.bars_since_level_break == null ? 'Timing unavailable' : `${ev.bars_since_level_break} completed 10m bar(s) after first break`}
+          state={levelBreakState}
+          icon={TrendingUp}
+        />
+        <SignalCard
+          label="8 EMA alignment"
+          value={ev.ema_alignment_valid == null ? 'Unverified' : ev.ema_alignment_valid ? 'Aligned' : 'Misaligned'}
+          detail={`${cleanLabel(ev.price_vs_ema)} EMA · ${slopeDetail}`}
+          state={alignmentState}
+          icon={Activity}
+        />
+        <SignalCard
+          label="EMA vs broken level"
+          value={emaLevel.level ? `${emaLevel.valid ? 'Cleared' : 'Not cleared'} ${emaLevel.level}` : 'Unverified'}
+          detail={emaLevel.level_price == null ? 'No verified broken level' : `8 EMA ${cleanLabel(emaLevel.position)} ${money(emaLevel.level_price)}`}
+          state={emaCrossState}
+          icon={Gauge}
+        />
+        <SignalCard
+          label="Entry extension"
+          value={ev.ema_distance_pct == null ? 'Unverified' : pct(ev.ema_distance_pct)}
+          detail={ev.ema_extension_state === 'airgapped' ? 'Beyond LE 1% airgap threshold' : ev.ema_extension_state === 'within_1pct' ? 'Within LE 1% threshold' : 'Distance unavailable'}
+          state={extensionState}
+          icon={Gauge}
+        />
+        <SignalCard
+          label="Final exit"
+          value={managementRead.value}
+          detail={managementRead.detail}
+          state={managementRead.state}
+          icon={Clock3}
+        />
+      </section>
+
+      <div className="le-review-analysis-grid">
+        <section className="le-review-panel">
+          <div className="le-section-head compact">
+            <div>
+              <span className="le-section-kicker">Entry structure</span>
+              <h3>Was the setup structurally ready?</h3>
+            </div>
+          </div>
+
+          <div className="le-check-list">
+            {Object.entries(CHECK_LABELS).map(([key, label]) => (
+              <CheckRow key={key} label={label} item={checks[key]} />
+            ))}
+          </div>
+
+          <div className="le-data-grid">
+            <DataPoint label="Entry time" value={timeEt(ev.entry_time_et)} detail={cleanLabel(ev.session_window)} />
+            <DataPoint label="Underlying at entry" value={money(ev.underlying_price_last_completed_1m)} detail="Last completed 1m close" />
+            <DataPoint label="10m 8 EMA" value={money(ev.ema8_10m_last_completed)} detail={cleanLabel(ev.ema_integrity_status)} />
+            <DataPoint label="EMA slope" value={cleanLabel(ev.ema_slope_direction)} detail={ev.ema_slope_pct == null ? '—' : `${Number(ev.ema_slope_pct) >= 0 ? '+' : ''}${pct(ev.ema_slope_pct)}`} />
+            <DataPoint
+              label="Nearest broken level"
+              value={ev.nearest_broken_level?.name || '—'}
+              detail={ev.nearest_broken_level ? `${money(ev.nearest_broken_level.price)} · ${pct(ev.nearest_broken_level.distance_pct)} away` : 'No verified directional break'}
+            />
+            <DataPoint label="Price → EMA distance" value={pct(ev.ema_distance_pct)} detail={cleanLabel(ev.ema_extension_state)} tone={extensionState === 'fail' ? 'neg' : extensionState === 'pass' ? 'pos' : undefined} />
+          </div>
+        </section>
+
+        <section className="le-review-panel">
+          <div className="le-section-head compact">
+            <div>
+              <span className="le-section-kicker">Trade management</span>
+              <h3>Did the final exit respect the 8 EMA?</h3>
+            </div>
+          </div>
+
+          <div className={`le-management-callout ${managementRead.state}`}>
+            <div>
+              <span>Final exit vs first confirmed 10m 8 EMA break</span>
+              <strong>{managementRead.value}</strong>
+            </div>
+            <p>{managementRead.detail}</p>
+          </div>
+
+          <div className="le-data-grid">
+            <DataPoint label="Final exit time" value={timeEt(management.exit_time_et)} />
+            <DataPoint label="Underlying near exit" value={money(management.exit_underlying_last_completed_1m)} detail="Last completed 1m close" />
+            <DataPoint label="8 EMA near exit" value={money(management.exit_ema8_10m_last_completed)} detail={cleanLabel(management.exit_position_vs_ema)} />
+            <DataPoint label="EMA retests held" value={management.ema_retests_held_before_exit ?? '—'} detail="Completed 10m touches that closed with trend" />
+            <DataPoint label="First confirmed EMA break" value={timeEt(management.first_confirmed_ema_break_et)} detail={management.first_confirmed_ema_break_close == null ? 'No break observed' : `Close ${money(management.first_confirmed_ema_break_close)} · EMA ${money(management.first_confirmed_ema_break_value)}`} />
+            <DataPoint label="30m after exit" value={pct(management.post_exit_favorable_move_pct_30m)} detail={management.post_exit_adverse_move_pct_30m == null ? 'Underlying continuation unavailable' : `Favorable underlying move · adverse ${pct(management.post_exit_adverse_move_pct_30m)}`} />
+          </div>
+
+          <p className="le-management-footnote">
+            Post-exit movement is measured on the underlying only. It is review evidence, not an estimate of unrealized option P&amp;L.
+          </p>
+        </section>
       </div>
 
-      {ev.evidence_quality?.reason && (
-        <div className="text-muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-          Evidence integrity: {ev.evidence_quality.reason}
-        </div>
-      )}
-
-      {(review.data_warnings || []).length > 0 && (
-        <div className="notice caution" style={{ fontSize: 13 }}>
-          <strong>Evidence limitations</strong>
-          <div style={{ marginTop: 5 }}>
-            {review.data_warnings.map((w, i) => <div key={i}>• {w}</div>)}
+      <section className="le-review-panel">
+        <div className="le-section-head">
+          <div>
+            <span className="le-section-kicker">Deterministic findings</span>
+            <h3>Rule-derived tags</h3>
+            <p>Only conditions proven by the market-data engine appear here.</p>
           </div>
-        </div>
-      )}
-
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-          <strong style={{ fontSize: 14 }}>Rule-derived tags</strong>
           {proven.length > 0 && (
             <button
               type="button"
@@ -276,12 +522,15 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
               onClick={applyProven}
               disabled={batchApplying || allProvenApplied}
             >
-              {allProvenApplied ? <><CheckCircle2 size={13} /> Applied</> : batchApplying ? 'Applying…' : 'Apply rule tags'}
+              {allProvenApplied
+                ? <><CheckCircle2 size={13} /> Applied</>
+                : batchApplying ? 'Applying…' : 'Apply rule tags'}
             </button>
           )}
         </div>
+
         {proven.length ? (
-          <div style={{ display: 'grid', gap: 8 }}>
+          <div className="le-tag-grid">
             {proven.map(tag => {
               const key = `${tag.tag_type}::${tag.tag_value}`;
               return (
@@ -296,51 +545,46 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
             })}
           </div>
         ) : (
-          <div className="text-muted" style={{ fontSize: 13 }}>No deterministic LE tags were derived from the available evidence.</div>
+          <div className="le-empty-state">No deterministic LE violation or setup tags were proven.</div>
         )}
-      </div>
+      </section>
 
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
-          <Sparkles size={16} />
-          <strong style={{ fontSize: 14 }}>Groq interpretation</strong>
-          {ai?.provider && <span className="chip">{ai.provider} · {ai.model}</span>}
+      <section className="le-review-panel">
+        <div className="le-section-head">
+          <div>
+            <span className="le-section-kicker"><Sparkles size={12} /> Interpretation layer</span>
+            <h3>Strategy classification</h3>
+            <p>AI can interpret the verified evidence, but it cannot replace or contradict it.</p>
+          </div>
+          {ai?.provider && <span className="le-provider-badge">{ai.provider} · {ai.model}</span>}
         </div>
 
         {!ai?.available ? (
-          <div className="text-muted" style={{ fontSize: 13 }}>
-            Groq classification is unavailable. Deterministic evidence above is still valid.
-          </div>
+          <div className="le-empty-state">AI classification is unavailable. The deterministic chart review above remains valid.</div>
         ) : (
-          <>
-            <div style={{
-              border: '1px solid var(--divider)', borderRadius: 'var(--radius-md)',
-              padding: 12, background: 'var(--surface-inset)', marginBottom: 10,
-            }}>
-              <div className="field-label" style={{ marginBottom: 5 }}>Suggested strategy</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>
-                    {strategy?.value === 'NONE' ? 'No strategy suggested' : strategy?.value}
-                    {strategy?.confidence != null && <span className="text-muted" style={{ marginLeft: 7, fontSize: 12 }}>AI confidence: {confidenceLabel(strategy.confidence)}</span>}
-                  </div>
-                  {strategy?.reason && <div className="text-muted" style={{ fontSize: 13, lineHeight: 1.5, marginTop: 5 }}>{strategy.reason}</div>}
-                </div>
-                {strategy?.value && strategy.value !== 'NONE' && (
-                  <button
-                    type="button"
-                    className={analysis?.strategy === strategy.value ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm'}
-                    disabled={analysis?.strategy === strategy.value || applying === 'strategy'}
-                    onClick={applyStrategy}
-                    style={{ flexShrink: 0 }}
-                  >
-                    {analysis?.strategy === strategy.value ? <><CheckCircle2 size={13} /> Applied</> : applying === 'strategy' ? 'Applying…' : 'Apply strategy'}
-                  </button>
-                )}
+          <div className="le-ai-layout">
+            <article className="le-strategy-card">
+              <div>
+                <span>Suggested strategy</span>
+                <strong>{strategy?.value === 'NONE' ? 'No strategy suggested' : strategy?.value}</strong>
+                {strategy?.confidence != null && <small>Confidence: {confidenceLabel(strategy.confidence)}</small>}
               </div>
-            </div>
+              {strategy?.reason && <p>{strategy.reason}</p>}
+              {strategy?.value && strategy.value !== 'NONE' && (
+                <button
+                  type="button"
+                  className={analysis?.strategy === strategy.value ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm'}
+                  disabled={analysis?.strategy === strategy.value || applying === 'strategy'}
+                  onClick={applyStrategy}
+                >
+                  {analysis?.strategy === strategy.value
+                    ? <><CheckCircle2 size={13} /> Applied</>
+                    : applying === 'strategy' ? 'Applying…' : 'Apply strategy'}
+                </button>
+              )}
+            </article>
 
-            <div style={{ display: 'grid', gap: 8 }}>
+            <div className="le-tag-grid">
               {aiTags.map(tag => {
                 const key = `${tag.tag_type}::${tag.tag_value}`;
                 return (
@@ -354,25 +598,45 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
                 );
               })}
             </div>
-            {aiTags.length === 0 && (
-              <div className="text-muted" style={{ fontSize: 13 }}>No additional AI tags were suggested.</div>
-            )}
+
+            {aiTags.length === 0 && <div className="le-empty-state">No additional AI tags were suggested.</div>}
 
             {(ai.insufficient_evidence || []).length > 0 && (
-              <div style={{ marginTop: 10 }}>
-                <div className="field-label" style={{ marginBottom: 4 }}>Insufficient evidence</div>
-                {ai.insufficient_evidence.map((item, i) => (
-                  <div key={i} className="text-muted" style={{ fontSize: 12.5, marginTop: 3 }}>• {item}</div>
-                ))}
+              <div className="le-insufficient">
+                <strong>Evidence still missing</strong>
+                {ai.insufficient_evidence.map((item, index) => <span key={index}>• {item}</span>)}
               </div>
             )}
-          </>
+          </div>
         )}
-      </div>
+      </section>
 
-      <button type="button" className="btn btn-ghost btn-sm" onClick={load} style={{ alignSelf: 'flex-start' }}>
-        <RefreshCw size={13} /> Refresh evidence
-      </button>
+      <details className="le-evidence-details">
+        <summary>
+          <span><ShieldCheck size={14} /> Evidence provenance &amp; level verification</span>
+          <small>{feedLabel(ev.market_data_feed?.underlying)}</small>
+        </summary>
+
+        <div className="le-evidence-body">
+          <div className="le-data-grid levels">
+            <DataPoint label="PDH" value={money(levels.PDH)} detail={levelStatusLabel(levelMeta.PDH)} />
+            <DataPoint label="PDL" value={money(levels.PDL)} detail={levelStatusLabel(levelMeta.PDL)} />
+            <DataPoint label="PMH" value={money(levels.PMH)} detail={levelStatusLabel(levelMeta.PMH)} />
+            <DataPoint label="PML" value={money(levels.PML)} detail={levelStatusLabel(levelMeta.PML)} />
+            <DataPoint label="Broker time zone" value={ev.execution_time_zone || '—'} />
+            <DataPoint label="Market calendar" value={ev.market_calendar_verified ? 'Verified' : 'Unverified'} />
+          </div>
+
+          {quality.reason && <p className="le-quality-reason">{quality.reason}</p>}
+
+          {(review.data_warnings || []).length > 0 && (
+            <div className="le-warning-list">
+              <strong>Evidence limitations</strong>
+              {review.data_warnings.map((warning, index) => <span key={index}>• {warning}</span>)}
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   );
 }

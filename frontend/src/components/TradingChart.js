@@ -252,12 +252,15 @@ export default function TradingChart({
   ticker, date, tradeGroup = null, defaultTimeframe = '10Min',
   executions = [], side = 'LONG',
   height = 320,
+  lockedTimeframe = null,
+  showHeader = true,
 }) {
+  const initialTimeframe = lockedTimeframe || defaultTimeframe;
   const containerRef = useRef(null);
   const chartRef = useRef(null);
-  const [timeframe, setTimeframe] = useState(defaultTimeframe);
+  const [timeframe, setTimeframe] = useState(initialTimeframe);
   const [bars, setBars] = useState([]);
-  const [daysBack, setDaysBack] = useState(() => INITIAL_DAYS_BACK[defaultTimeframe] || 1);
+  const [daysBack, setDaysBack] = useState(() => INITIAL_DAYS_BACK[initialTimeframe] || 1);
   const [warning, setWarning] = useState(null);
   const [leLevels, setLeLevels] = useState({});
   const [loading, setLoading] = useState(true);
@@ -599,39 +602,43 @@ export default function TradingChart({
 
   return (
     <div>
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        marginBottom: 8, flexWrap: 'wrap', gap: 8,
-      }}>
-        <h2 className="section-title" style={{ fontSize: 17 }}>
-          {ticker} · {TIMEFRAMES.find(t => t.id === timeframe)?.label} Chart · <span className="num text-muted" style={{ fontWeight: 500 }}>{date}</span>
-        </h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <div className="seg" role="group" aria-label="Chart timeframe">
-            {TIMEFRAMES.map(tf => (
-              <button
-                type="button"
-                key={tf.id}
-                className="seg-btn"
-                aria-pressed={timeframe === tf.id}
-                onClick={() => setTimeframe(tf.id)}
-              >
-                {tf.label}
-              </button>
-            ))}
-          </div>
-          {executions.length > 0 && timeframe !== '1Min' && (
-            <button
-              type="button"
-              className="chart-legend-item"
-              onClick={() => setTimeframe('1Min')}
-              title="Switch to 1-minute candles so execution markers can be placed at the exact broker-reported minute."
-            >
-              Exact fills · 1m
-            </button>
+      {showHeader && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 8, flexWrap: 'wrap', gap: 8,
+        }}>
+          <h2 className="section-title" style={{ fontSize: 17 }}>
+            {ticker} · {TIMEFRAMES.find(t => t.id === timeframe)?.label} Chart · <span className="num text-muted" style={{ fontWeight: 500 }}>{date}</span>
+          </h2>
+          {!lockedTimeframe && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <div className="seg" role="group" aria-label="Chart timeframe">
+                {TIMEFRAMES.map(tf => (
+                  <button
+                    type="button"
+                    key={tf.id}
+                    className="seg-btn"
+                    aria-pressed={timeframe === tf.id}
+                    onClick={() => setTimeframe(tf.id)}
+                  >
+                    {tf.label}
+                  </button>
+                ))}
+              </div>
+              {executions.length > 0 && timeframe !== '1Min' && (
+                <button
+                  type="button"
+                  className="chart-legend-item"
+                  onClick={() => setTimeframe('1Min')}
+                  title="Switch to 1-minute candles so execution markers can be placed at the exact broker-reported minute."
+                >
+                  Exact fills · 1m
+                </button>
+              )}
+            </div>
           )}
         </div>
-      </div>
+      )}
 
       {loading ? (
         <div className="skeleton" style={{ height, borderRadius: 8 }} />

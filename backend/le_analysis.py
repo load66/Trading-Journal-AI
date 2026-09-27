@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v5_NO_MARKET_SIGN"
+LE_RULESET_VERSION = "LE_2026_09_v6_10M_EMA_REVIEW"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
@@ -79,24 +79,80 @@ def market_direction(trade: dict) -> str:
     return "bullish" if side == "LONG" else "bearish"
 
 
+def _fill_datetime_et(fill: dict, fallback_date: str | None = None) -> datetime | None:
+    """Resolve one execution to ET, preferring canonical broker timestamp provenance."""
+    canonical = str(fill.get("timestamp_utc") or "").strip()
+    if canonical:
+        try:
+            raw = canonical[:-1] + "+00:00" if canonical.endswith("Z") else canonical
+            instant = datetime.fromisoformat(raw)
+            if instant.tzinfo is None:
+                instant = instant.replace(tzinfo=ZoneInfo("UTC"))
+            return instant.astimezone(ET)
+        except ValueError:
+            pass
+
+    day = fill.get("date") or fallback_date
+    clock = fill.get("time")
+    if not day or not clock:
+        return None
+
+    source_name = str(fill.get("source_timezone") or EXECUTION_TIMEZONE_NAME)
+    try:
+        source_tz = ZoneInfo(source_name)
+    except Exception:
+        source_tz = EXECUTION_TZ
+
+    try:
+        return datetime.fromisoformat(f"{day}T{clock}").replace(tzinfo=source_tz).astimezone(ET)
+    except ValueError:
+        return None
+
+
 def entry_datetime(trade: dict) -> datetime | None:
     side = (trade.get("side") or "LONG").upper()
     entry_action = "BOT" if side == "LONG" else "SOLD"
-    candidates: list[datetime] = []
     fallback_date = trade.get("date")
-    for fill in _parse_executions(trade):
-        if (fill.get("action") or "").upper() != entry_action:
-            continue
-        day = fill.get("date") or fallback_date
-        clock = fill.get("time")
-        if not day or not clock:
-            continue
-        try:
-            source_dt = datetime.fromisoformat(f"{day}T{clock}").replace(tzinfo=EXECUTION_TZ)
-            candidates.append(source_dt.astimezone(ET))
-        except ValueError:
-            continue
+    candidates = [
+        dt
+        for fill in _parse_executions(trade)
+        if (fill.get("action") or "").upper() == entry_action
+        for dt in [_fill_datetime_et(fill, fallback_date)]
+        if dt is not None
+    ]
     return min(candidates) if candidates else None
+
+
+def exit_datetime(trade: dict) -> datetime | None:
+    """Return the final closing execution in ET for a completed/partially closed trade."""
+    side = (trade.get("side") or "LONG").upper()
+    exit_action = "SOLD" if side == "LONG" else "BOT"
+    fallback_date = trade.get("date")
+    candidates = [
+        dt
+        for fill in _parse_executions(trade)
+        if (fill.get("action") or "").upper() == exit_action
+        for dt in [_fill_datetime_et(fill, fallback_date)]
+        if dt is not None
+    ]
+    return max(candidates) if candidates else None
+
+
+def _review_through_datetime(trade: dict) -> datetime:
+    """Fetch enough post-trade data to judge the 10m 8 EMA exit without future leakage at entry."""
+    entry_dt = entry_datetime(trade)
+    if entry_dt is None:
+        raise ValueError("Entry timestamp is required.")
+
+    exit_dt = exit_datetime(trade)
+    if exit_dt is None:
+        return entry_dt
+
+    session_close = datetime.combine(exit_dt.date(), time(16, 0), tzinfo=ET)
+    now_et = datetime.now(ET)
+    if exit_dt.date() == now_et.date():
+        session_close = min(session_close, now_et - timedelta(minutes=1))
+    return max(entry_dt, exit_dt, session_close)
 
 
 def _bar_dt(bar: dict) -> datetime:
@@ -156,6 +212,138 @@ def _ema(values: list[float], period: int = 8) -> float | None:
     for value in values[1:]:
         result = float(value) * alpha + result * (1 - alpha)
     return result
+
+
+def _ema_series_10m(bars_10m: list[dict], period: int = 8) -> list[dict]:
+    """Attach a deterministic EMA value to each completed 10-minute RTH bar."""
+    if not bars_10m:
+        return []
+    alpha = 2 / (period + 1)
+    result: float | None = None
+    points: list[dict] = []
+    for bar in bars_10m:
+        close = float(bar["c"])
+        result = close if result is None else close * alpha + result * (1 - alpha)
+        points.append({**bar, "ema8": result})
+    return points
+
+
+def _price_position(price: float | None, reference: float | None) -> str:
+    if price is None or reference is None:
+        return "unknown"
+    if price > reference:
+        return "above"
+    if price < reference:
+        return "below"
+    return "at"
+
+
+def _directionally_aligned(direction: str, price: float | None, ema: float | None) -> bool | None:
+    if price is None or ema is None:
+        return None
+    if direction == "bullish":
+        return price > ema
+    return price < ema
+
+
+def _ema_management_evidence(
+    trade: dict,
+    underlying_bars: list[dict],
+    ema_points: list[dict],
+    entry_dt: datetime,
+    direction: str,
+    session_close: datetime,
+) -> dict:
+    """Review completed 10m 8 EMA behavior after entry without estimating option P&L."""
+    exit_dt = exit_datetime(trade)
+    same_day_points = [
+        point for point in ema_points
+        if point["start"].date() == entry_dt.date()
+        and point["end"] > entry_dt
+        and point["end"] <= session_close
+    ]
+
+    def is_break(point: dict) -> bool:
+        close = float(point["c"])
+        ema = float(point["ema8"])
+        return close < ema if direction == "bullish" else close > ema
+
+    first_break = next((point for point in same_day_points if is_break(point)), None)
+    management_end = exit_dt or session_close
+    points_before_exit = [point for point in same_day_points if point["end"] <= management_end]
+
+    holds: list[dict] = []
+    for point in points_before_exit:
+        ema = float(point["ema8"])
+        touched = float(point["l"]) <= ema <= float(point["h"])
+        close_aligned = (
+            float(point["c"]) >= ema
+            if direction == "bullish"
+            else float(point["c"]) <= ema
+        )
+        if touched and close_aligned:
+            holds.append(point)
+
+    exit_price = None
+    exit_ema = None
+    exit_position = "unknown"
+    exit_distance_pct = None
+    exit_relation = "unavailable"
+    post_exit_favorable_pct_30m = None
+    post_exit_adverse_pct_30m = None
+
+    if exit_dt is not None:
+        exit_bar = _last_completed_1m_bar(underlying_bars, exit_dt)
+        if exit_bar is not None:
+            exit_price = float(exit_bar["c"])
+
+        eligible_exit_ema = [
+            point for point in ema_points
+            if point["start"].date() == exit_dt.date() and point["end"] < exit_dt
+        ]
+        if eligible_exit_ema:
+            exit_ema = float(eligible_exit_ema[-1]["ema8"])
+            exit_position = _price_position(exit_price, exit_ema)
+            if exit_price is not None and exit_ema not in (None, 0):
+                exit_distance_pct = abs(exit_price - exit_ema) / exit_ema * 100
+
+        if first_break is None:
+            exit_relation = "no_confirmed_break_seen"
+        elif exit_dt < first_break["end"]:
+            exit_relation = "before_confirmed_break"
+        else:
+            exit_relation = "after_confirmed_break"
+
+        post_end = min(session_close, exit_dt + timedelta(minutes=30))
+        post_bars = [
+            bar for bar in underlying_bars
+            if exit_dt <= _bar_dt(bar) < post_end and _bar_dt(bar).date() == exit_dt.date()
+        ]
+        if exit_price not in (None, 0) and post_bars:
+            if direction == "bullish":
+                favorable = max(float(bar["h"]) for bar in post_bars) - exit_price
+                adverse = exit_price - min(float(bar["l"]) for bar in post_bars)
+            else:
+                favorable = exit_price - min(float(bar["l"]) for bar in post_bars)
+                adverse = max(float(bar["h"]) for bar in post_bars) - exit_price
+            post_exit_favorable_pct_30m = max(0.0, favorable) / exit_price * 100
+            post_exit_adverse_pct_30m = max(0.0, adverse) / exit_price * 100
+
+    return {
+        "exit_time_et": exit_dt.isoformat() if exit_dt else None,
+        "exit_underlying_last_completed_1m": exit_price,
+        "exit_ema8_10m_last_completed": exit_ema,
+        "exit_position_vs_ema": exit_position,
+        "exit_distance_from_ema_pct": exit_distance_pct,
+        "ema_retests_held_before_exit": len(holds),
+        "first_confirmed_ema_break_et": first_break["end"].isoformat() if first_break else None,
+        "first_confirmed_ema_break_close": float(first_break["c"]) if first_break else None,
+        "first_confirmed_ema_break_value": float(first_break["ema8"]) if first_break else None,
+        "exit_relation_to_ema_break": exit_relation,
+        "post_exit_favorable_move_pct_30m": post_exit_favorable_pct_30m,
+        "post_exit_adverse_move_pct_30m": post_exit_adverse_pct_30m,
+        "review_scope_end_et": session_close.isoformat(),
+    }
 
 
 def _last_completed_1m_bar(bars: list[dict], when: datetime) -> dict | None:
@@ -467,14 +655,43 @@ def analyze_context(
     verified_level = {name: _status_is_verified(meta["status"]) for name, meta in level_meta.items()}
 
     bars_10m = _aggregate_10m(underlying_bars)
-    completed_before_entry = [b for b in bars_10m if b["end"] < entry_dt]
-    ema8 = _ema([b["c"] for b in completed_before_entry])
+    ema_points = _ema_series_10m(bars_10m)
+    completed_before_entry = [point for point in ema_points if point["end"] < entry_dt]
+    ema8 = float(completed_before_entry[-1]["ema8"]) if completed_before_entry else None
+    ema8_previous = (
+        float(completed_before_entry[-2]["ema8"])
+        if len(completed_before_entry) >= 2
+        else None
+    )
+    ema_slope_pct = (
+        (ema8 - ema8_previous) / ema8_previous * 100
+        if ema8 not in (None, 0) and ema8_previous not in (None, 0)
+        else None
+    )
+    if ema_slope_pct is None:
+        ema_slope_direction = "unknown"
+    elif abs(ema_slope_pct) < 0.01:
+        ema_slope_direction = "flat"
+    elif ema_slope_pct > 0:
+        ema_slope_direction = "rising"
+    else:
+        ema_slope_direction = "falling"
+
     entry_bar = _last_completed_1m_bar(current_to_entry, entry_dt)
     underlying_price = float(entry_bar["c"]) if entry_bar else None
     ema_distance_pct = (
         abs(underlying_price - ema8) / ema8 * 100
         if underlying_price is not None and ema8 not in (None, 0)
         else None
+    )
+    price_vs_ema = _price_position(underlying_price, ema8)
+    ema_alignment_valid = _directionally_aligned(direction, underlying_price, ema8)
+    ema_extension_state = (
+        "unknown"
+        if ema_distance_pct is None
+        else "airgapped"
+        if ema_distance_pct > 1.0
+        else "within_1pct"
     )
 
     break_times = {
@@ -519,6 +736,135 @@ def analyze_context(
                 "distance_pct": distance_pct,
             }
 
+    first_directional_break = min(
+        (break_times[name] for name in directional_breaks if break_times.get(name) is not None),
+        default=None,
+    )
+    bars_since_level_break = None
+    if first_directional_break is not None:
+        bars_since_level_break = sum(
+            1
+            for point in completed_before_entry
+            if point["end"] > first_directional_break
+        )
+
+    ema_vs_broken_level = {
+        "level": None,
+        "level_price": None,
+        "ema8": ema8,
+        "position": "unknown",
+        "valid": None,
+        "distance_pct": None,
+    }
+    if nearest_broken_level is not None and ema8 is not None:
+        level_price = float(nearest_broken_level["price"])
+        position = _price_position(ema8, level_price)
+        valid = ema8 > level_price if direction == "bullish" else ema8 < level_price
+        ema_vs_broken_level = {
+            "level": nearest_broken_level["name"],
+            "level_price": level_price,
+            "ema8": ema8,
+            "position": position,
+            "valid": valid,
+            "distance_pct": abs(ema8 - level_price) / level_price * 100 if level_price else None,
+        }
+
+    directional_level_names = ("PDH", "PMH") if direction == "bullish" else ("PDL", "PML")
+    can_evaluate_directional_levels = any(verified_level[name] for name in directional_level_names)
+    entry_checks = {
+        "level_break": {
+            "status": (
+                "pass" if directional_breaks
+                else "fail" if can_evaluate_directional_levels
+                else "unverified"
+            ),
+            "detail": (
+                ", ".join(directional_breaks)
+                if directional_breaks
+                else "No verified directional level break before entry."
+            ),
+        },
+        "ema_alignment": {
+            "status": (
+                "pass" if ema_alignment_valid is True
+                else "fail" if ema_alignment_valid is False and _status_is_verified(
+                    _level_status(underlying_feed, True, entry_dt - timedelta(minutes=1))
+                )
+                else "unverified"
+            ),
+            "detail": (
+                f"Price was {price_vs_ema} the last completed 10m 8 EMA."
+                if price_vs_ema != "unknown"
+                else "Price/EMA relationship could not be established."
+            ),
+        },
+        "ema_extension": {
+            "status": (
+                "fail" if ema_extension_state == "airgapped"
+                else "pass" if ema_extension_state == "within_1pct"
+                else "unverified"
+            ),
+            "detail": (
+                f"{ema_distance_pct:.2f}% from the 10m 8 EMA."
+                if ema_distance_pct is not None
+                else "EMA distance unavailable."
+            ),
+        },
+        "ema_beyond_broken_level": {
+            "status": (
+                "pass" if ema_vs_broken_level["valid"] is True
+                else "fail" if ema_vs_broken_level["valid"] is False
+                else "unverified"
+            ),
+            "detail": (
+                f"8 EMA was {ema_vs_broken_level['position']} {ema_vs_broken_level['level']}."
+                if ema_vs_broken_level["level"]
+                else "No verified broken level was available for the EMA-cross check."
+            ),
+        },
+        "chop_range": {
+            "status": (
+                "fail" if inside_premarket_range
+                else "pass"
+                if underlying_price is not None and verified_level["PML"] and verified_level["PMH"]
+                else "unverified"
+            ),
+            "detail": (
+                "Entry was inside the PMH–PML range."
+                if inside_premarket_range
+                else "Entry was outside the verified PMH–PML range."
+                if underlying_price is not None and verified_level["PML"] and verified_level["PMH"]
+                else "Premarket range could not be verified."
+            ),
+        },
+    }
+    evaluated_checks = [
+        item["status"] for item in entry_checks.values()
+        if item["status"] in {"pass", "fail"}
+    ]
+    if not evaluated_checks:
+        structure_status = "unverified"
+    elif "fail" in evaluated_checks:
+        structure_status = "conflicted"
+    elif len(evaluated_checks) >= 4:
+        structure_status = "aligned"
+    else:
+        structure_status = "partial"
+
+    ema_status = _level_status(
+        underlying_feed,
+        True,
+        entry_dt - timedelta(minutes=1),
+    )
+    management_ema = _ema_management_evidence(
+        trade=trade,
+        underlying_bars=underlying_bars,
+        ema_points=ema_points,
+        entry_dt=entry_dt,
+        direction=direction,
+        session_close=current_close,
+    )
+
     auto_tags: list[dict] = []
 
     def add_rule_tag(tag_type: str, value: str, reason: str):
@@ -557,19 +903,12 @@ def analyze_context(
             "Entry occurred during the 9:30–9:40 ET scan-only window.",
         )
 
-    ema_status = _level_status(
-        underlying_feed,
-        True,
-        entry_dt - timedelta(minutes=1),
-    )
     if _status_is_verified(ema_status) and ema_distance_pct is not None and ema_distance_pct > 1.0:
         add_rule_tag(
             "mistake", "Airgapped from 8 EMA",
             f"Underlying was {ema_distance_pct:.2f}% from the last completed 10-minute 8 EMA at entry.",
         )
 
-    directional_level_names = ("PDH", "PMH") if direction == "bullish" else ("PDL", "PML")
-    can_evaluate_directional_levels = any(verified_level[name] for name in directional_level_names)
     if can_evaluate_directional_levels and not directional_breaks:
         add_rule_tag(
             "mistake", "No Level Break",
@@ -636,9 +975,20 @@ def analyze_context(
         "inside_premarket_range_at_entry": inside_premarket_range,
         "underlying_price_last_completed_1m": underlying_price,
         "ema8_10m_last_completed": ema8,
+        "ema8_10m_previous_completed": ema8_previous,
+        "ema_slope_pct": ema_slope_pct,
+        "ema_slope_direction": ema_slope_direction,
+        "price_vs_ema": price_vs_ema,
+        "ema_alignment_valid": ema_alignment_valid,
         "ema_distance_pct": ema_distance_pct,
+        "ema_extension_state": ema_extension_state,
         "ema_integrity_status": ema_status,
         "nearest_broken_level": nearest_broken_level,
+        "ema_vs_broken_level": ema_vs_broken_level,
+        "bars_since_level_break": bars_since_level_break,
+        "entry_structure_status": structure_status,
+        "entry_checks": entry_checks,
+        "management_10m8ema": management_ema,
         "net_pnl": trade.get("net_pnl"),
         "instrument_type": trade.get("instrument_type"),
         "option_type": trade.get("option_type"),
@@ -729,11 +1079,15 @@ def _historical_feed_order() -> list[str]:
     return unique
 
 
-def _history_window(entry_dt: datetime) -> tuple[datetime, datetime]:
-    """Fetch only through the execution timestamp to avoid unnecessary recent-data restrictions."""
+def _history_window(
+    entry_dt: datetime,
+    through_dt: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """Fetch history from prior sessions through the requested review boundary."""
     start_day = entry_dt.date() - timedelta(days=8)
     start_dt = datetime.combine(start_day, time(4, 0), tzinfo=ET)
-    return start_dt, entry_dt
+    end_dt = through_dt if through_dt and through_dt > entry_dt else entry_dt
+    return start_dt, end_dt
 
 
 async def _request_alpaca_bars(
@@ -776,14 +1130,18 @@ async def _request_alpaca_bars(
     return rows
 
 
-async def _fetch_alpaca_1m(symbol: str, entry_dt: datetime) -> tuple[list[dict], str]:
-    """Fetch SIP-first historical bars; fall back without guessing missing levels."""
+async def _fetch_alpaca_1m(
+    symbol: str,
+    entry_dt: datetime,
+    through_dt: datetime | None = None,
+) -> tuple[list[dict], str]:
+    """Fetch SIP-first historical bars through entry or a later review boundary."""
     key = (os.getenv("APCA_API_KEY_ID") or "").strip()
     secret = (os.getenv("APCA_API_SECRET_KEY") or "").strip()
     if not key or not secret or key == "your_alpaca_api_key_here":
         raise RuntimeError("Alpaca market data is not configured.")
 
-    start_dt, end_dt = _history_window(entry_dt)
+    start_dt, end_dt = _history_window(entry_dt, through_dt)
     errors: list[str] = []
 
     for feed in _historical_feed_order():
@@ -889,7 +1247,10 @@ Tag rules:
 - Treat PDH/PDL/PMH/PML as usable only when the corresponding level_meta status is VERIFIED or VERIFIED_HISTORICAL.
 - Treat 10-minute 8 EMA evidence as usable only when ema_integrity_status is VERIFIED or VERIFIED_HISTORICAL.
 - Suggest A++ Level + EMA only when broken-level and EMA confluence is genuinely supported.
-- Suggest Clean/Early/Late Entry, Chased Entry, Forced Setup, or Sold Too Early only when the evidence supports the claim.
+- Use entry_checks, ema_alignment_valid, ema_extension_state, ema_slope_direction, and ema_vs_broken_level as the primary 10-minute structure evidence.
+- For an E-entry or Purple Profits classification, the 10-minute 8 EMA must be directionally aligned AND already beyond the verified broken level; otherwise return NONE or a more appropriate setup.
+- Suggest Clean/Early/Late Entry, Chased Entry, or Forced Setup only when the objective entry evidence supports the claim.
+- Suggest Sold Too Early only when management_10m8ema shows the final exit occurred before the first confirmed 10-minute 8 EMA break and the post-exit underlying continued favorably. Do not estimate the option's unrealized return.
 - Missing evidence means omit the tag and add a concise item to insufficient_evidence.
 
 Be conservative. A false positive is worse than returning NONE.
@@ -1084,8 +1445,9 @@ async def build_le_review(trade: dict) -> dict:
         }
 
     try:
+        review_through = _review_through_datetime(trade)
         underlying_result, market_calendar = await asyncio.gather(
-            _fetch_alpaca_1m(ticker, when),
+            _fetch_alpaca_1m(ticker, when, through_dt=review_through),
             _fetch_market_calendar(when),
         )
         underlying_bars, underlying_feed = underlying_result
