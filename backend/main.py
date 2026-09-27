@@ -894,120 +894,47 @@ class TradeCreate(BaseModel):
     time: str | None = None
 
 
-def compute_manual_pnl(side: str, entry: float, exit_price: float | None, qty: int, commissions: float) -> tuple[float, float]:
+def compute_manual_pnl(
+    side: str,
+    entry: float,
+    exit_price: float | None,
+    qty: int,
+    commissions: float,
+    instrument_type: str = "STOCK",
+    ticker: str | None = None,
+) -> tuple[float, float]:
+    """Manual-entry P&L with the same contract multipliers as imported trades."""
+    multiplier = instrument_multiplier(instrument_type, ticker)
+    if multiplier is None:
+        raise HTTPException(status_code=422, detail=f"Unsupported futures multiplier for {ticker or 'symbol'}")
     if exit_price is None:
-        return 0.0, -commissions
-    if side.upper() == 'LONG':
-        gross = (exit_price - entry) * qty
+        # Open positions are not realized losses. Fees remain stored separately
+        # and are included once the trade closes.
+        return 0.0, 0.0
+    if side.upper() == "LONG":
+        gross = (exit_price - entry) * qty * multiplier
     else:
-        gross = (entry - exit_price) * qty
-    return round(gross, 2), round(gross - commissions, 2)
+        gross = (entry - exit_price) * qty * multiplier
+    return round(gross, 2), round(gross - abs(commissions), 2)
 
 
 def _is_open_position(trade: dict) -> bool:
-    execs = trade.get('executions') or []
-    side = (trade.get('side') or 'LONG').upper()
-    entry_action = 'BOT' if side == 'LONG' else 'SOLD'
-    exit_action  = 'SOLD' if side == 'LONG' else 'BOT'
-    entry_qty = sum(e.get('qty', 0) for e in execs if e.get('action') == entry_action)
-    exit_qty  = sum(e.get('qty', 0) for e in execs if e.get('action') == exit_action)
-    return entry_qty > 0 and entry_qty != exit_qty
+    return not trade_is_closed(trade)
 
 
 def _trade_pl_percent(trade: dict) -> float | None:
-    """Net P/L percentage on entry notional/premium for display purposes only.
-
-    This does not modify P&L, MFE/MAE, exit efficiency, R-multiples, or any
-    stored trade math. Options use the standard 100x contract multiplier.
-    Futures use the existing parser multiplier map when the root is known.
-    Short trades are measured against entry proceeds/notional, not margin.
-    """
-    raw = trade.get("executions") or []
-    if isinstance(raw, str):
-        try:
-            execs = json.loads(raw)
-        except Exception:
-            return None
-    else:
-        execs = raw if isinstance(raw, list) else []
-
-    side = str(trade.get("side") or "").upper()
-    entry_action = "BOT" if side == "LONG" else "SOLD"
-    entries = [e for e in execs if str(e.get("action") or "").upper() == entry_action]
-    qty = sum(float(e.get("qty") or 0) for e in entries)
-    if qty <= 0:
-        return None
-    weighted = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries)
-    avg_entry = weighted / qty if qty else None
-    if not avg_entry:
-        return None
-
-    instrument = str(trade.get("instrument_type") or "STOCK").upper()
-    multiplier = 1.0
-    if instrument == "OPTION":
-        multiplier = 100.0
-    elif instrument == "FUTURE":
-        ticker = str(trade.get("ticker") or "").upper()
-        root = next((r for r in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True) if ticker.startswith(r)), None)
-        if root:
-            multiplier = float(FUTURES_MULTIPLIERS[root])
-
-    entry_notional = abs(avg_entry * qty * multiplier)
-    if entry_notional <= 0:
-        return None
-    return round(float(trade.get("net_pnl") or 0) / entry_notional * 100, 2)
+    """Canonical net return on entry notional/premium."""
+    return trade_pl_percent(trade)
 
 
 def _avg_trade_pl_percent(trades: list[dict]) -> float | None:
-    """Average canonical P/L % across completed trades.
-
-    This is a display KPI only. It reuses _trade_pl_percent so dashboard and
-    trade-level percentages can never drift to different denominators.
-    """
-    values = []
-    for trade in trades:
-        value = _trade_pl_percent(trade)
-        if value is not None:
-            values.append(value)
+    values = [value for value in (_trade_pl_percent(t) for t in trades) if value is not None]
     return round(sum(values) / len(values), 2) if values else None
 
 
 def _trade_entry_minutes(trade: dict) -> int | None:
-    """Return broker-local entry clock time in minutes after midnight.
-
-    Schwab/TOS executions preserve the original broker-local time and are
-    canonicalized at import. For the dashboard's time-of-day edge we use that
-    broker-local clock directly so the result matches the trader's CT session
-    instead of server/import time.
-    """
-    raw = trade.get("executions") or []
-    if isinstance(raw, str):
-        try:
-            execs = json.loads(raw)
-        except Exception:
-            return None
-    else:
-        execs = raw if isinstance(raw, list) else []
-
-    side = str(trade.get("side") or "LONG").upper()
-    entry_action = "BOT" if side == "LONG" else "SOLD"
-    entries = [e for e in execs if str(e.get("action") or "").upper() == entry_action]
-    if not entries:
-        return None
-
-    def parse_minutes(value):
-        raw_time = str(value or "").strip()
-        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
-            try:
-                dt = datetime.strptime(raw_time, fmt)
-                return dt.hour * 60 + dt.minute
-            except ValueError:
-                continue
-        return None
-
-    values = [parse_minutes(e.get("time")) for e in entries]
-    values = [v for v in values if v is not None]
-    return min(values) if values else None
+    """First entry in the market's Eastern session clock."""
+    return first_entry_minutes(trade, "America/New_York")
 
 
 def _format_half_hour_bucket(start_minute: int) -> str:
@@ -1020,11 +947,11 @@ def _format_half_hour_bucket(start_minute: int) -> str:
         display_hour = hour % 12 or 12
         return f"{display_hour}:{minute:02d} {suffix}"
 
-    return f"{clock(start_minute)}–{clock(end_minute)}"
+    return f"{clock(start_minute)}–{clock(end_minute)} ET"
 
 
 def _time_of_day_kpis(trades: list[dict]) -> list[dict]:
-    """Performance grouped by the trade's first entry execution, 30-min CT buckets."""
+    """Performance grouped by the trade's first entry execution, 30-min Eastern buckets."""
     buckets: dict[int, list[dict]] = {}
     for trade in trades:
         if trade.get("net_pnl") is None:
