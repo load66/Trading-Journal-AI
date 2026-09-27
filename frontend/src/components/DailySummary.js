@@ -294,7 +294,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
             type="button"
             className="btn btn-secondary"
             onClick={handleRegenerate}
-            disabled={regenerating || loading || !trades.length}
+            disabled={regenerating || loading || summaryLoading || !trades.length}
           >
             <RotateCcw size={14} style={{ animation: regenerating ? 'spin 1s linear infinite' : 'none' }} aria-hidden="true" />
             {regenerating ? 'Re-running…' : 'Re-run Diagnosis'}
