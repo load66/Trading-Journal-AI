@@ -1710,6 +1710,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                                   key={type}
                                   type="button"
                                   className={`td-tags-category-btn type-${type} ${active ? 'active' : ''}`}
+                                  aria-label={TAG_TYPE_META[type].label}
                                   aria-pressed={active}
                                   disabled={tagLibraryLoading}
                                   onClick={() => {
