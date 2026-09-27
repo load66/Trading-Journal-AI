@@ -65,21 +65,13 @@ function GoalsPanel({ draft, onChange, onSave, onCancel, accountLabel, saving, e
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ accountId, accounts = [], selectedAccountId, onDayClick, onOpenDetail, onViewAllTrades, onViewSmokingGun }) {
+export default function Dashboard({ accountId, accounts = [], selectedAccountId, onDayClick, onViewSmokingGun }) {
   const [kpis, setKpis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [openPositions, setOpenPositions] = useState([]);
   const [recentTrades, setRecentTrades] = useState([]);
-  const [closingPos, setClosingPos] = useState(null);
-  const [closePrice, setClosePrice] = useState('');
-  const [closeDate, setCloseDate] = useState('');
-  const [closeTime, setCloseTime] = useState('16:00');
-  const [closeCommission, setCloseCommission] = useState('0');
-  const [closeError, setCloseError] = useState(null);
-  const [closeSubmitting, setCloseSubmitting] = useState(false);
   const [edgeReport, setEdgeReport] = useState(null);
   const [goals, setGoals] = useState(null);
   const [showGoals, setShowGoals] = useState(false);
@@ -96,7 +88,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   // Each effect run takes a ticket; a response that is not the newest is dropped,
   // so a slow reply cannot overwrite a newer account or date selection.
   const kpiRun = useRef(0);
-  const positionsRun = useRef(0);
+  const recentRun = useRef(0);
   const managementRun = useRef(0);
   const smokingGunRun = useRef(0);
 
@@ -125,59 +117,6 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
     goalsApi.get(params).then(r => setGoals(r.data)).catch(() => {});
   }, [accountId]);
 
-  const openCloseModal = (pos) => {
-    const execs = pos.executions || [];
-    const side = (pos.side || 'LONG').toUpperCase();
-    const entryAction = side === 'LONG' ? 'BOT' : 'SOLD';
-    const exitAction  = side === 'LONG' ? 'SOLD' : 'BOT';
-    const entryQty = execs.filter(e => e.action === entryAction).reduce((s, e) => s + (e.qty || 0), 0);
-    const exitQty  = execs.filter(e => e.action === exitAction).reduce((s, e) => s + (e.qty || 0), 0);
-    // Default to today, never a hard-coded date, and never before the last fill.
-    const lastFill = execs.map(e => e.date).filter(Boolean).sort().pop();
-    const today = new Date();
-    const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    setClosingPos({
-      id: pos.id, ticker: pos.ticker, side, openQty: entryQty - exitQty, exitAction,
-      lastFillDate: lastFill || pos.date,
-    });
-    setClosePrice('');
-    setCloseDate(lastFill && lastFill > localToday ? lastFill : localToday);
-    setCloseTime('16:00');
-    setCloseCommission('0');
-    setCloseError(null);
-  };
-
-  const handleClosePosition = async () => {
-    if (!closingPos || !closePrice || !closeDate) return;
-    const price = parseFloat(closePrice);
-    const commission = closeCommission === '' ? 0 : parseFloat(closeCommission);
-    if (!(price > 0)) { setCloseError('Enter an exit price above 0.'); return; }
-    if (Number.isNaN(commission) || commission < 0) { setCloseError('Fees cannot be negative.'); return; }
-    if (closingPos.lastFillDate && closeDate < closingPos.lastFillDate) {
-      setCloseError(`The exit cannot be earlier than the last fill on ${closingPos.lastFillDate}.`);
-      return;
-    }
-    setCloseSubmitting(true);
-    setCloseError(null);
-    try {
-      await tradesApi.addExecution(closingPos.id, {
-        action: closingPos.exitAction,
-        qty: closingPos.openQty,
-        price,
-        date: closeDate,
-        time: `${(closeTime || '16:00').slice(0, 5)}:00`,
-        commission,
-      });
-      setClosingPos(null);
-      // The exit changes P&L, the calendar and recent trades, so refetch them all.
-      reload();
-    } catch (e) {
-      setCloseError(e.response?.data?.detail || e.message);
-    } finally {
-      setCloseSubmitting(false);
-    }
-  };
-
   const handleSaveGoals = () => {
     const payload = { ...goalsDraft };
     if (accountId != null) payload.account_id = accountId;
@@ -190,14 +129,8 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   };
 
   useEffect(() => {
-    const run = ++positionsRun.current;
-    const current = () => run === positionsRun.current;
-    const params = { open_only: true };
-    if (accountId != null) params.account_id = accountId;
-    tradesApi.list(params)
-      .then(r => { if (current()) setOpenPositions(r.data); })
-      .catch(() => { if (current()) setOpenPositions([]); });
-
+    const run = ++recentRun.current;
+    const current = () => run === recentRun.current;
     const recentParams = { limit: 10, closed_only: true, sort_by: 'closed_at_desc' };
     if (accountId != null) recentParams.account_id = accountId;
     tradesApi.list(recentParams)
@@ -301,10 +234,6 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
           dateTo={dateTo}
           accountId={accountId}
           onDayClick={onDayClick}
-          onOpenDetail={onOpenDetail}
-          onViewAllTrades={onViewAllTrades}
-          openPositions={openPositions}
-          recentTrades={recentTrades}
           edgeReport={edgeReport}
           managementRange={managementRange}
           onManagementRangeChange={setManagementRange}
@@ -332,20 +261,6 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
               onChange={({ dateFrom: f, dateTo: t }) => { setDateFrom(f); setDateTo(t); }}
             />
           )}
-          closingPos={closingPos}
-          setClosingPos={setClosingPos}
-          closeDate={closeDate}
-          setCloseDate={setCloseDate}
-          closeTime={closeTime}
-          setCloseTime={setCloseTime}
-          closePrice={closePrice}
-          setClosePrice={setClosePrice}
-          closeCommission={closeCommission}
-          setCloseCommission={setCloseCommission}
-          closeError={closeError}
-          closeSubmitting={closeSubmitting}
-          handleClosePosition={handleClosePosition}
-          openCloseModal={openCloseModal}
         />
       )}
     </div>

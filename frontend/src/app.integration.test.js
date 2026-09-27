@@ -519,50 +519,6 @@ test('Settings delete asks to reassign and can leave trades blank', async () => 
   }));
 });
 
-const todayISO = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-test('Open Positions shows the remaining quantity, not the quantity entered', async () => {
-  await renderApp();
-  const row = (await screen.findByText('GOOG')).closest('tr');
-  // 300 bought, 100 sold.
-  expect(within(row).getByText('200')).toBeInTheDocument();
-  expect(within(row).getByText(/of 300/)).toBeInTheDocument();
-});
-
-test('Recording an exit defaults to today, sends the entered time and fees, and refreshes', async () => {
-  await renderApp();
-  const row = (await screen.findByText('GOOG')).closest('tr');
-  fireEvent.click(within(row).getByRole('button', { name: 'Close' }));
-
-  const date = screen.getByLabelText('Exit date');
-  expect(date).toHaveValue(todayISO());
-  fireEvent.change(screen.getByLabelText('Exit time'), { target: { value: '15:45' } });
-  fireEvent.change(screen.getByLabelText('Exit price'), { target: { value: '107.5' } });
-  fireEvent.change(screen.getByLabelText('Fees'), { target: { value: '1.25' } });
-
-  const callsBefore = tradesApi.list.mock.calls.length;
-  fireEvent.click(screen.getByRole('button', { name: 'Record exit' }));
-  await waitFor(() => expect(tradesApi.addExecution).toHaveBeenCalledWith(103, {
-    action: 'SOLD', qty: 200, price: 107.5, date: todayISO(), time: '15:45:00', commission: 1.25,
-  }));
-  // The rest of the dashboard reloads instead of showing stale totals.
-  await waitFor(() => expect(tradesApi.list.mock.calls.length).toBeGreaterThan(callsBefore));
-});
-
-test('Recording an exit refuses a date before the last fill', async () => {
-  await renderApp();
-  const row = (await screen.findByText('GOOG')).closest('tr');
-  fireEvent.click(within(row).getByRole('button', { name: 'Close' }));
-  fireEvent.change(screen.getByLabelText('Exit date'), { target: { value: '2026-09-08' } });
-  fireEvent.change(screen.getByLabelText('Exit price'), { target: { value: '107.5' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Record exit' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent(/cannot be earlier than the last fill on 2026-09-09/);
-  expect(tradesApi.addExecution).not.toHaveBeenCalled();
-});
-
 test('A failed dashboard load keeps the page and offers Retry', async () => {
   kpisApi.get.mockImplementation(() => Promise.reject(new Error('Network Error')));
   await renderApp();
@@ -633,10 +589,13 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   expect(screen.getByText('Cumulative net P&L')).toBeVisible();
   expect(screen.queryByText('Profit vs. left on table')).not.toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i })).toBeVisible();
-  expect(screen.getByText('September Smoking Gun')).toBeVisible();
   expect(screen.getByText('Diagnosis')).toBeVisible();
   expect(screen.getByText('Mechanical action plan')).toBeVisible();
   expect(screen.getByText('Averaging down')).toBeVisible();
+  expect(screen.queryByText('Report period')).not.toBeInTheDocument();
+  expect(screen.queryByText('September Smoking Gun')).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: /Recent trades/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: /Open positions/i })).not.toBeInTheDocument();
   expect(screen.queryByText('Overall performance')).not.toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'What works' })).not.toBeInTheDocument();
 

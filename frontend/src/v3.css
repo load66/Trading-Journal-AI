@@ -2686,3 +2686,106 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     justify-items: start;
   }
 }
+
+
+/* ---------- calendar-focused compact dashboard ---------- */
+.v3-dashboard-core {
+  grid-template-columns: minmax(0, 1fr) minmax(390px, 440px);
+}
+.v3-dashboard-side {
+  align-self: start;
+}
+.v3-dashboard-side .v3-side-section {
+  padding: 16px 15px 18px;
+  border-bottom: 0;
+}
+.v3-dashboard-side .v3-cal-head {
+  margin-bottom: 12px;
+}
+.v3-dashboard-side .v3-cal-month {
+  font-size: 23px;
+}
+.v3-dashboard-side .v3-cal-tot {
+  font-size: 12px;
+}
+.v3-dashboard-side .v3-cal-tot b {
+  font-size: 18px;
+}
+.v3-dashboard-side .v3-cal-five {
+  grid-auto-rows: minmax(66px, 1fr);
+}
+.v3-dashboard-side .v3-day {
+  min-height: 66px;
+  padding: 8px 8px 9px;
+}
+.v3-dashboard-side .v3-day .d {
+  font-size: 10.5px;
+}
+.v3-dashboard-side .v3-day .v {
+  font-size: 16px;
+}
+.v3-dashboard-side .v3-day .c {
+  font-size: 9px;
+  line-height: 1.25;
+}
+.v3-management-section {
+  padding-bottom: 10px;
+}
+.v3-smoking-band {
+  padding-top: 8px;
+  padding-bottom: 14px;
+}
+.v3-smoking-summary-head {
+  margin-bottom: 8px;
+  padding-bottom: 0;
+}
+.v3-smoking-head-actions {
+  margin-left: auto;
+}
+.v3-smoking-clean > article {
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+@media (max-width: 1260px) {
+  .v3-dashboard-core {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 400px);
+  }
+}
+
+@media (max-width: 1120px) {
+  .v3-dashboard-core {
+    grid-template-columns: 1fr;
+  }
+  .v3-dashboard-side {
+    width: 100%;
+  }
+  .v3-dashboard-side .v3-side-section {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+  .v3-dashboard-side .v3-cal-five {
+    max-width: 860px;
+    margin: 0 auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .v3-dashboard-side .v3-side-section {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .v3-dashboard-side .v3-cal-five {
+    grid-auto-rows: minmax(58px, 1fr);
+  }
+  .v3-dashboard-side .v3-day {
+    min-height: 58px;
+    padding: 6px 5px 7px;
+  }
+  .v3-dashboard-side .v3-day .v {
+    font-size: 14px;
+  }
+  .v3-dashboard-side .v3-day .c {
+    font-size: 8px;
+  }
+}
