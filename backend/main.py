@@ -1077,7 +1077,9 @@ def list_trades(
             continue
         if closed_only and is_open:
             continue
+        d = sanitize_excursion_metrics(d)
         d["pl_pct"] = _trade_pl_percent(d)
+        d["hold_seconds"] = hold_seconds(d)
 
         # R is meaningful only when the trader has explicitly recorded planned
         # dollar risk (or a legacy analysis already has an R multiple). Do not
