@@ -618,6 +618,39 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   expect(smokingTab).toHaveAttribute('aria-selected', 'true');
 });
 
+
+test('Dashboard withholds extreme capture when evidence coverage is low', async () => {
+  kpisApi.get.mockResolvedValue({
+    data: {
+      total_net_pnl: 500,
+      total_trades: 47,
+      trading_days: 5,
+      exit_efficiency: -3036,
+      capture_n: 4,
+      capture_winner_total: 27,
+      capture_coverage_pct: 14.8,
+      capture_confidence: 'LOW',
+      avg_mfe: 0.55,
+      avg_mae: 0.36,
+      excursion_n: 10,
+      excursion_total_trades: 47,
+      management_coverage_pct: 21.3,
+      excursion_confidence: 'LOW',
+      excursion_days: 1,
+      daily_pnl: [{ date: '2026-09-25', net_pnl: 500, cumulative: 500 }],
+    },
+  });
+
+  await renderApp();
+
+  expect(await screen.findByText('LOW COVERAGE')).toBeVisible();
+  expect(screen.queryByText(/-3036%/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/3136%/)).not.toBeInTheDocument();
+  expect(screen.getByRole('status', { name: 'Profit capture unavailable' })).toBeVisible();
+  expect(screen.getByText(/No excursion-based diagnosis is issued/i)).toBeVisible();
+  expect(screen.getByText(/10\/47 trades · 21% coverage · LOW/i)).toBeVisible();
+});
+
 test('Dashboard reports unavailable profit capture without invalid meter semantics', async () => {
   kpisApi.get.mockResolvedValue({
     data: {
