@@ -310,7 +310,7 @@ def override_setup(
             "UPDATE trades SET setup=NULL, setup_notes=NULL, setup_source='manual' "
             "WHERE id=?", (trade_id,))
         conn.commit()
-        return {"id": trade_id, "setup": None, "setup_grade": row['setup_grade'],
+        return {"id": trade_id, "setup": None,
                 "setup_source": "manual", "message": "Setup tag cleared."}
 
     if body.setup != 'NONE':
@@ -333,7 +333,7 @@ def override_setup(
         "UPDATE trades SET setup=?, setup_notes=?, setup_source='manual' WHERE id=?",
         (body.setup, json.dumps(notes), trade_id))
     conn.commit()
-    return {"id": trade_id, "setup": body.setup, "setup_grade": row['setup_grade'],
+    return {"id": trade_id, "setup": body.setup,
             "setup_source": "manual", "message": f"Setup set to {body.setup}."}
 
 
@@ -407,7 +407,7 @@ def setup_stats(
     account_id: int = Query(1),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    """Performance grouped by setup and by grade, for the Edge view."""
+    """Performance grouped by setup for the Edge view."""
     def agg(group_col):
         rows = conn.execute(f"""
             SELECT {group_col} AS k,
@@ -428,7 +428,7 @@ def setup_stats(
             out.append(d)
         return out
 
-    return {"by_setup": agg('setup'), "by_grade": agg('setup_grade'), "labels": {}}
+    return {"by_setup": agg('setup'), "labels": {}}
 
 
 def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None:
@@ -485,7 +485,7 @@ def _prepare_authoritative_reconcile(conn, account_id: int, incoming_trades: lis
         raise ValueError("The uploaded file did not contain dated executions to reconcile.")
 
     rows = conn.execute(
-        """SELECT trade_group, source, executions, setup, setup_grade, setup_notes,
+        """SELECT trade_group, source, executions, setup, setup_notes,
                   setup_features, setup_source
            FROM trades WHERE account_id=?""",
         (account_id,),
@@ -517,7 +517,6 @@ def _prepare_authoritative_reconcile(conn, account_id: int, incoming_trades: lis
         replace_groups.append(d['trade_group'])
         overlays[d['trade_group']] = {
             'setup': d.get('setup'),
-            'setup_grade': d.get('setup_grade'),
             'setup_notes': d.get('setup_notes'),
             'setup_features': d.get('setup_features'),
             'setup_source': d.get('setup_source'),
@@ -551,7 +550,7 @@ def _prepare_authoritative_reconcile(conn, account_id: int, incoming_trades: lis
             "SELECT 1 FROM trade_tags WHERE trade_group=? LIMIT 1", (group,)
         ).fetchone()
         overlay = overlays.get(group) or {}
-        has_setup = any(overlay.get(k) is not None for k in ('setup','setup_grade','setup_notes','setup_features'))
+        has_setup = any(overlay.get(k) is not None for k in ('setup','setup_notes','setup_features'))
         if has_analysis or has_tags or has_setup:
             annotated.append(group)
     if annotated:
@@ -682,13 +681,12 @@ async def import_csv(
                     if overlay and any(v is not None for v in overlay.values()):
                         conn.execute(
                             """UPDATE trades
-                               SET setup=?, setup_grade=?, setup_notes=?,
-                                   setup_features=?, setup_source=?
+                               SET setup=?, setup_notes=?, setup_features=?, setup_source=?
                                WHERE trade_group=? AND account_id=?""",
                             (
-                                overlay.get('setup'), overlay.get('setup_grade'),
-                                overlay.get('setup_notes'), overlay.get('setup_features'),
-                                overlay.get('setup_source'), trade['trade_group'], account_id,
+                                overlay.get('setup'), overlay.get('setup_notes'),
+                                overlay.get('setup_features'), overlay.get('setup_source'),
+                                trade['trade_group'], account_id,
                             ),
                         )
             except Exception as e:
@@ -2905,7 +2903,7 @@ def get_reports(
 
     sql = """
         SELECT t.id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
-               t.instrument_type, t.executions, t.setup, t.setup_grade,
+               t.instrument_type, t.executions, t.setup,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.idea_source
@@ -3064,8 +3062,6 @@ def get_reports(
                            key=lambda b: b['key']),
         "by_setup": _bucket_stats(raw, lambda r: r['setup'],
                                   lambda k: _SETUP_LABEL_MAP.get(k, k)),
-        "by_grade": _ordered(_bucket_stats(raw, lambda r: r['setup_grade']),
-                             ['A++', 'A+', 'A', 'B', 'C', 'D', 'F']),
         "by_strategy": _bucket_stats(raw, lambda r: r['strategy']),
         "by_symbol": _bucket_stats(raw, lambda r: r['ticker'])[:40],
         "by_side": _bucket_stats(raw, lambda r: r['side']),

@@ -377,13 +377,10 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
 
           {tab === 'setups' && (
             <>
-              <Section title="By Setup" hint="Playbook setups you tagged on your trades.">
+              <Section title="By Setup" hint="Which playbook setups are producing the best actual results.">
                 <Breakdown view={view} rows={data.by_setup} labelHead="Setup" sortByPnl />
               </Section>
-              <Section title="By Setup Grade" hint="A++ down to F. A monotonic ladder means the grading is real.">
-                <Breakdown view={view} rows={data.by_grade} labelHead="Grade" />
-              </Section>
-              <Section title="By Strategy" hint="What the diary analysis tagged the trade as.">
+              <Section title="By Strategy" hint="Which journal strategies are producing the best actual results.">
                 <Breakdown view={view} rows={data.by_strategy} labelHead="Strategy" sortByPnl max={20} />
               </Section>
               <div className="grid-2">
