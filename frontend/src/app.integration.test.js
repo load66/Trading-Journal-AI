@@ -619,6 +619,39 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
 });
 
 
+test('Risk During Trade withholds a positive diagnosis when mean and median disagree', async () => {
+  kpisApi.get.mockResolvedValue({
+    data: {
+      total_net_pnl: 1200,
+      total_trades: 47,
+      trading_days: 5,
+      exit_efficiency: 65.58,
+      exit_efficiency_median: 74.52,
+      capture_n: 22,
+      capture_winner_total: 27,
+      capture_coverage_pct: 81.5,
+      capture_confidence: 'RELIABLE',
+      capture_days: 5,
+      avg_mfe: 53.51,
+      avg_mae: 30.87,
+      median_mfe: 12.82,
+      median_mae: 26.14,
+      excursion_n: 40,
+      excursion_total_trades: 47,
+      management_coverage_pct: 85.1,
+      excursion_confidence: 'RELIABLE',
+      excursion_days: 5,
+      daily_pnl: [{ date: '2026-09-25', net_pnl: 100, cumulative: 1200 }],
+    },
+  });
+
+  await renderApp();
+
+  expect(await screen.findByText(/Mean and median excursion disagree/i)).toBeVisible();
+  expect(screen.getByText(/medians \+12\.82% \/ -26\.14%/i)).toBeVisible();
+  expect(screen.queryByText(/Both average and median favorable excursion exceed adverse excursion/i)).not.toBeInTheDocument();
+});
+
 test('Dashboard withholds extreme capture when evidence coverage is low', async () => {
   kpisApi.get.mockResolvedValue({
     data: {
