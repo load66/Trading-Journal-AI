@@ -123,8 +123,8 @@ function BucketTable({ rows, labelHead = 'Bucket', sortByPnl = false, max }) {
 
 /* One breakdown, drawn either way. The page holds a single view mode, so the
    switch at the top flips every section at once rather than per section. */
-function Breakdown({ view, rows, labelHead, sortByPnl, max, height }) {
-  if (!rows || !rows.length) return <NoData />;
+function Breakdown({ view, rows, labelHead, sortByPnl, max, height, emptyMsg }) {
+  if (!rows || !rows.length) return <NoData msg={emptyMsg} />;
   return view === 'table'
     ? <BucketTable rows={rows} labelHead={labelHead} sortByPnl={sortByPnl} max={max} />
     : <BucketBars rows={sortByPnl ? [...rows].sort((a, b) => b.net_pnl - a.net_pnl).slice(0, max || 24) : rows} height={height} />;
@@ -244,6 +244,37 @@ function DrawdownCurve({ curve }) {
   );
 }
 
+
+function CoverageStrip({ total, items }) {
+  if (!total || !items?.length) return null;
+  return (
+    <div className="report-coverage" aria-label="Report data coverage">
+      <div className="report-coverage-title">
+        <span>Data coverage</span>
+        <small>{total.toLocaleString('en-US')} closed trades</small>
+      </div>
+      <div className="report-coverage-items">
+        {items.map(item => {
+          const count = Number(item.count || 0);
+          const pct = total ? Math.round(count / total * 100) : 0;
+          return (
+            <div className="report-coverage-item" key={item.label} title={item.title || undefined}>
+              <div>
+                <span>{item.label}</span>
+                <strong className="num">{count.toLocaleString('en-US')} / {total.toLocaleString('en-US')}</strong>
+              </div>
+              <div className="report-coverage-track" aria-hidden="true">
+                <span style={{ width: `${Math.min(100, pct)}%` }} />
+              </div>
+              <small className="num">{pct}%</small>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function Reports({ accountId, initialTab = 'overview' }) {
   // one view mode for the whole page: you are either scanning or reading numbers
   const [view, setView] = useState('bars');
@@ -273,6 +304,8 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
   }, [accountId, dateFrom, dateTo]);
 
   const s = data?.summary;
+  const coverage = data?.coverage || {};
+  const total = Number(data?.trade_count || 0);
   const gap = { display: 'flex', flexDirection: 'column', gap: 20 };
 
   return (
@@ -377,11 +410,38 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
 
           {tab === 'setups' && (
             <>
-              <Section title="By Setup" hint="Which playbook setups are producing the best actual results.">
-                <Breakdown view={view} rows={data.by_setup} labelHead="Setup" sortByPnl />
-              </Section>
+              <CoverageStrip
+                total={total}
+                items={[
+                  { label: 'Primary setup', count: coverage.setup, title: 'Structured setup field, with an explicit setup tag used only when the structured field is blank.' },
+                  { label: 'Setup context tags', count: coverage.setup_context, title: 'Trades carrying one or more setup-context tags.' },
+                  { label: 'Strategy', count: coverage.strategy, title: 'Trades with a recorded strategy.' },
+                ]}
+              />
+              {!!data.by_setup?.length && (
+                <Section title="By Primary Setup" hint="Single primary setup per trade. Structured setup is preferred; an explicit setup tag is used only as a fallback.">
+                  <Breakdown view={view} rows={data.by_setup} labelHead="Setup" sortByPnl />
+                </Section>
+              )}
+              {!!data.by_tag?.setup?.length && (
+                <Section title="Setup Context Performance" hint="Multi-tag context such as Outside Day, PDH Break, or PMH Break. A trade can appear under several rows.">
+                  <Breakdown view={view} rows={data.by_tag.setup} labelHead="Setup context" sortByPnl />
+                </Section>
+              )}
+              {!data.by_setup?.length && !data.by_tag?.setup?.length && (
+                <Section title="Setup Performance">
+                  <NoData msg="No setups are recorded yet. Add a primary setup or Setup Context tags in Trade Review → Tags." />
+                </Section>
+              )}
               <Section title="By Strategy" hint="Which journal strategies are producing the best actual results.">
-                <Breakdown view={view} rows={data.by_strategy} labelHead="Strategy" sortByPnl max={20} />
+                <Breakdown
+                  view={view}
+                  rows={data.by_strategy}
+                  labelHead="Strategy"
+                  sortByPnl
+                  max={20}
+                  emptyMsg="No strategies are recorded in this period. Add Strategy in the trade review to build this comparison."
+                />
               </Section>
               <div className="grid-2">
                 <Section title="By Instrument">
@@ -396,8 +456,23 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
 
           {tab === 'sources-tags' && (
             <>
+              <CoverageStrip
+                total={total}
+                items={[
+                  { label: 'Source', count: coverage.source },
+                  { label: 'Setup tags', count: coverage.setup_context },
+                  { label: 'Execution tags', count: coverage.execution_tags },
+                  { label: 'Mistake tags', count: coverage.mistake_tags },
+                ]}
+              />
               <Section title="By Source" hint="Where the idea or alert came from. Each trade has one source.">
-                <Breakdown view={view} rows={data.by_source || []} labelHead="Source" sortByPnl />
+                <Breakdown
+                  view={view}
+                  rows={data.by_source || []}
+                  labelHead="Source"
+                  sortByPnl
+                  emptyMsg="No idea source is recorded in this period. Add Source in Trade Review when you want to compare scanner, personal watchlist, alerts, and other origins."
+                />
               </Section>
               {TAG_TYPE_ORDER.filter(t => (data.by_tag || {})[t]?.length).map((t, i) => (
                 <Section
@@ -416,6 +491,13 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
 
           {tab === 'timing' && (
             <>
+              <CoverageStrip
+                total={total}
+                items={[
+                  { label: 'Entry time', count: coverage.entry_time, title: 'Trades with a usable broker entry timestamp.' },
+                  { label: 'Hold time', count: coverage.hold_time, title: 'Trades with a usable entry-to-final-exit duration.' },
+                ]}
+              />
               <Section title="By Day of Week">
                 <Breakdown view={view} rows={data.by_day_of_week} labelHead="Day" />
               </Section>
@@ -430,12 +512,21 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
 
           {tab === 'execution' && (
             <>
+              <CoverageStrip
+                total={total}
+                items={[
+                  { label: 'Management', count: coverage.management, title: 'Trades with a recognizable broker exit event.' },
+                  { label: 'Realized R', count: coverage.realized_r, title: 'Recorded R-multiple or net P&L divided by saved planned risk.' },
+                  { label: 'MFE / MAE', count: coverage.mfe_mae },
+                  { label: 'Exit capture', count: coverage.exit_efficiency },
+                ]}
+              />
               <Section title="Scaled Out vs All-or-Nothing"
                        hint="Trades with more than one exit fill vs a single exit.">
                 <Breakdown view={view} rows={data.by_management} labelHead="Management" height={200} />
               </Section>
               <div className="grid-2">
-                <Section title="R-Multiple Distribution" hint="Realized R per trade, from the diary analysis.">
+                <Section title="R-Multiple Distribution" hint="Realized R from recorded R or net P&L divided by the saved planned-risk basis.">
                   <RMultipleDist data={edge?.r_multiple_dist} />
                 </Section>
                 <Section title="Hold Time: Winners vs Losers">
@@ -457,8 +548,21 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
 
           {tab === 'psychology' && (
             <>
-              <Section title="By Emotional State" hint="Self-reported in the diary. Revenge and frustrated rows are the ones to read.">
-                <Breakdown view={view} rows={data.by_emotion} labelHead="Emotion" sortByPnl />
+              <CoverageStrip
+                total={total}
+                items={[
+                  { label: 'Emotion', count: coverage.emotion, title: 'Structured emotional state or explicit Emotion tag.' },
+                  { label: 'Mistake tags', count: coverage.mistake_tags },
+                ]}
+              />
+              <Section title="By Emotional State" hint="Any recorded emotional state is included; custom values such as Focused are no longer discarded.">
+                <Breakdown
+                  view={view}
+                  rows={data.by_emotion}
+                  labelHead="Emotion"
+                  sortByPnl
+                  emptyMsg="No emotional state is recorded in this period. Add an Emotion tag or Emotional State in the trade review."
+                />
               </Section>
               <Section title="Emotion vs Outcome">
                 <EmotionTable data={edge?.emotion_outcomes} />

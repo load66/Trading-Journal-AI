@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, storageApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, storageApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, reportsApi, edgeReportApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -345,6 +345,109 @@ test('Add Trade opens a modal dialog that closes on Escape', async () => {
   expect(within(dialog).getByRole('button', { name: /Save Trade/ })).toBeInTheDocument();
   fireEvent.keyDown(dialog, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: /Add Trade/ })).not.toBeInTheDocument());
+});
+
+test('Reports surfaces setup context, coverage, custom emotion, and saved-risk R data', async () => {
+  const bucket = (label, pnl = 50) => ({
+    key: label,
+    label,
+    trades: 1,
+    net_pnl: pnl,
+    avg_pnl: pnl,
+    median_pnl: pnl,
+    win_rate: pnl > 0 ? 100 : 0,
+    wins: pnl > 0 ? 1 : 0,
+    losses: pnl < 0 ? 1 : 0,
+    avg_win: pnl > 0 ? pnl : 0,
+    avg_loss: pnl < 0 ? pnl : 0,
+    profit_factor: null,
+    big_losses: 0,
+    exit_efficiency: 71.8,
+    avg_mae: -20,
+  });
+  reportsApi.get.mockResolvedValue({
+    data: {
+      has_data: true,
+      trade_count: 191,
+      summary: {
+        net_pnl: 4340.34,
+        max_drawdown: -500,
+        max_drawdown_date: '2026-09-09',
+        best_day: 700,
+        worst_day: -500,
+        trading_days: 20,
+        green_days: 12,
+        red_days: 8,
+        avg_green_day: 300,
+        avg_red_day: -200,
+        longest_win_streak: 4,
+        longest_loss_streak: 2,
+        avg_trades_per_day: 9.6,
+      },
+      equity_curve: [],
+      by_month: [],
+      by_setup: [bucket('Outside Day')],
+      by_strategy: [bucket('LE E-Entry')],
+      by_symbol: [bucket('NVDA')],
+      by_side: [bucket('LONG')],
+      by_instrument: [bucket('OPTION')],
+      by_management: [bucket('Scaled out')],
+      by_emotion: [bucket('Focused')],
+      by_source: [bucket('Scanner')],
+      by_day_of_week: [bucket('Friday')],
+      by_session: [bucket('09:45-10:30')],
+      by_hold_time: [bucket('15-30 min')],
+      by_tag: {
+        setup: [bucket('Outside Day'), bucket('PDH Break')],
+        mistake: [bucket('Entered Too Close to Resistance', -25)],
+      },
+      coverage: {
+        total_trades: 191,
+        setup: 2,
+        setup_context: 2,
+        strategy: 1,
+        source: 1,
+        emotion: 1,
+        execution_tags: 0,
+        mistake_tags: 1,
+        entry_time: 191,
+        hold_time: 191,
+        management: 191,
+        realized_r: 1,
+        mfe_mae: 189,
+        exit_efficiency: 100,
+      },
+    },
+  });
+  edgeReportApi.get.mockResolvedValue({
+    data: {
+      r_multiple_dist: [{ bucket: '0.5', count: 1 }],
+      emotion_outcomes: [{ state: 'Focused', trade_count: 1, win_rate: 100, avg_pnl: 50, avg_r: 0.5 }],
+      hold_time: { winners_avg_min: 25, losers_avg_min: 10 },
+      mistake_frequency: [{ mistake: 'Entered Too Close to Resistance', count: 1 }],
+    },
+  });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Reports' }));
+  const tablist = await screen.findByRole('tablist');
+
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Setups & Strategy' }));
+  expect(await screen.findByText('Data coverage')).toBeVisible();
+  expect(screen.getByText('Setup Context Performance')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Table' }));
+  expect(screen.getAllByText('Outside Day').length).toBeGreaterThan(0);
+  expect(screen.getByText('PDH Break')).toBeVisible();
+  expect(screen.getByText('LE E-Entry')).toBeVisible();
+
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Psychology' }));
+  expect(screen.getAllByText('Focused').length).toBeGreaterThan(0);
+  expect(screen.getByText('Mistake Frequency')).toBeVisible();
+
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Execution' }));
+  const realizedR = screen.getByText('Realized R').closest('.report-coverage-item');
+  expect(realizedR).toBeTruthy();
+  expect(within(realizedR).getByText('1 / 191')).toBeVisible();
 });
 
 test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key navigation', async () => {

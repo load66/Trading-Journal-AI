@@ -47,7 +47,7 @@ const barTip = ({ active, payload, label }) => {
 
 
 export function RMultipleDist({ data }) {
-  if (!data || data.every(d => d.count === 0)) return <NoData msg="No R-multiple data. Log stop loss and fill in R-multiple per trade." />;
+  if (!data || data.every(d => d.count === 0)) return <NoData msg="No Realized R data yet. Save planned risk on trades so the journal can calculate P&L ÷ risk." />;
   const filtered = data.filter(d => d.count > 0);
   return (
     <ResponsiveContainer width="100%" height={200}>
@@ -69,7 +69,7 @@ export function RMultipleDist({ data }) {
 }
 
 export function EmotionTable({ data }) {
-  if (!data || data.length === 0) return <NoData msg="No emotion data. Log emotional state per trade." />;
+  if (!data || data.length === 0) return <NoData msg="No emotion data yet. Add an Emotion tag or Emotional State during review." />;
 
   return (
     <div className="scroll-x">
