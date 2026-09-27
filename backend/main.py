@@ -1617,8 +1617,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     Profit Capture / Risk During Trade diagnosis.
     """
     sql = (
-        "SELECT instrument_type, net_pnl, mfe_pct, mae_pct, exit_efficiency, "
-        "excursion_basis, date FROM trades WHERE net_pnl IS NOT NULL"
+        "SELECT instrument_type, net_pnl, executions, mfe_pct, mae_pct, exit_efficiency, "
+        "excursion_basis, excursion_version, date FROM trades WHERE net_pnl IS NOT NULL"
     )
     params = []
     if account_id is not None:
@@ -1627,7 +1627,11 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         sql += " AND date >= ?"; params.append(date_from)
     if date_to:
         sql += " AND date <= ?"; params.append(date_to)
-    all_rows = conn.execute(sql, params).fetchall()
+    all_rows = [
+        row_to_dict(r)
+        for r in conn.execute(sql, params).fetchall()
+    ]
+    all_rows = [r for r in all_rows if trade_is_closed(r)]
     if not all_rows:
         return {
             "excursion_n": 0,
@@ -1642,6 +1646,7 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     rows = [
         r for r in all_rows
         if r["excursion_basis"] in valid_bases
+        and str(r.get("excursion_version") or "") == EXCURSION_ENGINE_VERSION
         and r["mfe_pct"] is not None
         and r["mae_pct"] is not None
     ]
@@ -1761,30 +1766,8 @@ def _edge_clean_label(value) -> str | None:
 
 
 def _edge_trade_is_closed(trade: dict) -> bool:
-    """Require realized P&L and reject positions that are still open.
-
-    Some legacy/manual rows may not have execution detail, so a populated
-    net_pnl remains the fallback closed-trade signal. When execution detail is
-    present, quantity balance is authoritative.
-    """
-    if trade.get("net_pnl") is None:
-        return False
-
-    raw = trade.get("executions") or []
-    if isinstance(raw, str):
-        try:
-            executions = json.loads(raw)
-        except Exception:
-            executions = []
-    else:
-        executions = raw if isinstance(raw, list) else []
-
-    if not executions:
-        return True
-
-    probe = dict(trade)
-    probe["executions"] = executions
-    return not _is_open_position(probe)
+    """Use the same quantity-balance rule as every other performance surface."""
+    return trade_is_closed(trade)
 
 
 def _context_edge_breakdowns(conn, trades: list[dict]) -> dict:
