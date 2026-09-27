@@ -1701,8 +1701,9 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     Profit Capture / Risk During Trade diagnosis.
     """
     sql = (
-        "SELECT instrument_type, net_pnl, mfe_pct, mae_pct, exit_efficiency, "
-        "excursion_basis, date FROM trades WHERE net_pnl IS NOT NULL"
+        "SELECT instrument_type, side, net_pnl, executions, mfe_pct, mae_pct, "
+        "exit_efficiency, excursion_basis, excursion_version, date "
+        "FROM trades WHERE net_pnl IS NOT NULL"
     )
     params = []
     if account_id is not None:
@@ -1711,7 +1712,9 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         sql += " AND date >= ?"; params.append(date_from)
     if date_to:
         sql += " AND date <= ?"; params.append(date_to)
-    all_rows = conn.execute(sql, params).fetchall()
+    all_rows = canonical_completed_trades(
+        [row_to_dict(row) for row in conn.execute(sql, params).fetchall()]
+    )
     if not all_rows:
         return {
             "excursion_n": 0,
@@ -1725,14 +1728,15 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     valid_bases = {"stock_1m", "option_premium_1m"}
     rows = [
         r for r in all_rows
-        if r["excursion_basis"] in valid_bases
-        and r["mfe_pct"] is not None
-        and r["mae_pct"] is not None
+        if r.get("excursion_basis") in valid_bases
+        and r.get("excursion_version") == EXCURSION_ALGORITHM_VERSION
+        and r.get("mfe_pct") is not None
+        and r.get("mae_pct") is not None
     ]
-    wins_all = [r for r in all_rows if (r["net_pnl"] or 0) > 0]
-    wins = [r for r in rows if (r["net_pnl"] or 0) > 0]
-    losses = [r for r in rows if (r["net_pnl"] or 0) < 0]
-    capture_rows = [r for r in wins if r["exit_efficiency"] is not None]
+    wins_all = [r for r in all_rows if (r.get("net_pnl") or 0) > 0]
+    wins = [r for r in rows if (r.get("net_pnl") or 0) > 0]
+    losses = [r for r in rows if (r.get("net_pnl") or 0) < 0]
+    capture_rows = [r for r in wins if r.get("exit_efficiency") is not None]
 
     def avg(vals):
         vals = [float(v) for v in vals if v is not None]
@@ -1757,34 +1761,34 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
     capture_n = len(capture_rows)
     management_coverage = round(excursion_n / total_n * 100, 1) if total_n else 0.0
     capture_coverage = round(capture_n / len(wins_all) * 100, 1) if wins_all else 0.0
-    excursion_dates = sorted({r["date"] for r in rows if r["date"]})
-    capture_dates = sorted({r["date"] for r in capture_rows if r["date"]})
+    excursion_dates = sorted({r.get("date") for r in rows if r.get("date")})
+    capture_dates = sorted({r.get("date") for r in capture_rows if r.get("date")})
 
     return {
-        "exit_efficiency": avg([r["exit_efficiency"] for r in capture_rows]),
-        "exit_efficiency_median": med([r["exit_efficiency"] for r in capture_rows]),
-        "avg_mfe": avg([r["mfe_pct"] for r in rows]),
-        "avg_mae": avg([r["mae_pct"] for r in rows]),
-        "median_mfe": med([r["mfe_pct"] for r in rows]),
-        "median_mae": med([r["mae_pct"] for r in rows]),
-        "winner_median_mfe": med([r["mfe_pct"] for r in wins]),
-        "loser_median_mfe": med([r["mfe_pct"] for r in losses]),
-        "winner_median_mae": med([r["mae_pct"] for r in wins]),
-        "loser_median_mae": med([r["mae_pct"] for r in losses]),
+        "exit_efficiency": avg([r.get("exit_efficiency") for r in capture_rows]),
+        "exit_efficiency_median": med([r.get("exit_efficiency") for r in capture_rows]),
+        "avg_mfe": avg([r.get("mfe_pct") for r in rows]),
+        "avg_mae": avg([r.get("mae_pct") for r in rows]),
+        "median_mfe": med([r.get("mfe_pct") for r in rows]),
+        "median_mae": med([r.get("mae_pct") for r in rows]),
+        "winner_median_mfe": med([r.get("mfe_pct") for r in wins]),
+        "loser_median_mfe": med([r.get("mfe_pct") for r in losses]),
+        "winner_median_mae": med([r.get("mae_pct") for r in wins]),
+        "loser_median_mae": med([r.get("mae_pct") for r in losses]),
         "winner_mae_le_20_pct": round(
-            100.0 * sum(1 for r in wins if float(r["mae_pct"]) <= 20) / len(wins), 1
+            100.0 * sum(1 for r in wins if float(r.get("mae_pct")) <= 20) / len(wins), 1
         ) if wins else None,
         "loser_mfe_le_5_pct": round(
-            100.0 * sum(1 for r in losses if float(r["mfe_pct"]) <= 5) / len(losses), 1
+            100.0 * sum(1 for r in losses if float(r.get("mfe_pct")) <= 5) / len(losses), 1
         ) if losses else None,
         "loser_mfe_le_10_pct": round(
-            100.0 * sum(1 for r in losses if float(r["mfe_pct"]) <= 10) / len(losses), 1
+            100.0 * sum(1 for r in losses if float(r.get("mfe_pct")) <= 10) / len(losses), 1
         ) if losses else None,
         "loser_mae_ge_25_pct": round(
-            100.0 * sum(1 for r in losses if float(r["mae_pct"]) >= 25) / len(losses), 1
+            100.0 * sum(1 for r in losses if float(r.get("mae_pct")) >= 25) / len(losses), 1
         ) if losses else None,
-        "avg_mae_win": avg([r["mae_pct"] for r in wins]),
-        "avg_mae_loss": avg([r["mae_pct"] for r in losses]),
+        "avg_mae_win": avg([r.get("mae_pct") for r in wins]),
+        "avg_mae_loss": avg([r.get("mae_pct") for r in losses]),
         "excursion_n": excursion_n,
         "excursion_total_trades": total_n,
         "management_coverage_pct": management_coverage,
@@ -1797,8 +1801,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         "capture_days": len(capture_dates),
         "excursion_first_date": excursion_dates[0] if excursion_dates else None,
         "excursion_last_date": excursion_dates[-1] if excursion_dates else None,
-        "excursion_stock_n": sum(1 for r in rows if r["instrument_type"] == "STOCK"),
-        "excursion_option_n": sum(1 for r in rows if r["instrument_type"] == "OPTION"),
+        "excursion_stock_n": sum(1 for r in rows if r.get("instrument_type") == "STOCK"),
+        "excursion_option_n": sum(1 for r in rows if r.get("instrument_type") == "OPTION"),
         "excursion_future_n": 0,
         "management_primary_source": "broker_csv",
         "market_path_source": "alpaca_actual_instrument_1m",
@@ -2574,6 +2578,11 @@ def _excursion_is_stale(trade: dict) -> bool:
         or trade.get("mae_pct") is None
         or not expected
         or str(trade.get("excursion_basis") or "") != expected
+        or str(trade.get("excursion_version") or "") != EXCURSION_ALGORITHM_VERSION
+        or (
+            float(trade.get("net_pnl") or 0) <= 0
+            and trade.get("exit_efficiency") is not None
+        )
     )
 
 
@@ -2586,7 +2595,7 @@ async def _calculate_excursions_for_date(
     sql = """
         SELECT id, account_id, trade_group, date, ticker, instrument_type, side,
                net_pnl, executions, option_type, option_expiry, option_strike,
-               mfe_pct, mae_pct, exit_efficiency, excursion_basis
+               mfe_pct, mae_pct, exit_efficiency, excursion_basis, excursion_version
         FROM trades
         WHERE date = ?
     """
@@ -2649,7 +2658,7 @@ async def _calculate_excursions_for_date(
             conn.execute(
                 """UPDATE trades
                    SET mfe_pct=?, mae_pct=?, exit_efficiency=?,
-                       excursion_basis=?, excursion_calculated_at=?
+                       excursion_basis=?, excursion_calculated_at=?, excursion_version=?
                    WHERE id=?""",
                 (
                     metric["mfe_pct"],
@@ -2657,6 +2666,7 @@ async def _calculate_excursions_for_date(
                     metric["exit_efficiency"],
                     metric["basis"],
                     calculated_at,
+                    metric["algorithm_version"],
                     trade["id"],
                 ),
             )
@@ -2693,7 +2703,7 @@ async def _calculate_excursions_for_date(
             conn.execute(
                 """UPDATE trades
                    SET mfe_pct=?, mae_pct=?, exit_efficiency=?,
-                       excursion_basis=?, excursion_calculated_at=?
+                       excursion_basis=?, excursion_calculated_at=?, excursion_version=?
                    WHERE id=?""",
                 (
                     metric["mfe_pct"],
@@ -2701,6 +2711,7 @@ async def _calculate_excursions_for_date(
                     metric["exit_efficiency"],
                     metric["basis"],
                     calculated_at,
+                    metric["algorithm_version"],
                     trade["id"],
                 ),
             )
