@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, Maximize2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload } from 'lucide-react';
 import { tradesApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
@@ -1617,6 +1618,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   className="td-chart-preview"
                   onClick={() => setChartScreenshotExpanded(true)}
                   title="Open screenshot full screen"
+                  aria-label="Open chart screenshot full screen"
                   aria-haspopup="dialog"
                   style={{
                     width: 800,
@@ -1635,7 +1637,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       objectFit: 'contain',
                     }}
                   />
-                  <span><Maximize2 size={13} /> Open full screen</span>
                 </button>
                 <div
                   className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom"
@@ -1728,12 +1729,13 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
       </div>
 
-      {chartScreenshotExpanded && chartScreenshotUrl && (
+      {chartScreenshotExpanded && chartScreenshotUrl && typeof document !== 'undefined' && createPortal(
         <div
           className="td-image-modal"
           role="dialog"
           aria-modal="true"
           aria-label="TradingView screenshot"
+          data-testid="chart-screenshot-lightbox"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setChartScreenshotExpanded(false);
           }}
@@ -1751,7 +1753,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             src={chartScreenshotUrl}
             alt={`${trade.ticker} TradingView review screenshot full screen`}
           />
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
