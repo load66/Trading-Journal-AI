@@ -262,7 +262,7 @@ export function DayMeasures({ kpis, trades, summary, allTime }) {
           label: 'Review flags',
           value: String(breaks),
           amber: breaks > 0,
-          read: breaks ? 'Evidence-backed coaching flags below' : 'No verified coaching flags',
+          read: breaks ? 'Mechanical execution flags detected below' : 'No mechanical execution flags',
         },
       ]}
     />
@@ -292,7 +292,7 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
         <div className="v3-sec-head">
           <div>
             <h2 className="v3-h">Coaching</h2>
-            <p className="v3-h-sub">Analyzing the session and checking the current evidence…</p>
+            <p className="v3-h-sub">Analyzing the complete trading session…</p>
           </div>
         </div>
         <div className="skeleton" style={{ height: 15, width: '92%', marginBottom: 10 }} />
@@ -340,23 +340,28 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
 
   if (!summary) return <div className="v3-empty">No review for this day yet.</div>;
 
-  const obs = summary.observations || {};
-  const wrap = (rows, fallbackEvidence = null) => (rows || []).map((r) =>
-    typeof r === 'string' ? { text: r, evidence: fallbackEvidence } : r
+  const wrap = (rows) => (rows || []).map((r) =>
+    typeof r === 'string' ? { text: r } : r
   );
+  const executionFlags = (summary.behavior_flags || []).map((f) => ({
+    text: `${f.title}: ${f.detail}`,
+  }));
+  const recordedRows = wrap(summary.recorded_observations || []);
   const lists = {
-    strengths: obs.strengths?.length ? obs.strengths : wrap(summary.strengths, summary.evidence_locked ? 'VERIFIED' : null),
-    mistakes: obs.mistakes?.length ? obs.mistakes : wrap(summary.mistakes),
-    focus: obs.focus?.length ? obs.focus : wrap(summary.coaching),
-    patterns: obs.patterns?.length ? obs.patterns : wrap(summary.patterns),
-    recorded: obs.recorded || [],
+    strengths: wrap(summary.strengths),
+    mistakes: wrap(summary.mistakes),
+    focus: wrap((summary.coaching?.length ? summary.coaching : summary.tomorrow_focus) || []),
+    patterns: wrap(summary.patterns),
+    execution_flags: executionFlags,
+    recorded: recordedRows,
   };
   const tabs = [
     { id: 'strengths', label: 'Strengths' },
-    { id: 'mistakes', label: 'Flags' },
+    { id: 'mistakes', label: 'Mistakes' },
     { id: 'focus', label: 'Tomorrow’s focus' },
     { id: 'patterns', label: 'Patterns' },
-    ...(lists.recorded.length ? [{ id: 'recorded', label: 'Recorded' }] : []),
+    ...(executionFlags.length ? [{ id: 'execution_flags', label: 'Execution flags' }] : []),
+    ...(recordedRows.length ? [{ id: 'recorded', label: 'Recorded' }] : []),
   ];
   const rows = lists[tab] || [];
 
@@ -368,8 +373,7 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
           <p className="v3-h-sub">
             Written against your trades and your diary together, and graded on process
             {summary.ai_provider ? ` · ${summary.ai_provider === 'groq' ? 'Groq' : 'Anthropic'} · ${summary.ai_model || ''}` : ''}
-            {summary.evidence_locked ? ' · Evidence-locked' : ''}
-            {summary.cached && summary.cache_reason === 'evidence_unchanged' ? ' · Saved diagnosis · evidence unchanged' : ''}
+                        {summary.cached && summary.cache_reason === 'evidence_unchanged' ? ' · Saved diagnosis · evidence unchanged' : ''}
             {!summary.cached && summary.regeneration_reason === 'manual_override' ? ' · Manually refreshed' : ''}
           </p>
         </div>
@@ -383,9 +387,7 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
       <div className="v3-cols">
         {summary.narrative && <p className="v3-narr">{summary.narrative}</p>}
         {summary.mental_game && (
-          <p className="v3-narr v3-narr-quiet">
-            <EvidenceBadge level={obs.mental_game?.evidence || (summary.evidence_locked ? 'INSUFFICIENT DATA' : null)} /> {summary.mental_game}
-          </p>
+          <p className="v3-narr v3-narr-quiet">{summary.mental_game}</p>
         )}
       </div>
 
@@ -393,13 +395,13 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
         <Tabs tabs={tabs} active={tab} onChange={setTab} label="Review detail" />
         {!rows.length ? (
           <div className="v3-empty">
-            {tab === 'mistakes' ? 'No deterministic behavior flags on this day.' : 'Nothing recorded here.'}
+            {tab === 'mistakes' ? 'No mistakes identified in this diagnosis.' : 'Nothing recorded here.'}
           </div>
         ) : tab === 'patterns' ? (
           <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
             {rows.map((r, i) => (
               <span className="v3-chip" key={i} style={{ whiteSpace: 'normal' }}>
-                <EvidenceBadge level={r.evidence} /> {r.text}
+                {r.text}
               </span>
             ))}
           </div>
@@ -407,7 +409,7 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
           <ul className="v3-list v3-cols">
             {rows.map((r, i) => (
               <li key={i} className={tab === 'mistakes' ? 'bad' : tab === 'focus' ? 'next' : 'good'}>
-                <EvidenceBadge level={r.evidence} /> {r.text}
+                {r.text}
               </li>
             ))}
           </ul>
