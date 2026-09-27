@@ -169,6 +169,31 @@ def test_strengths_are_deterministic_numbers():
     assert all(o["evidence"] == "VERIFIED" for o in obs)
 
 
+
+def test_strengths_ignore_legacy_option_underlying_efficiency():
+    row = {
+        "trade_group": "legacy",
+        "date": "2026-09-25",
+        "ticker": "TSM",
+        "instrument_type": "OPTION",
+        "option_type": "CALL",
+        "side": "LONG",
+        "net_pnl": 65.94,
+        "exit_efficiency": -12600.0,
+        "excursion_basis": "underlying_1m",
+        "executions": [
+            fill("2026-09-25", "09:30:10", "BOT", 1, 1.00),
+            fill("2026-09-25", "09:32:20", "SOLD", 1, 1.25),
+        ],
+    }
+    observations = deterministic_strengths([row], {
+        "total_net_pnl": 0,
+        "profit_factor": None,
+        "avg_win": 0,
+        "avg_loss": 0,
+    })
+    assert all("exit efficiency" not in o["text"].lower() for o in observations)
+
 def test_stock_excursion_does_not_look_ahead_to_later_scale_in():
     d = "2026-09-25"
     trade = {
