@@ -2180,7 +2180,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           )}
         </div>
         <div className="td-image-modal-hint">
-          Click or tap outside the chart to close
+          Click outside the chart or press Esc to close
         </div>
         <button
           type="button"
