@@ -568,6 +568,27 @@ test('trade screenshot can be pasted from clipboard without saving a local file'
   expect(formData.get('file').type).toBe('image/webp');
 });
 
+test('saved chart screenshot sits below Tags as a compact click-to-enlarge preview', async () => {
+  tradesApi.getAnalysis.mockResolvedValue({
+    data: {
+      analysis: { chart_screenshot_path: 'trade-review/test/chart.webp' },
+      tags: [{ id: 1, tag_type: 'setup', tag_value: 'PDH Break' }],
+    },
+  });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
+  fireEvent.click(row);
+
+  expect(await screen.findByText('Tags')).toBeVisible();
+  const preview = await screen.findByTitle('Click to enlarge');
+  expect(preview).toBeVisible();
+  fireEvent.click(preview);
+  expect(await screen.findByRole('dialog', { name: 'TradingView screenshot' })).toBeVisible();
+});
+
 test('guided Review quick picks generate journal text and actionable correction', async () => {
   tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: {}, tags: [] } });
 
