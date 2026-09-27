@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { kpisApi, tradesApi, edgeReportApi, goalsApi, smokingGunLibraryApi, excursionApi } from '../api';
+import { kpisApi, tradesApi, edgeReportApi, goalsApi, smokingGunLibraryApi, excursionApi, tradeManagementAnalysisApi } from '../api';
 import DateRangePicker from './DateRangePicker';
 import DashboardRender from '../v3/DashboardRender';
 import {
@@ -80,6 +80,9 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   const [managementKpis, setManagementKpis] = useState(null);
   const [managementEdge, setManagementEdge] = useState(null);
   const [managementError, setManagementError] = useState('');
+  const [managementAi, setManagementAi] = useState(null);
+  const [managementAiLoading, setManagementAiLoading] = useState(false);
+  const [managementAiError, setManagementAiError] = useState('');
   const [latestSmokingGun, setLatestSmokingGun] = useState(null);
   // Bumped after a write so every panel refetches; also drives Retry.
   const [reloadKey, setReloadKey] = useState(0);
@@ -90,6 +93,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   const recentRun = useRef(0);
   const managementActiveKey = useRef(null);
   const managementBackfillKey = useRef(null);
+  const managementAiRun = useRef(0);
   const smokingGunRun = useRef(0);
 
   useEffect(() => {
@@ -139,7 +143,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   }, [accountId, reloadKey]);
 
 
-  useEffect(() => {
+  const buildManagementParams = useCallback(() => {
     const params = {};
     if (accountId != null) params.account_id = accountId;
 
@@ -155,7 +159,11 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       params.date_from = start.toISOString().slice(0, 10);
       params.date_to = latestTradeDate;
     }
+    return params;
+  }, [accountId, managementRange, recentTrades, kpis]);
 
+  useEffect(() => {
+    const params = buildManagementParams();
     const requestKey = [
       accountId == null ? 'all' : accountId,
       managementRange,
@@ -197,22 +205,56 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
 
     if (params.date_from && params.date_to) {
       const backfillKey = requestKey;
-
       if (managementBackfillKey.current !== backfillKey) {
         managementBackfillKey.current = backfillKey;
         excursionApi.calculateRange(params)
           .then(() => loadManagement())
           .then(applyIfActive)
           .catch(() => {
-            // Allow a later render/retry to attempt the supplemental backfill
-            // again if this request failed.
             if (managementBackfillKey.current === backfillKey) {
               managementBackfillKey.current = null;
             }
           });
       }
     }
-  }, [accountId, managementRange, recentTrades, kpis, reloadKey]);
+  }, [accountId, managementRange, buildManagementParams, reloadKey]);
+
+  useEffect(() => {
+    managementAiRun.current += 1;
+    setManagementAi(null);
+    setManagementAiError('');
+    setManagementAiLoading(false);
+  }, [accountId, managementRange]);
+
+  const handleManagementAi = useCallback(async (force = false) => {
+    const run = ++managementAiRun.current;
+    const params = {
+      ...buildManagementParams(),
+      range: managementRange,
+    };
+    if (force) params.force = true;
+
+    setManagementAiLoading(true);
+    setManagementAiError('');
+    try {
+      const response = await tradeManagementAnalysisApi.get(params);
+      if (run !== managementAiRun.current) return;
+      setManagementAi(response.data);
+      if (response.data?.unavailable) {
+        setManagementAiError(response.data?.diagnosis || 'AI management review is unavailable.');
+      }
+    } catch (e) {
+      if (run !== managementAiRun.current) return;
+      setManagementAiError(
+        e?.response?.data?.detail
+          || e?.response?.data?.error
+          || e?.message
+          || 'Could not generate the AI management review.'
+      );
+    } finally {
+      if (run === managementAiRun.current) setManagementAiLoading(false);
+    }
+  }, [buildManagementParams, managementRange]);
 
   useEffect(() => {
     const run = ++smokingGunRun.current;
@@ -282,6 +324,10 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
           managementKpis={managementKpis}
           managementEdge={managementEdge}
           managementError={managementError}
+          managementAi={managementAi}
+          managementAiLoading={managementAiLoading}
+          managementAiError={managementAiError}
+          onManagementAiGenerate={handleManagementAi}
           latestSmokingGun={latestSmokingGun}
           onViewSmokingGun={onViewSmokingGun}
           showGoals={showGoals}
