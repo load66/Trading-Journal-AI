@@ -572,22 +572,22 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   expect(await screen.findByRole('heading', { name: /Trade management/i })).toBeVisible();
   expect(screen.getByText('Total net P&L')).toBeVisible();
   expect(screen.getByText(/How well do you manage trades after you enter/i)).toBeVisible();
-  expect(screen.getByText('Profit capture')).toBeVisible();
-  expect(screen.getByText('Holding behavior')).toBeVisible();
-  expect(screen.getByText('Left on table')).toBeVisible();
-  expect(screen.getByText('Risk during trade')).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Profit capture/i })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Holding behavior/i })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Profit vs\. left on table/i })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Risk during trade/i })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Bottom line/i })).toBeVisible();
   expect(screen.getByText('ABOVE GOAL')).toBeVisible();
-  expect(screen.getAllByText('What it means:').length).toBeGreaterThanOrEqual(4);
-  // The dashboard presents each decision-making value once. The left-on-table
-  // card complements profit capture without repeating the capture percentage.
+  expect(screen.getByText('64% Captured')).toBeVisible();
+  expect(screen.getByText('36% Left')).toBeVisible();
   expect(screen.getAllByText('+$4340.34')).toHaveLength(1);
-  expect(screen.getAllByText('64%')).toHaveLength(1);
+  expect(screen.getAllByText('64%').length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText('36%')).toBeVisible();
   const captureMeter = screen.getByRole('meter', { name: 'Profit capture' });
   expect(captureMeter).toHaveAttribute('aria-valuenow', '64');
   expect(captureMeter).toHaveAttribute('aria-valuetext', '64% exit efficiency; goal 60%');
+  expect(screen.getByText(/You’re doing a good job capturing winners/i)).toBeVisible();
   expect(screen.getByText('Cumulative net P&L')).toBeVisible();
-  expect(screen.queryByText('Profit vs. left on table')).not.toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i })).toBeVisible();
   expect(screen.getByText('Diagnosis')).toBeVisible();
   expect(screen.getByText('Mechanical action plan')).toBeVisible();
