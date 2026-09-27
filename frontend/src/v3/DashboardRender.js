@@ -711,7 +711,7 @@ export default function DashboardRender(p) {
           'Exit efficiency',
           exitEfficiency,
           goalValue('exit_efficiency', 60),
-          <>You capture <b>{exitEfficiency.toFixed(0)}%</b> of the favorable move on covered winning trades.</>,
+          'You capture ' + exitEfficiency.toFixed(0) + '% of the favorable move on covered winning trades.',
           true
         )
       : {
