@@ -24,11 +24,9 @@ function chartTheme() {
     up: cssVar('--result-pos', '#66D7AC'),
     down: cssVar('--result-neg', '#F28B94'),
     vwap: cssVar('--text-secondary', '#96A4B6'),
-    ema8: '#F5C451',
+    ema8: '#2F8CFF',
     prevLevel: cssVar('--accent-line', '#91A8FF'),
     premarketLevel: cssVar('--caution', '#E9BA78'),
-    stop: cssVar('--caution', '#E9BA78'),
-    target: cssVar('--accent-line', '#91A8FF'),
   };
 }
 
@@ -227,7 +225,7 @@ const SESSION_TFS = new Set(['1Min', '3Min', '5Min', '10Min', '15Min']);
 // times parse as literal UTC.
 const etWallTs = (dateStr, hhmm) => Math.floor(new Date(`${dateStr}T${hhmm}:00Z`).getTime() / 1000);
 // Legend entries that can be switched on and off. Not remembered between trades.
-const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, ema8: true, prevLevels: true, premarketLevels: true, sl: true, target: true };
+const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, ema8: true, prevLevels: true, premarketLevels: true };
 
 // Show or hide the toggleable layers on an existing chart.
 function applyLayers(layers, visible) {
@@ -242,8 +240,6 @@ function applyLayers(layers, visible) {
       title: shown ? name : '',
     });
   });
-  if (layers.sl) layers.sl.applyOptions({ lineVisible: visible.sl, axisLabelVisible: visible.sl, title: visible.sl ? 'SL' : '' });
-  if (layers.target) layers.target.applyOptions({ lineVisible: visible.target, axisLabelVisible: visible.target, title: visible.target ? 'Target' : '' });
   if (layers.candles) {
     const shown = layers.markers
       .filter(m => (m.isBuy ? visible.buy : visible.sell))
@@ -272,7 +268,7 @@ export default function TradingChart({
   const visibleRef = useRef(DEFAULT_VISIBLE);
   // Handles to everything a legend toggle controls, so toggling never rebuilds
   // the chart (and never loses the current zoom).
-  const layersRef = useRef({ candles: null, vwap: [], ema8: null, levels: [], markers: [], sl: null, target: null });
+  const layersRef = useRef({ candles: null, vwap: [], ema8: null, levels: [], markers: [] });
   // Set right before a zoom-out-triggered fetch, holding the visible window so
   // it can be restored once the wider dataset lands — otherwise the chart would
   // jump back to fitContent() every time more history streams in.
@@ -351,7 +347,7 @@ export default function TradingChart({
 
     const barTs = isWide ? toDayTs : toTs;
     const T = chartTheme();
-    layersRef.current = { candles: null, vwap: [], ema8: null, levels: [], markers: [], sl: null, target: null };
+    layersRef.current = { candles: null, vwap: [], ema8: null, levels: [], markers: [] };
 
     const chart = createChart(containerRef.current, {
       layout: {
@@ -480,7 +476,7 @@ export default function TradingChart({
       color: b.c >= b.o ? withAlpha(T.up, 0.32) : withAlpha(T.down, 0.32),
     })));
 
-    // ── Price lines: entry, exit, stop, target ────────────────────────────
+    // ── Price lines: entry and exit ──────────────────────────────────────
     const entryFills = executions.filter(e => side === 'LONG' ? e.action === 'BOT' : e.action === 'SOLD');
     const exitFills  = executions.filter(e => side === 'LONG' ? e.action === 'SOLD' : e.action === 'BOT');
     const ae = avgPrice(entryFills);
@@ -488,8 +484,6 @@ export default function TradingChart({
 
     if (ae) candleSeries.createPriceLine({ price: ae, color: T.up, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'Entry' });
     if (ax) candleSeries.createPriceLine({ price: ax, color: T.down, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'Exit' });
-    if (analysis?.stop_loss) layersRef.current.sl = candleSeries.createPriceLine({ price: Number(analysis.stop_loss), color: T.stop, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: 'SL' });
-    if (analysis?.target_price) layersRef.current.target = candleSeries.createPriceLine({ price: Number(analysis.target_price), color: T.target, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: 'Target' });
 
     // ── LE reference levels: PDH / PDL / PMH / PML ─────────────────────
     // These are fetched from the same deterministic SIP-first LE engine used
@@ -603,22 +597,13 @@ export default function TradingChart({
   const toggle = (key) => setVisible(v => ({ ...v, [key]: !v[key] }));
   const hasPrevLevels = ['PDH', 'PDL'].some(k => Number.isFinite(Number(leLevels?.[k])));
   const hasPremarketLevels = ['PMH', 'PML'].some(k => Number.isFinite(Number(leLevels?.[k])));
-  const feedLabel = levelFeed === 'sip'
-    ? 'SIP'
-    : levelFeed === 'delayed_sip'
-      ? 'Delayed SIP'
-      : levelFeed === 'iex'
-        ? 'IEX fallback'
-        : levelFeed ? String(levelFeed).toUpperCase() : null;
   const legendItems = [
     { key: 'buy', label: 'Buy fill', swatch: { width: 9, height: 9, borderRadius: '50%', background: 'var(--result-pos)' } },
     { key: 'sell', label: 'Sell fill', swatch: { width: 9, height: 9, borderRadius: '50%', background: 'var(--result-neg)' } },
     !isWide && { key: 'vwap', label: 'VWAP', swatch: { width: 16, height: 2, background: 'var(--text-secondary)' } },
-    timeframe === '10Min' && { key: 'ema8', label: '8 EMA', swatch: { width: 16, height: 2, background: '#F5C451' } },
+    timeframe === '10Min' && { key: 'ema8', label: '8 EMA', swatch: { width: 16, height: 2, background: '#2F8CFF' } },
     !isWide && hasPrevLevels && { key: 'prevLevels', label: 'PDH / PDL', swatch: { width: 16, height: 2, background: 'var(--accent-line)' } },
     !isWide && hasPremarketLevels && { key: 'premarketLevels', label: 'PMH / PML', swatch: { width: 16, height: 2, borderTop: '2px dashed var(--caution)' } },
-    analysis?.stop_loss && { key: 'sl', label: 'SL', swatch: { width: 16, height: 2, background: 'var(--caution)' } },
-    analysis?.target_price && { key: 'target', label: 'Target', swatch: { width: 16, height: 2, background: 'var(--accent-line)' } },
   ].filter(Boolean);
 
   return (
@@ -685,11 +670,6 @@ export default function TradingChart({
                 {item.label}
               </button>
             ))}
-            {!isWide && feedLabel && (hasPrevLevels || hasPremarketLevels) && (
-              <span className="text-muted" title={levelWarning || undefined} style={{ fontSize: 11.5, marginLeft: 4 }}>
-                LE levels · {feedLabel}
-              </span>
-            )}
           </div>
           {!isWide && executions.length > 0 && (
             <div className="text-muted" style={{ fontSize: 11.5, margin: '3px 0 7px' }}>
