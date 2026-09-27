@@ -23,6 +23,145 @@ FUTURES_MULTIPLIERS = {
 
 DEFAULT_EXECUTION_TIMEZONE = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 
+# Broker/profile defaults are used only when the export itself does not carry
+# timezone metadata. IANA zones are intentional: they apply daylight-saving
+# rules for the execution date instead of hard-coding UTC-5/UTC-6 offsets.
+BROKER_TIMEZONE_DEFAULTS = {
+    "thinkorswim": "America/Chicago",
+    "schwab_transactions": "America/Chicago",
+}
+
+TIMEZONE_ALIASES = {
+    "UTC": "UTC",
+    "GMT": "UTC",
+    "ET": "America/New_York",
+    "EST": "America/New_York",
+    "EDT": "America/New_York",
+    "CT": "America/Chicago",
+    "CST": "America/Chicago",
+    "CDT": "America/Chicago",
+    "MT": "America/Denver",
+    "MST": "America/Denver",
+    "MDT": "America/Denver",
+    "PT": "America/Los_Angeles",
+    "PST": "America/Los_Angeles",
+    "PDT": "America/Los_Angeles",
+}
+
+
+def _valid_iana_timezone(value: str | None) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    alias = TIMEZONE_ALIASES.get(candidate.upper())
+    if alias:
+        return alias
+    try:
+        ZoneInfo(candidate)
+        return candidate
+    except Exception:
+        return None
+
+
+def detect_csv_timezone(
+    content: str,
+    broker: str | None = None,
+    row_timezone: str | None = None,
+) -> dict:
+    """Resolve CSV execution timezone and record how the decision was made.
+
+    Priority:
+      1. explicit row timezone (generic template / broker-specific column)
+      2. explicit IANA timezone in the export
+      3. explicit CSV timezone metadata or a timezone suffix in report metadata
+      4. verified broker profile (Thinkorswim/Schwab -> America/Chicago)
+      5. configured application fallback, marked low-confidence
+
+    A local clock time alone is never treated as proof of a timezone.
+    """
+    if row_timezone:
+        resolved = _valid_iana_timezone(row_timezone)
+        if not resolved:
+            raise ValueError(
+                f"Unsupported timezone '{row_timezone}'. Use an IANA zone such as "
+                "America/Chicago or a supported US abbreviation such as CST/CDT/CT."
+            )
+        return {
+            "timezone": resolved,
+            "method": "row_timezone",
+            "confidence": "high",
+            "evidence": str(row_timezone).strip(),
+        }
+
+    sample = str(content or "")[:20000]
+
+    # Explicit IANA zone anywhere in the export metadata wins.
+    match = re.search(
+        r"\b((?:America|US)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?)\b",
+        sample,
+    )
+    if match:
+        resolved = _valid_iana_timezone(match.group(1))
+        if resolved:
+            return {
+                "timezone": resolved,
+                "method": "csv_iana_timezone",
+                "confidence": "high",
+                "evidence": match.group(1),
+            }
+
+    # Common metadata shapes: Time Zone,CDT  /  Timezone: America/Chicago.
+    meta_match = re.search(
+        r"(?im)(?:^|,|\b)(?:TIME\s*ZONE|TIMEZONE|TZ)\s*[,=:]\s*\"?([A-Za-z_/+-]+)",
+        sample,
+    )
+    if meta_match:
+        resolved = _valid_iana_timezone(meta_match.group(1))
+        if resolved:
+            return {
+                "timezone": resolved,
+                "method": "csv_timezone_metadata",
+                "confidence": "high",
+                "evidence": meta_match.group(1),
+            }
+
+    # IBKR statements commonly include a generated-at timezone suffix. Treat it
+    # as report metadata, not as strong as a dedicated Time Zone field.
+    generated_match = re.search(
+        r"(?im)WhenGenerated[^\n]*?\b(UTC|GMT|E[SD]T|C[SD]T|M[SD]T|P[SD]T)\b",
+        sample,
+    )
+    if generated_match:
+        resolved = _valid_iana_timezone(generated_match.group(1))
+        if resolved:
+            return {
+                "timezone": resolved,
+                "method": "report_timezone_metadata",
+                "confidence": "medium",
+                "evidence": generated_match.group(1).upper(),
+            }
+
+    profile = BROKER_TIMEZONE_DEFAULTS.get(str(broker or "").lower())
+    if profile:
+        return {
+            "timezone": profile,
+            "method": "broker_profile",
+            "confidence": "high",
+            "evidence": str(broker),
+        }
+
+    fallback = _valid_iana_timezone(DEFAULT_EXECUTION_TIMEZONE)
+    if not fallback:
+        raise ValueError(
+            f"Configured TRADE_EXECUTION_TIMEZONE '{DEFAULT_EXECUTION_TIMEZONE}' is invalid."
+        )
+    return {
+        "timezone": fallback,
+        "method": "configured_fallback",
+        "confidence": "low",
+        "evidence": "TRADE_EXECUTION_TIMEZONE/default",
+    }
+
 
 def _time_precision(value: str) -> str:
     raw = str(value or "").strip().upper()
@@ -67,16 +206,41 @@ def attach_execution_timestamp(
     execution: dict,
     source_broker: str,
     source_timezone: str = DEFAULT_EXECUTION_TIMEZONE,
+    timezone_detection_method: str = "configured_fallback",
+    timezone_detection_confidence: str = "low",
+    timezone_detection_evidence: str | None = None,
 ) -> dict:
-    """Attach canonical timestamp + provenance without changing broker-local fields."""
+    """Attach canonical UTC timestamp plus auditable timezone provenance."""
     item = dict(execution)
     iso_date = item.get("iso_date") or normalize_date(str(item.get("date") or ""))
     time_value = str(item.get("time") or "").strip()
+    source_date = str(item.get("source_date") or item.get("date") or iso_date).strip()
+    source_time = str(item.get("source_time") or item.get("time") or "").strip()
     item["source_broker"] = source_broker
     item["source_timezone"] = source_timezone
+    item["source_timestamp"] = item.get("source_timestamp") or f"{source_date} {source_time}".strip()
+    item["timezone_detection_method"] = timezone_detection_method
+    item["timezone_detection_confidence"] = timezone_detection_confidence
+    if timezone_detection_evidence:
+        item["timezone_detection_evidence"] = timezone_detection_evidence
     item["timestamp_precision"] = item.get("timestamp_precision") or _time_precision(time_value)
     item["timestamp_utc"] = canonical_execution_timestamp(iso_date, time_value, source_timezone)
     return item
+
+
+def attach_detected_execution_timestamp(
+    execution: dict,
+    source_broker: str,
+    timezone_info: dict,
+) -> dict:
+    return attach_execution_timestamp(
+        execution,
+        source_broker,
+        source_timezone=timezone_info["timezone"],
+        timezone_detection_method=timezone_info["method"],
+        timezone_detection_confidence=timezone_info["confidence"],
+        timezone_detection_evidence=timezone_info.get("evidence"),
+    )
 
 
 def normalize_date(date_str: str) -> str:
@@ -506,6 +670,14 @@ def aggregate_executions(fills: list[dict]) -> dict:
             item['timestamp_utc'] = f.get('timestamp_utc')
         if f.get('source_timezone'):
             item['source_timezone'] = f.get('source_timezone')
+        if f.get('source_timestamp'):
+            item['source_timestamp'] = f.get('source_timestamp')
+        if f.get('timezone_detection_method'):
+            item['timezone_detection_method'] = f.get('timezone_detection_method')
+        if f.get('timezone_detection_confidence'):
+            item['timezone_detection_confidence'] = f.get('timezone_detection_confidence')
+        if f.get('timezone_detection_evidence'):
+            item['timezone_detection_evidence'] = f.get('timezone_detection_evidence')
         if f.get('source_broker'):
             item['source_broker'] = f.get('source_broker')
         execs.append(item)
@@ -1002,6 +1174,10 @@ def _rebuild_fill_from_db_exec(e: dict, trade_meta: dict) -> dict:
         'timestamp_precision': e.get('timestamp_precision'),
         'timestamp_utc': e.get('timestamp_utc'),
         'source_timezone': e.get('source_timezone'),
+        'source_timestamp': e.get('source_timestamp'),
+        'timezone_detection_method': e.get('timezone_detection_method'),
+        'timezone_detection_confidence': e.get('timezone_detection_confidence'),
+        'timezone_detection_evidence': e.get('timezone_detection_evidence'),
         'source_broker': e.get('source_broker'),
     }
 
