@@ -1915,6 +1915,7 @@ def get_kpis(
 
     trading_days = len(daily)
     positive_days = sum(1 for v in daily.values() if v > 0)
+    negative_days = sum(1 for v in daily.values() if v < 0)
     day_win_rate = round(positive_days / trading_days * 100, 1) if trading_days else 0
 
     cumulative = 0.0
@@ -1967,6 +1968,7 @@ def get_kpis(
         "gross_profit_factor": gross_profit_factor,
         "trading_days": trading_days,
         "positive_days": positive_days,
+        "negative_days": negative_days,
         "day_win_rate": day_win_rate,
         "daily_pnl": daily_pnl,
         "by_instrument": by_instrument,
