@@ -1131,8 +1131,1088 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   <>
                     <StatRow label="Strategy" value={analysis.strategy} valueColor="var(--accent-line)" />
                     <StatRow label="Source" value={analysis.idea_source} valueColor="var(--text-secondary)" />
-                    <StatRow label="Stop Distance" value={analysis.stop_loss ? `${Number(analysis.stop_loss).toFixed(2)}` : null} valueColor="var(--caution)" />
-                    <StatRow label="Target Distance" value={analysis.target_price ? `${Number(analysis.target_price).toFixed(2)}` : null} valueColor="var(--accent-line)" />
+                    <StatRow label="Stop Distance" value={analysis.stop_loss ? '
+                    <StatRow
+                      label="Planned R:R"
+                      value={
+                        Number(analysis.stop_loss) > 0 && Number(analysis.target_price) > 0
+                          ? `1:${(Number(analysis.target_price) / Number(analysis.stop_loss)).toFixed(2)}`
+                          : null
+                      }
+                      valueColor="var(--accent-line)"
+                    />
+                    <StatRow label="Planned Risk" value={plannedRisk ? fmt$(-plannedRisk) : 'Not set'} valueColor={plannedRisk ? 'var(--caution)' : 'var(--text-secondary)'} />
+                    <StatRow label="Realized R" value={realizedR || 'Set planned risk to calculate'} valueColor={realizedRValue == null ? 'var(--text-secondary)' : realizedRValue >= 0 ? 'var(--green)' : 'var(--red)'} />
+                    {/* Excursion: how far the trade went your way and against you,
+                        and how much of the favourable move you actually kept. */}
+                    <StatRow
+                      label="Max Favourable (MFE)"
+                      value={trade.mfe_pct == null ? null : `+${Number(trade.mfe_pct).toFixed(2)}%`}
+                      valueColor="var(--result-pos)"
+                    />
+                    <StatRow
+                      label="Max Adverse (MAE)"
+                      value={trade.mae_pct == null ? null : `${Number(trade.mae_pct).toFixed(2)}%`}
+                      valueColor="var(--result-neg)"
+                    />
+                    <StatRow
+                      label="Exit Efficiency"
+                      value={trade.exit_efficiency == null ? null : `${Number(trade.exit_efficiency).toFixed(1)}%`}
+                      valueColor={trade.exit_efficiency == null ? undefined
+                        : trade.exit_efficiency < 0 ? 'var(--result-neg)'
+                          : trade.exit_efficiency >= 50 ? 'var(--result-pos)' : 'var(--caution)'}
+                    />
+                    <StatRow label="Emotional State" value={analysis.emotional_state} />
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ── Guided trade review tab ─────────────────────────────── */}
+            {tab === 'Review' && (
+              <div className="trade-review-shell">
+                <div className="trade-review-toolbar">
+                  <div>
+                    <div className="trade-review-kicker"><Sparkles size={14} /> Guided journal</div>
+                    <div className="trade-review-toolbar-copy">Use quick picks to document the trade consistently, then add any detail that matters.</div>
+                  </div>
+                  {!editingStrategy ? (
+                    <button
+                      onClick={() => {
+                        setStrategyForm({
+                          entry_reason: analysis?.entry_reason || '',
+                          exit_reason:  analysis?.exit_reason  || '',
+                          mistakes:     analysis?.mistakes     || '',
+                        });
+                        setEditingStrategy(true);
+                      }}
+                      className="btn btn-primary btn-sm"
+                      type="button"
+                    >
+                      <Pencil size={13} /> {(analysis?.entry_reason || analysis?.exit_reason || analysis?.mistakes) ? 'Edit review' : 'Start review'}
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">{savingStrategy ? 'Saving…' : 'Save review'}</button>
+                      <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost btn-sm">Cancel</button>
+                    </div>
+                  )}
+                </div>
+
+                <TradeReviewSummary
+                  trade={trade}
+                  entryReason={editingStrategy ? strategyForm.entry_reason : analysis?.entry_reason}
+                  exitReason={editingStrategy ? strategyForm.exit_reason : analysis?.exit_reason}
+                  mistakes={editingStrategy ? strategyForm.mistakes : analysis?.mistakes}
+                />
+
+                {editingStrategy ? (
+                  <div className="trade-review-editor">
+                    <div className="trade-review-editor-head">
+                      <div>
+                        <h3>Build the review</h3>
+                        <p>Click any suggestion to add it. Click it again to remove it. You can still type your own notes.</p>
+                      </div>
+                    </div>
+
+                    <QuickPickGroup
+                      title="Entry"
+                      subtitle="What justified the entry?"
+                      suggestions={ENTRY_REVIEW_SUGGESTIONS}
+                      value={strategyForm.entry_reason}
+                      onToggle={item => handleReviewSuggestion('entry_reason', item)}
+                      tone="entry"
+                    />
+                    <EditTextarea label="Entry notes" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
+
+                    <QuickPickGroup
+                      title="Exit"
+                      subtitle="How did you manage or close the trade?"
+                      suggestions={EXIT_REVIEW_SUGGESTIONS}
+                      value={strategyForm.exit_reason}
+                      onToggle={item => handleReviewSuggestion('exit_reason', item)}
+                      tone="exit"
+                    />
+                    <EditTextarea label="Exit notes" value={strategyForm.exit_reason} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
+
+                    <QuickPickGroup
+                      title="Mistake / improvement"
+                      subtitle="What should change next time?"
+                      suggestions={MISTAKE_REVIEW_SUGGESTIONS}
+                      value={strategyForm.mistakes}
+                      onToggle={item => handleReviewSuggestion('mistakes', item)}
+                      tone="mistake"
+                    />
+                    <EditTextarea label="Mistake / improvement notes" value={strategyForm.mistakes} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
+                  </div>
+                ) : (
+                  <div className="trade-review-readonly">
+                    {(analysis?.strategy || analysis?.idea_source) && (
+                      <div className="trade-review-context">
+                        {analysis?.strategy && <div><span>Strategy</span><strong>{analysis.strategy}</strong></div>}
+                        {analysis?.idea_source && <div><span>Source</span><strong>{analysis.idea_source}</strong></div>}
+                      </div>
+                    )}
+
+                    <div className="trade-review-note-grid">
+                      <article>
+                        <div className="trade-review-note-title"><Target size={15} /> Entry</div>
+                        <div className="trade-review-note-copy">{analysis?.entry_reason || 'Not documented yet.'}</div>
+                      </article>
+                      <article>
+                        <div className="trade-review-note-title"><CheckCircle2 size={15} /> Exit</div>
+                        <div className="trade-review-note-copy">{analysis?.exit_reason || 'Not documented yet.'}</div>
+                      </article>
+                      <article className={analysis?.mistakes ? 'has-mistake' : ''}>
+                        <div className="trade-review-note-title"><AlertTriangle size={15} /> Mistake / improvement</div>
+                        <div className="trade-review-note-copy">{analysis?.mistakes || 'No improvement note documented yet.'}</div>
+                      </article>
+                    </div>
+
+                    {analysis?.ai_feedback && (
+                      <div className="notice accent">
+                        {analysis.ai_feedback}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Tags tab ──────────────────────────────────────────────── */}
+            {tab === 'Tags' && (
+              <div style={{ paddingTop: 8 }}>
+                {tags.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                    {tags.map(tag => (
+                      <TagBadge key={tag.id} tag={tag} onDelete={() => handleDeleteTag(tag.id)} />
+                    ))}
+                  </div>
+                )}
+                {!addingTag ? (
+                  <button type="button" onClick={() => setAddingTag(true)} className="btn btn-ghost" style={{ color: 'var(--accent-line)', paddingLeft: 6 }}>
+                    <PlusCircle size={15} /> Add Tag
+                  </button>
+                ) : (
+                  <div style={editPanelStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10, color: 'var(--text-primary)' }}>Add Tag</div>
+                    <div style={editGridStyle}>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Type</div>
+                        <select aria-label="Tag type" value={tagForm.tag_type} onChange={e => setTagForm(f => ({ ...f, tag_type: e.target.value }))} style={inputStyle}>
+                          {TAG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Value</div>
+                        <input
+                          type="text" placeholder="tag value" aria-label="Tag value" value={tagForm.tag_value}
+                          onChange={e => setTagForm(f => ({ ...f, tag_value: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && handleAddTag()}
+                          style={inputStyle}
+                        />
+                      </div>
+                    </div>
+                    {tagError && (
+                      <div className="notice neg" role="alert" style={{ marginBottom: 10 }}>{tagError}</div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" onClick={handleAddTag} disabled={savingTag} className="btn btn-primary btn-sm">{savingTag ? 'Saving…' : 'Add'}</button>
+                      <button type="button" onClick={() => { setAddingTag(false); setTagForm({ tag_type: 'strategy', tag_value: '' }); setTagError(null); }} className="btn btn-ghost btn-sm">Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {tags.length === 0 && !addingTag && (
+                  <div className="text-muted" style={{ fontSize: 14, marginTop: 8 }}>No tags yet.</div>
+                )}
+              </div>
+            )}
+
+            {/* ── LE Review tab ────────────────────────────────────────── */}
+            {tab === 'LE Review' && (
+              <LEReview
+                trade={trade}
+                analysis={analysis}
+                tags={tags}
+                onAnalysisChange={setAnalysis}
+                onTagsChange={setTags}
+              />
+            )}
+
+            {/* ── Executions tab ────────────────────────────────────────── */}
+            {tab === 'Executions' && (
+              <div style={{ paddingTop: 8 }}>
+                {/* The card wrapping this panel clips overflow with no scrollbar, so the
+                    edit/delete column silently disappeared off the right edge on any
+                    trade with enough columns to not fit the fixed-width side panel. An
+                    explicit scroll container is what actually makes those reachable. */}
+                <div className="scroll-x" style={{ margin: '0 -20px' }}>
+                <table style={{ minWidth: 470 }}>
+                  <thead>
+                    <tr>
+                      {['Date', 'Time', 'Action', 'Qty', 'Price', 'Comm.', ''].map((h, hi) => (
+                        <th key={h || hi} className={h === 'Date' || h === 'Time' || h === 'Action' ? undefined : 'num'} style={{ paddingLeft: hi === 0 ? 20 : undefined, paddingRight: hi === 6 ? 20 : undefined }}>
+                          {h || <span className="sr-only">Actions</span>}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parseExecs(trade).map((ex, i) => (
+                      <tr key={i}>
+                        <td className="mono text-muted" style={{ paddingLeft: 20, fontSize: 13, whiteSpace: 'nowrap' }}>{ex.date ? ex.date.slice(5) : '—'}</td>
+                        <td className="mono" style={{ fontSize: 13.5, whiteSpace: 'nowrap' }}>{ex.time ? formatExecutionTimeET(ex.date || trade.date, ex.time) : '—'}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{ex.action}</td>
+                        <td className="num mono" style={{ fontSize: 13.5 }}>{ex.qty}</td>
+                        <td className="num mono" style={{ fontSize: 13.5 }}>${Number(ex.price ?? 0).toFixed(2)}</td>
+                        <td className="num mono text-muted" style={{ fontSize: 13.5 }}>{ex.commission ? `$${Number(ex.commission).toFixed(2)}` : '—'}</td>
+                        <td className="num" style={{ whiteSpace: 'nowrap', paddingRight: 20 }}>
+                          <button
+                            title="Edit"
+                            onClick={() => {
+                              setEditingExecIdx(i);
+                              setEditExecForm({ ...ex, qty: String(ex.qty), price: String(ex.price), commission: String(ex.commission || ''), date: ex.date || trade.date, time: ex.time || '' });
+                              setShowAddExec(false);
+                            }}
+                            type="button"
+                            aria-label={`Edit execution ${i + 1}`}
+                            className="btn btn-ghost btn-icon"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button type="button" onClick={() => handleDeleteExecution(i)} title="Delete" aria-label={`Delete execution ${i + 1}`} className="btn btn-ghost btn-icon" style={{ color: 'var(--result-neg)' }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+
+                <div className="text-muted" style={{ fontSize: 13, marginTop: 10 }}>
+                  Gross <span className="num">{trade.gross_pnl != null ? fmtSigned$(trade.gross_pnl) : 'n/a'}</span>
+                  {' · '}Commissions <span className="num">{trade.commissions ? fmt$(trade.commissions) : '$0.00'}</span>
+                </div>
+
+                {/* Edit Execution inline panel */}
+                {editingExecIdx !== null && editExecForm && (
+                  <div style={editPanelStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10, color: 'var(--text-primary)' }}>Edit Execution #{editingExecIdx + 1}</div>
+                    <div style={editGridStyle}>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Action</div>
+                        <select aria-label="Edit execution action" value={editExecForm.action} onChange={e => setEditExecForm(f => ({ ...f, action: e.target.value }))} style={inputStyle}>
+                          <option value="BOT">BOT (Buy)</option>
+                          <option value="SOLD">SOLD (Sell)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Qty</div>
+                        <input aria-label="Edit execution qty" type="number" min="1" value={editExecForm.qty} onChange={e => setEditExecForm(f => ({ ...f, qty: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Price</div>
+                        <input aria-label="Edit execution price" type="number" min="0" step="0.01" value={editExecForm.price} onChange={e => setEditExecForm(f => ({ ...f, price: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Commission</div>
+                        <input aria-label="Edit execution commission" type="number" min="0" step="0.01" value={editExecForm.commission} onChange={e => setEditExecForm(f => ({ ...f, commission: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Date</div>
+                        <input aria-label="Edit execution date" type="date" value={editExecForm.date} onChange={e => setEditExecForm(f => ({ ...f, date: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Broker time (CT)</div>
+                        <input aria-label="Edit execution time" type="time" value={editExecForm.time} onChange={e => setEditExecForm(f => ({ ...f, time: e.target.value }))} style={inputStyle} />
+                      </div>
+                    </div>
+                    {execError && <div className="notice neg" role="alert" style={{ marginBottom: 10 }}>{execError}</div>}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" onClick={handleSaveEditExec} disabled={savingEditExec} className="btn btn-primary btn-sm">{savingEditExec ? 'Saving…' : 'Save'}</button>
+                      <button type="button" onClick={() => { setEditingExecIdx(null); setEditExecForm(null); setExecError(null); }} className="btn btn-ghost btn-sm">Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Add Execution */}
+                {!showAddExec ? (
+                  <button
+                    type="button"
+                    onClick={() => { setShowAddExec(true); setEditingExecIdx(null); setEditExecForm(null); }}
+                    className="btn btn-ghost"
+                    style={{ marginTop: 12, color: 'var(--accent-line)', paddingLeft: 6 }}
+                  >
+                    <PlusCircle size={15} /> Add Execution
+                  </button>
+                ) : (
+                  <div style={editPanelStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10, color: 'var(--text-primary)' }}>Add Execution</div>
+                    <div style={editGridStyle}>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Action</div>
+                        <select aria-label="New execution action" value={execForm.action} onChange={e => setExecForm(f => ({ ...f, action: e.target.value }))} style={inputStyle}>
+                          <option value="BOT">BOT (Buy)</option>
+                          <option value="SOLD">SOLD (Sell)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Qty</div>
+                        <input aria-label="New execution qty" type="number" min="1" value={execForm.qty} placeholder="0" onChange={e => setExecForm(f => ({ ...f, qty: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Price</div>
+                        <input aria-label="New execution price" type="number" min="0" step="0.01" value={execForm.price} onChange={e => setExecForm(f => ({ ...f, price: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Commission</div>
+                        <input aria-label="New execution commission" type="number" min="0" step="0.01" value={execForm.commission} onChange={e => setExecForm(f => ({ ...f, commission: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Date</div>
+                        <input aria-label="New execution date" type="date" value={execForm.date || trade.date} onChange={e => setExecForm(f => ({ ...f, date: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Broker time (CT)</div>
+                        <input aria-label="New execution time" type="time" value={execForm.time} onChange={e => setExecForm(f => ({ ...f, time: e.target.value }))} style={inputStyle} />
+                      </div>
+                    </div>
+                    {execError && <div className="notice neg" role="alert" style={{ marginBottom: 10 }}>{execError}</div>}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" onClick={handleAddExecution} disabled={addingExec} className="btn btn-primary btn-sm">{addingExec ? 'Saving…' : 'Save'}</button>
+                      <button type="button" onClick={() => { setShowAddExec(false); setExecForm(EMPTY_EXEC); setExecError(null); }} className="btn btn-ghost btn-sm">Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Chart Review tab ─────────────────────────────────────── */}
+            {tab === 'Chart Review' && (
+              <div className="td-chart-review-panel">
+                <div className="td-chart-review-callout">
+                  <Target size={20} />
+                  <div>
+                    <strong>Review the setup visually</strong>
+                    <p>Use the 10-minute chart and your TradingView screenshot together. Check entry location, key levels, 8 EMA structure, planned risk, trims, and whether the trade followed your original thesis.</p>
+                  </div>
+                </div>
+                <div className="td-chart-review-checks">
+                  <span>10m default</span>
+                  <span>8 EMA</span>
+                  <span>PDH / PDL solid</span>
+                  <span>PMH / PML dashed</span>
+                </div>
+                <label className="btn btn-primary btn-sm td-chart-review-upload">
+                  <Upload size={14} /> {analysis?.chart_screenshot_path ? 'Replace screenshot' : 'Paste or upload screenshot'}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    disabled={chartScreenshotUploading}
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      handleChartScreenshotUpload(file);
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+
+          </div>
+        </section>
+
+        {/* Beside the tabs: notes, tags, AI analysis, what-if */}
+        <div className="stack">
+          {/* Strategy & notes */}
+          {analysis && (analysis.entry_reason || analysis.exit_reason || analysis.mistakes) && (
+            <section className="card">
+              <PanelHead title="Strategy Notes" />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {analysis.entry_reason && (
+                  <div>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Entry Reason</div>
+                    <div style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.entry_reason}</div>
+                  </div>
+                )}
+                {analysis.exit_reason && (
+                  <div>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Exit Reason</div>
+                    <div style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.exit_reason}</div>
+                  </div>
+                )}
+                {analysis.mistakes && (
+                  <div>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Mistakes</div>
+                    <div className="neg" style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.mistakes}</div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Tags */}
+          {tags.length > 0 && (
+            <section className="card">
+              <PanelHead title="Tags" />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {tags.map(tag => <TagBadge key={tag.id} tag={tag} />)}
+              </div>
+            </section>
+          )}
+
+          {/* TradingView screenshot — compact until opened */}
+          <section className="card td-chart-screenshot-side" aria-label="TradingView screenshot">
+            <div className="td-chart-screenshot-head">
+              <div>
+                <div className="section-title" style={{ fontSize: 15 }}>Chart screenshot</div>
+                <div className="text-muted" style={{ fontSize: 11.5, marginTop: 2 }}>
+                  Paste with Ctrl+V or upload. Stored images are automatically compressed.
+                </div>
+              </div>
+            </div>
+
+            {chartScreenshotLoading ? (
+              <div className="td-chart-preview-loading text-muted">Loading screenshot…</div>
+            ) : chartScreenshotUrl ? (
+              <>
+                <button
+                  type="button"
+                  className={`td-chart-preview${chartScreenshotExpanded ? ' is-expanded' : ''}`}
+                  onClick={() => setChartScreenshotExpanded(value => !value)}
+                  title={chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}
+                  aria-pressed={chartScreenshotExpanded}
+                >
+                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
+                  <span><Maximize2 size={13} /> {chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}</span>
+                </button>
+                <div className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom">
+                  <label className="btn btn-ghost btn-sm td-chart-review-upload">
+                    <Upload size={13} /> Replace
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={chartScreenshotUploading}
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        handleChartScreenshotUpload(file);
+                      }}
+                    />
+                  </label>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={handleChartScreenshotDelete}>
+                    <Trash2 size={13} /> Remove
+                  </button>
+                </div>
+              </>
+            ) : (
+              <label className="td-chart-dropzone td-chart-dropzone-compact">
+                <div className="td-chart-dropzone-empty">
+                  <Upload size={24} />
+                  <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload screenshot'}</strong>
+                  <span>Ctrl+V works anywhere on this trade. Or click here to choose an image.</span>
+                </div>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={chartScreenshotUploading}
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    handleChartScreenshotUpload(file);
+                  }}
+                />
+              </label>
+            )}
+            {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
+          </section>
+
+          {/* AI Feedback — only shown when diary analysis exists */}
+          {analysis?.ai_feedback && (
+            <section className="card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                <h2 className="section-title">AI Analysis</h2>
+                {analysis.match_confidence && (
+                  <span className="chip">
+                    <span className={`confidence-dot confidence-${analysis.match_confidence}`} />
+                    {analysis.match_confidence} match
+                  </span>
+                )}
+              </div>
+              <div className="notice accent" style={{ lineHeight: 1.6 }}>
+                {analysis.ai_feedback}
+              </div>
+              {analysis.r_multiple != null && (
+                <div style={{ marginTop: 12, display: 'flex', gap: 16 }}>
+                  <div>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Trade Quality (R)</div>
+                    <div className={`num ${analysis.r_multiple >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: 20, fontWeight: 600 }}>
+                      {Number(analysis.r_multiple).toFixed(2)}R
+                    </div>
+                  </div>
+                  {analysis.risk_reward && (
+                    <div>
+                      <div className="field-label" style={{ marginBottom: 4 }}>Planned R:R</div>
+                      <div className="num" style={{ fontSize: 20, fontWeight: 600 }}>1:{Number(analysis.risk_reward).toFixed(1)}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+
+        </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+ + Number(analysis.stop_loss).toFixed(2) : null} valueColor="var(--caution)" />
+                    <StatRow label="Target Distance" value={analysis.target_price ? '
+                    <StatRow
+                      label="Planned R:R"
+                      value={
+                        Number(analysis.stop_loss) > 0 && Number(analysis.target_price) > 0
+                          ? `1:${(Number(analysis.target_price) / Number(analysis.stop_loss)).toFixed(2)}`
+                          : null
+                      }
+                      valueColor="var(--accent-line)"
+                    />
+                    <StatRow label="Planned Risk" value={plannedRisk ? fmt$(-plannedRisk) : 'Not set'} valueColor={plannedRisk ? 'var(--caution)' : 'var(--text-secondary)'} />
+                    <StatRow label="Realized R" value={realizedR || 'Set planned risk to calculate'} valueColor={realizedRValue == null ? 'var(--text-secondary)' : realizedRValue >= 0 ? 'var(--green)' : 'var(--red)'} />
+                    {/* Excursion: how far the trade went your way and against you,
+                        and how much of the favourable move you actually kept. */}
+                    <StatRow
+                      label="Max Favourable (MFE)"
+                      value={trade.mfe_pct == null ? null : `+${Number(trade.mfe_pct).toFixed(2)}%`}
+                      valueColor="var(--result-pos)"
+                    />
+                    <StatRow
+                      label="Max Adverse (MAE)"
+                      value={trade.mae_pct == null ? null : `${Number(trade.mae_pct).toFixed(2)}%`}
+                      valueColor="var(--result-neg)"
+                    />
+                    <StatRow
+                      label="Exit Efficiency"
+                      value={trade.exit_efficiency == null ? null : `${Number(trade.exit_efficiency).toFixed(1)}%`}
+                      valueColor={trade.exit_efficiency == null ? undefined
+                        : trade.exit_efficiency < 0 ? 'var(--result-neg)'
+                          : trade.exit_efficiency >= 50 ? 'var(--result-pos)' : 'var(--caution)'}
+                    />
+                    <StatRow label="Emotional State" value={analysis.emotional_state} />
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ── Guided trade review tab ─────────────────────────────── */}
+            {tab === 'Review' && (
+              <div className="trade-review-shell">
+                <div className="trade-review-toolbar">
+                  <div>
+                    <div className="trade-review-kicker"><Sparkles size={14} /> Guided journal</div>
+                    <div className="trade-review-toolbar-copy">Use quick picks to document the trade consistently, then add any detail that matters.</div>
+                  </div>
+                  {!editingStrategy ? (
+                    <button
+                      onClick={() => {
+                        setStrategyForm({
+                          entry_reason: analysis?.entry_reason || '',
+                          exit_reason:  analysis?.exit_reason  || '',
+                          mistakes:     analysis?.mistakes     || '',
+                        });
+                        setEditingStrategy(true);
+                      }}
+                      className="btn btn-primary btn-sm"
+                      type="button"
+                    >
+                      <Pencil size={13} /> {(analysis?.entry_reason || analysis?.exit_reason || analysis?.mistakes) ? 'Edit review' : 'Start review'}
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">{savingStrategy ? 'Saving…' : 'Save review'}</button>
+                      <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost btn-sm">Cancel</button>
+                    </div>
+                  )}
+                </div>
+
+                <TradeReviewSummary
+                  trade={trade}
+                  entryReason={editingStrategy ? strategyForm.entry_reason : analysis?.entry_reason}
+                  exitReason={editingStrategy ? strategyForm.exit_reason : analysis?.exit_reason}
+                  mistakes={editingStrategy ? strategyForm.mistakes : analysis?.mistakes}
+                />
+
+                {editingStrategy ? (
+                  <div className="trade-review-editor">
+                    <div className="trade-review-editor-head">
+                      <div>
+                        <h3>Build the review</h3>
+                        <p>Click any suggestion to add it. Click it again to remove it. You can still type your own notes.</p>
+                      </div>
+                    </div>
+
+                    <QuickPickGroup
+                      title="Entry"
+                      subtitle="What justified the entry?"
+                      suggestions={ENTRY_REVIEW_SUGGESTIONS}
+                      value={strategyForm.entry_reason}
+                      onToggle={item => handleReviewSuggestion('entry_reason', item)}
+                      tone="entry"
+                    />
+                    <EditTextarea label="Entry notes" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
+
+                    <QuickPickGroup
+                      title="Exit"
+                      subtitle="How did you manage or close the trade?"
+                      suggestions={EXIT_REVIEW_SUGGESTIONS}
+                      value={strategyForm.exit_reason}
+                      onToggle={item => handleReviewSuggestion('exit_reason', item)}
+                      tone="exit"
+                    />
+                    <EditTextarea label="Exit notes" value={strategyForm.exit_reason} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
+
+                    <QuickPickGroup
+                      title="Mistake / improvement"
+                      subtitle="What should change next time?"
+                      suggestions={MISTAKE_REVIEW_SUGGESTIONS}
+                      value={strategyForm.mistakes}
+                      onToggle={item => handleReviewSuggestion('mistakes', item)}
+                      tone="mistake"
+                    />
+                    <EditTextarea label="Mistake / improvement notes" value={strategyForm.mistakes} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
+                  </div>
+                ) : (
+                  <div className="trade-review-readonly">
+                    {(analysis?.strategy || analysis?.idea_source) && (
+                      <div className="trade-review-context">
+                        {analysis?.strategy && <div><span>Strategy</span><strong>{analysis.strategy}</strong></div>}
+                        {analysis?.idea_source && <div><span>Source</span><strong>{analysis.idea_source}</strong></div>}
+                      </div>
+                    )}
+
+                    <div className="trade-review-note-grid">
+                      <article>
+                        <div className="trade-review-note-title"><Target size={15} /> Entry</div>
+                        <div className="trade-review-note-copy">{analysis?.entry_reason || 'Not documented yet.'}</div>
+                      </article>
+                      <article>
+                        <div className="trade-review-note-title"><CheckCircle2 size={15} /> Exit</div>
+                        <div className="trade-review-note-copy">{analysis?.exit_reason || 'Not documented yet.'}</div>
+                      </article>
+                      <article className={analysis?.mistakes ? 'has-mistake' : ''}>
+                        <div className="trade-review-note-title"><AlertTriangle size={15} /> Mistake / improvement</div>
+                        <div className="trade-review-note-copy">{analysis?.mistakes || 'No improvement note documented yet.'}</div>
+                      </article>
+                    </div>
+
+                    {analysis?.ai_feedback && (
+                      <div className="notice accent">
+                        {analysis.ai_feedback}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Tags tab ──────────────────────────────────────────────── */}
+            {tab === 'Tags' && (
+              <div style={{ paddingTop: 8 }}>
+                {tags.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                    {tags.map(tag => (
+                      <TagBadge key={tag.id} tag={tag} onDelete={() => handleDeleteTag(tag.id)} />
+                    ))}
+                  </div>
+                )}
+                {!addingTag ? (
+                  <button type="button" onClick={() => setAddingTag(true)} className="btn btn-ghost" style={{ color: 'var(--accent-line)', paddingLeft: 6 }}>
+                    <PlusCircle size={15} /> Add Tag
+                  </button>
+                ) : (
+                  <div style={editPanelStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10, color: 'var(--text-primary)' }}>Add Tag</div>
+                    <div style={editGridStyle}>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Type</div>
+                        <select aria-label="Tag type" value={tagForm.tag_type} onChange={e => setTagForm(f => ({ ...f, tag_type: e.target.value }))} style={inputStyle}>
+                          {TAG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Value</div>
+                        <input
+                          type="text" placeholder="tag value" aria-label="Tag value" value={tagForm.tag_value}
+                          onChange={e => setTagForm(f => ({ ...f, tag_value: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && handleAddTag()}
+                          style={inputStyle}
+                        />
+                      </div>
+                    </div>
+                    {tagError && (
+                      <div className="notice neg" role="alert" style={{ marginBottom: 10 }}>{tagError}</div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" onClick={handleAddTag} disabled={savingTag} className="btn btn-primary btn-sm">{savingTag ? 'Saving…' : 'Add'}</button>
+                      <button type="button" onClick={() => { setAddingTag(false); setTagForm({ tag_type: 'strategy', tag_value: '' }); setTagError(null); }} className="btn btn-ghost btn-sm">Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {tags.length === 0 && !addingTag && (
+                  <div className="text-muted" style={{ fontSize: 14, marginTop: 8 }}>No tags yet.</div>
+                )}
+              </div>
+            )}
+
+            {/* ── LE Review tab ────────────────────────────────────────── */}
+            {tab === 'LE Review' && (
+              <LEReview
+                trade={trade}
+                analysis={analysis}
+                tags={tags}
+                onAnalysisChange={setAnalysis}
+                onTagsChange={setTags}
+              />
+            )}
+
+            {/* ── Executions tab ────────────────────────────────────────── */}
+            {tab === 'Executions' && (
+              <div style={{ paddingTop: 8 }}>
+                {/* The card wrapping this panel clips overflow with no scrollbar, so the
+                    edit/delete column silently disappeared off the right edge on any
+                    trade with enough columns to not fit the fixed-width side panel. An
+                    explicit scroll container is what actually makes those reachable. */}
+                <div className="scroll-x" style={{ margin: '0 -20px' }}>
+                <table style={{ minWidth: 470 }}>
+                  <thead>
+                    <tr>
+                      {['Date', 'Time', 'Action', 'Qty', 'Price', 'Comm.', ''].map((h, hi) => (
+                        <th key={h || hi} className={h === 'Date' || h === 'Time' || h === 'Action' ? undefined : 'num'} style={{ paddingLeft: hi === 0 ? 20 : undefined, paddingRight: hi === 6 ? 20 : undefined }}>
+                          {h || <span className="sr-only">Actions</span>}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parseExecs(trade).map((ex, i) => (
+                      <tr key={i}>
+                        <td className="mono text-muted" style={{ paddingLeft: 20, fontSize: 13, whiteSpace: 'nowrap' }}>{ex.date ? ex.date.slice(5) : '—'}</td>
+                        <td className="mono" style={{ fontSize: 13.5, whiteSpace: 'nowrap' }}>{ex.time ? formatExecutionTimeET(ex.date || trade.date, ex.time) : '—'}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{ex.action}</td>
+                        <td className="num mono" style={{ fontSize: 13.5 }}>{ex.qty}</td>
+                        <td className="num mono" style={{ fontSize: 13.5 }}>${Number(ex.price ?? 0).toFixed(2)}</td>
+                        <td className="num mono text-muted" style={{ fontSize: 13.5 }}>{ex.commission ? `$${Number(ex.commission).toFixed(2)}` : '—'}</td>
+                        <td className="num" style={{ whiteSpace: 'nowrap', paddingRight: 20 }}>
+                          <button
+                            title="Edit"
+                            onClick={() => {
+                              setEditingExecIdx(i);
+                              setEditExecForm({ ...ex, qty: String(ex.qty), price: String(ex.price), commission: String(ex.commission || ''), date: ex.date || trade.date, time: ex.time || '' });
+                              setShowAddExec(false);
+                            }}
+                            type="button"
+                            aria-label={`Edit execution ${i + 1}`}
+                            className="btn btn-ghost btn-icon"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button type="button" onClick={() => handleDeleteExecution(i)} title="Delete" aria-label={`Delete execution ${i + 1}`} className="btn btn-ghost btn-icon" style={{ color: 'var(--result-neg)' }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+
+                <div className="text-muted" style={{ fontSize: 13, marginTop: 10 }}>
+                  Gross <span className="num">{trade.gross_pnl != null ? fmtSigned$(trade.gross_pnl) : 'n/a'}</span>
+                  {' · '}Commissions <span className="num">{trade.commissions ? fmt$(trade.commissions) : '$0.00'}</span>
+                </div>
+
+                {/* Edit Execution inline panel */}
+                {editingExecIdx !== null && editExecForm && (
+                  <div style={editPanelStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10, color: 'var(--text-primary)' }}>Edit Execution #{editingExecIdx + 1}</div>
+                    <div style={editGridStyle}>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Action</div>
+                        <select aria-label="Edit execution action" value={editExecForm.action} onChange={e => setEditExecForm(f => ({ ...f, action: e.target.value }))} style={inputStyle}>
+                          <option value="BOT">BOT (Buy)</option>
+                          <option value="SOLD">SOLD (Sell)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Qty</div>
+                        <input aria-label="Edit execution qty" type="number" min="1" value={editExecForm.qty} onChange={e => setEditExecForm(f => ({ ...f, qty: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Price</div>
+                        <input aria-label="Edit execution price" type="number" min="0" step="0.01" value={editExecForm.price} onChange={e => setEditExecForm(f => ({ ...f, price: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Commission</div>
+                        <input aria-label="Edit execution commission" type="number" min="0" step="0.01" value={editExecForm.commission} onChange={e => setEditExecForm(f => ({ ...f, commission: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Date</div>
+                        <input aria-label="Edit execution date" type="date" value={editExecForm.date} onChange={e => setEditExecForm(f => ({ ...f, date: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Broker time (CT)</div>
+                        <input aria-label="Edit execution time" type="time" value={editExecForm.time} onChange={e => setEditExecForm(f => ({ ...f, time: e.target.value }))} style={inputStyle} />
+                      </div>
+                    </div>
+                    {execError && <div className="notice neg" role="alert" style={{ marginBottom: 10 }}>{execError}</div>}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" onClick={handleSaveEditExec} disabled={savingEditExec} className="btn btn-primary btn-sm">{savingEditExec ? 'Saving…' : 'Save'}</button>
+                      <button type="button" onClick={() => { setEditingExecIdx(null); setEditExecForm(null); setExecError(null); }} className="btn btn-ghost btn-sm">Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Add Execution */}
+                {!showAddExec ? (
+                  <button
+                    type="button"
+                    onClick={() => { setShowAddExec(true); setEditingExecIdx(null); setEditExecForm(null); }}
+                    className="btn btn-ghost"
+                    style={{ marginTop: 12, color: 'var(--accent-line)', paddingLeft: 6 }}
+                  >
+                    <PlusCircle size={15} /> Add Execution
+                  </button>
+                ) : (
+                  <div style={editPanelStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10, color: 'var(--text-primary)' }}>Add Execution</div>
+                    <div style={editGridStyle}>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Action</div>
+                        <select aria-label="New execution action" value={execForm.action} onChange={e => setExecForm(f => ({ ...f, action: e.target.value }))} style={inputStyle}>
+                          <option value="BOT">BOT (Buy)</option>
+                          <option value="SOLD">SOLD (Sell)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Qty</div>
+                        <input aria-label="New execution qty" type="number" min="1" value={execForm.qty} placeholder="0" onChange={e => setExecForm(f => ({ ...f, qty: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Price</div>
+                        <input aria-label="New execution price" type="number" min="0" step="0.01" value={execForm.price} onChange={e => setExecForm(f => ({ ...f, price: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Commission</div>
+                        <input aria-label="New execution commission" type="number" min="0" step="0.01" value={execForm.commission} onChange={e => setExecForm(f => ({ ...f, commission: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Date</div>
+                        <input aria-label="New execution date" type="date" value={execForm.date || trade.date} onChange={e => setExecForm(f => ({ ...f, date: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Broker time (CT)</div>
+                        <input aria-label="New execution time" type="time" value={execForm.time} onChange={e => setExecForm(f => ({ ...f, time: e.target.value }))} style={inputStyle} />
+                      </div>
+                    </div>
+                    {execError && <div className="notice neg" role="alert" style={{ marginBottom: 10 }}>{execError}</div>}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" onClick={handleAddExecution} disabled={addingExec} className="btn btn-primary btn-sm">{addingExec ? 'Saving…' : 'Save'}</button>
+                      <button type="button" onClick={() => { setShowAddExec(false); setExecForm(EMPTY_EXEC); setExecError(null); }} className="btn btn-ghost btn-sm">Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Chart Review tab ─────────────────────────────────────── */}
+            {tab === 'Chart Review' && (
+              <div className="td-chart-review-panel">
+                <div className="td-chart-review-callout">
+                  <Target size={20} />
+                  <div>
+                    <strong>Review the setup visually</strong>
+                    <p>Use the 10-minute chart and your TradingView screenshot together. Check entry location, key levels, 8 EMA structure, planned risk, trims, and whether the trade followed your original thesis.</p>
+                  </div>
+                </div>
+                <div className="td-chart-review-checks">
+                  <span>10m default</span>
+                  <span>8 EMA</span>
+                  <span>PDH / PDL solid</span>
+                  <span>PMH / PML dashed</span>
+                </div>
+                <label className="btn btn-primary btn-sm td-chart-review-upload">
+                  <Upload size={14} /> {analysis?.chart_screenshot_path ? 'Replace screenshot' : 'Paste or upload screenshot'}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    disabled={chartScreenshotUploading}
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      handleChartScreenshotUpload(file);
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+
+          </div>
+        </section>
+
+        {/* Beside the tabs: notes, tags, AI analysis, what-if */}
+        <div className="stack">
+          {/* Strategy & notes */}
+          {analysis && (analysis.entry_reason || analysis.exit_reason || analysis.mistakes) && (
+            <section className="card">
+              <PanelHead title="Strategy Notes" />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {analysis.entry_reason && (
+                  <div>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Entry Reason</div>
+                    <div style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.entry_reason}</div>
+                  </div>
+                )}
+                {analysis.exit_reason && (
+                  <div>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Exit Reason</div>
+                    <div style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.exit_reason}</div>
+                  </div>
+                )}
+                {analysis.mistakes && (
+                  <div>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Mistakes</div>
+                    <div className="neg" style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.mistakes}</div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Tags */}
+          {tags.length > 0 && (
+            <section className="card">
+              <PanelHead title="Tags" />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {tags.map(tag => <TagBadge key={tag.id} tag={tag} />)}
+              </div>
+            </section>
+          )}
+
+          {/* TradingView screenshot — compact until opened */}
+          <section className="card td-chart-screenshot-side" aria-label="TradingView screenshot">
+            <div className="td-chart-screenshot-head">
+              <div>
+                <div className="section-title" style={{ fontSize: 15 }}>Chart screenshot</div>
+                <div className="text-muted" style={{ fontSize: 11.5, marginTop: 2 }}>
+                  Paste with Ctrl+V or upload. Stored images are automatically compressed.
+                </div>
+              </div>
+            </div>
+
+            {chartScreenshotLoading ? (
+              <div className="td-chart-preview-loading text-muted">Loading screenshot…</div>
+            ) : chartScreenshotUrl ? (
+              <>
+                <button
+                  type="button"
+                  className={`td-chart-preview${chartScreenshotExpanded ? ' is-expanded' : ''}`}
+                  onClick={() => setChartScreenshotExpanded(value => !value)}
+                  title={chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}
+                  aria-pressed={chartScreenshotExpanded}
+                >
+                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
+                  <span><Maximize2 size={13} /> {chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}</span>
+                </button>
+                <div className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom">
+                  <label className="btn btn-ghost btn-sm td-chart-review-upload">
+                    <Upload size={13} /> Replace
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={chartScreenshotUploading}
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        handleChartScreenshotUpload(file);
+                      }}
+                    />
+                  </label>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={handleChartScreenshotDelete}>
+                    <Trash2 size={13} /> Remove
+                  </button>
+                </div>
+              </>
+            ) : (
+              <label className="td-chart-dropzone td-chart-dropzone-compact">
+                <div className="td-chart-dropzone-empty">
+                  <Upload size={24} />
+                  <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload screenshot'}</strong>
+                  <span>Ctrl+V works anywhere on this trade. Or click here to choose an image.</span>
+                </div>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={chartScreenshotUploading}
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    handleChartScreenshotUpload(file);
+                  }}
+                />
+              </label>
+            )}
+            {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
+          </section>
+
+          {/* AI Feedback — only shown when diary analysis exists */}
+          {analysis?.ai_feedback && (
+            <section className="card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                <h2 className="section-title">AI Analysis</h2>
+                {analysis.match_confidence && (
+                  <span className="chip">
+                    <span className={`confidence-dot confidence-${analysis.match_confidence}`} />
+                    {analysis.match_confidence} match
+                  </span>
+                )}
+              </div>
+              <div className="notice accent" style={{ lineHeight: 1.6 }}>
+                {analysis.ai_feedback}
+              </div>
+              {analysis.r_multiple != null && (
+                <div style={{ marginTop: 12, display: 'flex', gap: 16 }}>
+                  <div>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Trade Quality (R)</div>
+                    <div className={`num ${analysis.r_multiple >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: 20, fontWeight: 600 }}>
+                      {Number(analysis.r_multiple).toFixed(2)}R
+                    </div>
+                  </div>
+                  {analysis.risk_reward && (
+                    <div>
+                      <div className="field-label" style={{ marginBottom: 4 }}>Planned R:R</div>
+                      <div className="num" style={{ fontSize: 20, fontWeight: 600 }}>1:{Number(analysis.risk_reward).toFixed(1)}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+
+        </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+ + Number(analysis.target_price).toFixed(2) : null} valueColor="var(--accent-line)" />
                     <StatRow
                       label="Planned R:R"
                       value={
