@@ -78,6 +78,16 @@ def test_thinkorswim_day_total(tos):
     assert round(sum(t["net_pnl"] for t in tos.values()), 2) == 720.75
 
 
+def test_ibkr_timestamp_timezone_is_detected_from_statement_metadata(ibkr):
+    trade = next(iter(ibkr.values()))
+    executions = json.loads(trade["executions"])
+    assert executions
+    assert all(e["source_timezone"] == "America/New_York" for e in executions)
+    assert all(e["timezone_detection_method"] == "report_timezone_metadata" for e in executions)
+    assert all(e["timezone_detection_confidence"] == "medium" for e in executions)
+    assert all(e.get("timestamp_utc") for e in executions)
+
+
 def test_ibkr_round_trip_across_days(ibkr):
     # BOT 5 @1215.86 (6,079.32) and 6 @1227.67 (7,366.01), SOLD 5 @1239.47 (6,197.36)
     # and 6 @1251.28 (7,507.66): gross 13,705.02 - 13,445.33 = 259.69, fees 4 x 0.35, net 258.29

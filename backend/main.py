@@ -758,25 +758,60 @@ async def import_csv(
     canonical_count = sum(1 for e in parsed_execs if e.get("timestamp_utc"))
     source_zones = sorted({str(e.get("source_timezone")) for e in parsed_execs if e.get("source_timezone")})
     precisions = sorted({str(e.get("timestamp_precision")) for e in parsed_execs if e.get("timestamp_precision")})
+    timezone_methods = sorted({
+        str(e.get("timezone_detection_method"))
+        for e in parsed_execs if e.get("timezone_detection_method")
+    })
+    timezone_confidences = sorted({
+        str(e.get("timezone_detection_confidence"))
+        for e in parsed_execs if e.get("timezone_detection_confidence")
+    })
     broker_refs = sum(1 for e in parsed_execs if e.get("source_ref"))
+    source_timestamp_count = sum(1 for e in parsed_execs if e.get("source_timestamp"))
+    timezone_count = sum(1 for e in parsed_execs if e.get("source_timezone"))
+    low_confidence_timezone = any(
+        e.get("timezone_detection_confidence") == "low"
+        for e in parsed_execs
+    )
 
-    if detected_broker in {"thinkorswim", "schwab_transactions"} and execution_count and canonical_count != execution_count:
+    if execution_count and canonical_count != execution_count:
         raise HTTPException(
             status_code=422,
             detail=(
-                "Execution integrity check failed: not every Thinkorswim/Schwab fill "
-                "received a canonical timestamp. Nothing was imported."
+                "Execution integrity check failed: not every fill received a canonical UTC timestamp. "
+                "Nothing was imported."
+            ),
+        )
+    if execution_count and timezone_count != execution_count:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Execution integrity check failed: not every fill has source-timezone provenance. "
+                "Nothing was imported."
             ),
         )
 
+    timezone_verified = (
+        bool(execution_count)
+        and timezone_count == execution_count
+        and not low_confidence_timezone
+    )
     execution_integrity = {
         "broker": detected_broker,
         "execution_count": execution_count,
         "canonical_timestamp_count": canonical_count,
+        "source_timestamp_count": source_timestamp_count,
         "source_ref_count": broker_refs,
         "source_timezones": source_zones,
+        "timezone_detection_methods": timezone_methods,
+        "timezone_confidences": timezone_confidences,
+        "timezone_verified": timezone_verified,
         "timestamp_precisions": precisions,
-        "verified": bool(execution_count) and canonical_count == execution_count,
+        "verified": (
+            bool(execution_count)
+            and canonical_count == execution_count
+            and timezone_verified
+        ),
     }
 
     imported = 0

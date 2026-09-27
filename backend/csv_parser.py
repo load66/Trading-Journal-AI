@@ -23,6 +23,145 @@ FUTURES_MULTIPLIERS = {
 
 DEFAULT_EXECUTION_TIMEZONE = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 
+# Broker/profile defaults are used only when the export itself does not carry
+# timezone metadata. IANA zones are intentional: they apply daylight-saving
+# rules for the execution date instead of hard-coding UTC-5/UTC-6 offsets.
+BROKER_TIMEZONE_DEFAULTS = {
+    "thinkorswim": "America/Chicago",
+    "schwab_transactions": "America/Chicago",
+}
+
+TIMEZONE_ALIASES = {
+    "UTC": "UTC",
+    "GMT": "UTC",
+    "ET": "America/New_York",
+    "EST": "America/New_York",
+    "EDT": "America/New_York",
+    "CT": "America/Chicago",
+    "CST": "America/Chicago",
+    "CDT": "America/Chicago",
+    "MT": "America/Denver",
+    "MST": "America/Denver",
+    "MDT": "America/Denver",
+    "PT": "America/Los_Angeles",
+    "PST": "America/Los_Angeles",
+    "PDT": "America/Los_Angeles",
+}
+
+
+def _valid_iana_timezone(value: str | None) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    alias = TIMEZONE_ALIASES.get(candidate.upper())
+    if alias:
+        return alias
+    try:
+        ZoneInfo(candidate)
+        return candidate
+    except Exception:
+        return None
+
+
+def detect_csv_timezone(
+    content: str,
+    broker: str | None = None,
+    row_timezone: str | None = None,
+) -> dict:
+    """Resolve CSV execution timezone and record how the decision was made.
+
+    Priority:
+      1. explicit row timezone (generic template / broker-specific column)
+      2. explicit IANA timezone in the export
+      3. explicit CSV timezone metadata or a timezone suffix in report metadata
+      4. verified broker profile (Thinkorswim/Schwab -> America/Chicago)
+      5. configured application fallback, marked low-confidence
+
+    A local clock time alone is never treated as proof of a timezone.
+    """
+    if row_timezone:
+        resolved = _valid_iana_timezone(row_timezone)
+        if not resolved:
+            raise ValueError(
+                f"Unsupported timezone '{row_timezone}'. Use an IANA zone such as "
+                "America/Chicago or a supported US abbreviation such as CST/CDT/CT."
+            )
+        return {
+            "timezone": resolved,
+            "method": "row_timezone",
+            "confidence": "high",
+            "evidence": str(row_timezone).strip(),
+        }
+
+    sample = str(content or "")[:20000]
+
+    # Explicit IANA zone anywhere in the export metadata wins.
+    match = re.search(
+        r"\b((?:America|US)/[A-Za-z_+-]+(?:/[A-Za-z_+-]+)?)\b",
+        sample,
+    )
+    if match:
+        resolved = _valid_iana_timezone(match.group(1))
+        if resolved:
+            return {
+                "timezone": resolved,
+                "method": "csv_iana_timezone",
+                "confidence": "high",
+                "evidence": match.group(1),
+            }
+
+    # Common metadata shapes: Time Zone,CDT  /  Timezone: America/Chicago.
+    meta_match = re.search(
+        r"(?im)(?:^|,|\b)(?:TIME\s*ZONE|TIMEZONE|TZ)\s*[,=:]\s*\"?([A-Za-z_/+-]+)",
+        sample,
+    )
+    if meta_match:
+        resolved = _valid_iana_timezone(meta_match.group(1))
+        if resolved:
+            return {
+                "timezone": resolved,
+                "method": "csv_timezone_metadata",
+                "confidence": "high",
+                "evidence": meta_match.group(1),
+            }
+
+    # IBKR statements commonly include a generated-at timezone suffix. Treat it
+    # as report metadata, not as strong as a dedicated Time Zone field.
+    generated_match = re.search(
+        r"(?im)WhenGenerated[^\n]*?\b(UTC|GMT|E[SD]T|C[SD]T|M[SD]T|P[SD]T)\b",
+        sample,
+    )
+    if generated_match:
+        resolved = _valid_iana_timezone(generated_match.group(1))
+        if resolved:
+            return {
+                "timezone": resolved,
+                "method": "report_timezone_metadata",
+                "confidence": "medium",
+                "evidence": generated_match.group(1).upper(),
+            }
+
+    profile = BROKER_TIMEZONE_DEFAULTS.get(str(broker or "").lower())
+    if profile:
+        return {
+            "timezone": profile,
+            "method": "broker_profile",
+            "confidence": "high",
+            "evidence": str(broker),
+        }
+
+    fallback = _valid_iana_timezone(DEFAULT_EXECUTION_TIMEZONE)
+    if not fallback:
+        raise ValueError(
+            f"Configured TRADE_EXECUTION_TIMEZONE '{DEFAULT_EXECUTION_TIMEZONE}' is invalid."
+        )
+    return {
+        "timezone": fallback,
+        "method": "configured_fallback",
+        "confidence": "low",
+        "evidence": "TRADE_EXECUTION_TIMEZONE/default",
+    }
+
 
 def _time_precision(value: str) -> str:
     raw = str(value or "").strip().upper()
@@ -57,8 +196,24 @@ def canonical_execution_timestamp(
         clock = _parse_clock_time(time_value)
         if clock is None:
             return None
-        local_dt = datetime.combine(day, clock, tzinfo=ZoneInfo(source_timezone))
-        return local_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        zone = ZoneInfo(source_timezone)
+        naive = datetime.combine(day, clock)
+        first = naive.replace(tzinfo=zone, fold=0)
+        second = naive.replace(tzinfo=zone, fold=1)
+
+        # A repeated fall-back clock time is ambiguous without an explicit UTC
+        # offset. Refuse to invent which occurrence the broker meant.
+        if first.utcoffset() != second.utcoffset():
+            return None
+
+        utc_dt = first.astimezone(timezone.utc)
+
+        # Spring-forward can create local wall-clock times that never existed.
+        # Round-trip through UTC and reject those instead of silently shifting.
+        if utc_dt.astimezone(zone).replace(tzinfo=None) != naive:
+            return None
+
+        return utc_dt.isoformat().replace("+00:00", "Z")
     except (ValueError, TypeError, KeyError):
         return None
 
@@ -67,16 +222,41 @@ def attach_execution_timestamp(
     execution: dict,
     source_broker: str,
     source_timezone: str = DEFAULT_EXECUTION_TIMEZONE,
+    timezone_detection_method: str = "configured_fallback",
+    timezone_detection_confidence: str = "low",
+    timezone_detection_evidence: str | None = None,
 ) -> dict:
-    """Attach canonical timestamp + provenance without changing broker-local fields."""
+    """Attach canonical UTC timestamp plus auditable timezone provenance."""
     item = dict(execution)
     iso_date = item.get("iso_date") or normalize_date(str(item.get("date") or ""))
     time_value = str(item.get("time") or "").strip()
+    source_date = str(item.get("source_date") or item.get("date") or iso_date).strip()
+    source_time = str(item.get("source_time") or item.get("time") or "").strip()
     item["source_broker"] = source_broker
     item["source_timezone"] = source_timezone
+    item["source_timestamp"] = item.get("source_timestamp") or f"{source_date} {source_time}".strip()
+    item["timezone_detection_method"] = timezone_detection_method
+    item["timezone_detection_confidence"] = timezone_detection_confidence
+    if timezone_detection_evidence:
+        item["timezone_detection_evidence"] = timezone_detection_evidence
     item["timestamp_precision"] = item.get("timestamp_precision") or _time_precision(time_value)
     item["timestamp_utc"] = canonical_execution_timestamp(iso_date, time_value, source_timezone)
     return item
+
+
+def attach_detected_execution_timestamp(
+    execution: dict,
+    source_broker: str,
+    timezone_info: dict,
+) -> dict:
+    return attach_execution_timestamp(
+        execution,
+        source_broker,
+        source_timezone=timezone_info["timezone"],
+        timezone_detection_method=timezone_info["method"],
+        timezone_detection_confidence=timezone_info["confidence"],
+        timezone_detection_evidence=timezone_info.get("evidence"),
+    )
 
 
 def normalize_date(date_str: str) -> str:
@@ -349,7 +529,7 @@ def _parse_trade_history_expiry(exp_str: str) -> str | None:
     return f"{year:04d}-{month:02d}-{int(day):02d}"
 
 
-def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
+def parse_trade_history_section(rows: list[list[str]], timezone_info: dict | None = None) -> list[dict]:
     """
     Parse Account Trade History section.
     Header: ,Exec Time,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,Price,Net Price,Order Type
@@ -357,6 +537,7 @@ def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
     """
     if not rows:
         return []
+    timezone_info = timezone_info or detect_csv_timezone("", "thinkorswim")
 
     header_idx = None
     for i, row in enumerate(rows):
@@ -433,7 +614,7 @@ def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
         if action == 'BOT':
             amount = -amount
 
-        executions.append(attach_execution_timestamp({
+        executions.append(attach_detected_execution_timestamp({
             'action': action,
             'qty': qty,
             'ticker': symbol,
@@ -445,9 +626,10 @@ def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
             'date': date_part,
             'iso_date': iso_date,
             'time': time_part,
+            'source_timestamp': exec_time_str,
             'amount': round(amount, 2),
             'commission': 0.0,
-        }, "thinkorswim"))
+        }, "thinkorswim", timezone_info))
 
     return executions
 
@@ -506,6 +688,14 @@ def aggregate_executions(fills: list[dict]) -> dict:
             item['timestamp_utc'] = f.get('timestamp_utc')
         if f.get('source_timezone'):
             item['source_timezone'] = f.get('source_timezone')
+        if f.get('source_timestamp'):
+            item['source_timestamp'] = f.get('source_timestamp')
+        if f.get('timezone_detection_method'):
+            item['timezone_detection_method'] = f.get('timezone_detection_method')
+        if f.get('timezone_detection_confidence'):
+            item['timezone_detection_confidence'] = f.get('timezone_detection_confidence')
+        if f.get('timezone_detection_evidence'):
+            item['timezone_detection_evidence'] = f.get('timezone_detection_evidence')
         if f.get('source_broker'):
             item['source_broker'] = f.get('source_broker')
         execs.append(item)
@@ -519,7 +709,11 @@ def aggregate_executions(fills: list[dict]) -> dict:
     }
 
 
-def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = None) -> list[dict]:
+def parse_cash_balance_section(
+    rows: list[list[str]],
+    date_filter: str | None = None,
+    timezone_info: dict | None = None,
+) -> list[dict]:
     """
     Parse rows from the Cash Balance section.
     Expects header: DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
@@ -527,6 +721,7 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
     """
     if not rows:
         return []
+    timezone_info = timezone_info or detect_csv_timezone("", "thinkorswim")
 
     # Find header row
     header_idx = None
@@ -581,11 +776,12 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
             'date': date_val,
             'iso_date': normalize_date(date_val),
             'time': time_val,
+            'source_timestamp': f"{date_val} {time_val}".strip(),
             'amount': amount,
             'commission': total_commission,
             'raw_description': desc,
         })
-        executions.append(attach_execution_timestamp(parsed, "thinkorswim"))
+        executions.append(attach_detected_execution_timestamp(parsed, "thinkorswim", timezone_info))
 
     return executions
 
@@ -601,6 +797,7 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
     "9/25/26 10:11 AM"). The importer stores ":00" seconds and explicitly marks
     timestamp_precision="minute"; it never invents sub-minute timing.
     """
+    timezone_info = detect_csv_timezone(content, "schwab_transactions")
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
     header_idx = None
     col = {}
@@ -673,9 +870,12 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
             'raw_description': desc,
             'source_ref': source_ref,
             'source_row': line_no,
+            'source_timestamp': dt_text,
             'timestamp_precision': timestamp_precision,
         })
-        executions.append(attach_execution_timestamp(parsed, "schwab_transactions"))
+        executions.append(
+            attach_detected_execution_timestamp(parsed, "schwab_transactions", timezone_info)
+        )
 
     if problems:
         more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ''
@@ -694,13 +894,14 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
 
     return build_trades_from_executions(executions, account_id, conn)
 
-def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
+def parse_futures_section_rows(rows: list[list[str]], timezone_info: dict | None = None) -> list[dict]:
     """
     Parse rows from the Futures Statements section.
     Header: Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance
     """
     if not rows:
         return []
+    timezone_info = timezone_info or detect_csv_timezone("", "thinkorswim")
 
     header_idx = None
     for i, row in enumerate(rows):
@@ -745,11 +946,12 @@ def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
             'date': trade_date,
             'iso_date': normalize_date(trade_date),
             'time': exec_time,
+            'source_timestamp': f"{trade_date} {exec_time}".strip(),
             'amount': amount,
             'commission': total_commission,
             'raw_description': desc,
         })
-        executions.append(attach_execution_timestamp(parsed, "thinkorswim"))
+        executions.append(attach_detected_execution_timestamp(parsed, "thinkorswim", timezone_info))
 
     return executions
 
@@ -1002,6 +1204,10 @@ def _rebuild_fill_from_db_exec(e: dict, trade_meta: dict) -> dict:
         'timestamp_precision': e.get('timestamp_precision'),
         'timestamp_utc': e.get('timestamp_utc'),
         'source_timezone': e.get('source_timezone'),
+        'source_timestamp': e.get('source_timestamp'),
+        'timezone_detection_method': e.get('timezone_detection_method'),
+        'timezone_detection_confidence': e.get('timezone_detection_confidence'),
+        'timezone_detection_evidence': e.get('timezone_detection_evidence'),
         'source_broker': e.get('source_broker'),
     }
 
@@ -1086,6 +1292,7 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
     Returns (list of trade dicts ready for DB insert, skipped_count).
     """
     content = content.lstrip('﻿')
+    timezone_info = detect_csv_timezone(content, "thinkorswim")
 
     sections = split_csv_sections(content)
     cash_rows = find_cash_balance_section(sections)
@@ -1094,9 +1301,9 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
 
     all_executions = []
     if cash_rows:
-        all_executions.extend(parse_cash_balance_section(cash_rows))
+        all_executions.extend(parse_cash_balance_section(cash_rows, timezone_info=timezone_info))
     if futures_rows:
-        all_executions.extend(parse_futures_section_rows(futures_rows))
+        all_executions.extend(parse_futures_section_rows(futures_rows, timezone_info=timezone_info))
 
     # Merge Trade History: add fills not already represented in Cash Balance / Futures.
     # Use (iso_date, ticker, action, qty, price) to match across sections — time formats differ.
@@ -1108,7 +1315,7 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
         for ex in all_executions:
             k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
             cb_qty_map[k] = cb_qty_map.get(k, 0) + ex.get('qty', 0)
-        for ex in parse_trade_history_section(trade_history_rows):
+        for ex in parse_trade_history_section(trade_history_rows, timezone_info=timezone_info):
             if _cross_section_key(ex) in cb_exact_keys:
                 continue
             k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
@@ -1462,6 +1669,7 @@ def parse_ibkr_trades_section(records: list[dict[str, str]]) -> list[dict]:
             'date': iso_date,
             'iso_date': iso_date,
             'time': time_part,
+            'source_timestamp': r.get('Date/Time', '') or r.get('Date', ''),
             'amount': round(proceeds, 2),
             'commission': round(commission, 2),
             'raw_description': f"{action} {qty} {symbol} @{price}",
@@ -1477,6 +1685,7 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
     parse_thinkorswim_csv: (trade dicts ready for DB insert, skipped_count).
     """
     content = content.lstrip('﻿')
+    timezone_info = detect_csv_timezone(content, "ibkr")
     sections = split_ibkr_sections(content)
 
     trade_records = sections.get('Trades')
@@ -1486,7 +1695,22 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
             "with the Trades section enabled."
         )
 
-    executions = parse_ibkr_trades_section(trade_records)
+    if timezone_info.get("confidence") == "low":
+        raise ValueError(
+            "IBKR statement timezone could not be verified; nothing was imported. "
+            "Export an Activity Statement that includes Time Zone metadata."
+        )
+
+    raw_executions = parse_ibkr_trades_section(trade_records)
+    executions = [
+        attach_detected_execution_timestamp(ex, "ibkr", timezone_info)
+        for ex in raw_executions
+    ]
+    missing_ts = [ex for ex in executions if not ex.get("timestamp_utc")]
+    if missing_ts:
+        raise ValueError(
+            "IBKR execution timestamp could not be normalized; nothing was imported."
+        )
     return build_trades_from_executions(executions, account_id, conn)
 
 
@@ -1497,7 +1721,7 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
 # fill.
 #
 # Required columns: date, time, symbol, side, quantity, price
-# Optional columns: commission, asset_type, expiry, strike, put_call, multiplier
+# Optional columns: commission, asset_type, expiry, strike, put_call, multiplier, timezone
 #
 # Header names are case-insensitive and extra columns are ignored, so a broker
 # export that already uses these headers imports as-is. Rows that cannot be read
@@ -1505,7 +1729,9 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
 # missing fill changes every P&L number after it.
 
 GENERIC_REQUIRED = ('date', 'time', 'symbol', 'side', 'quantity', 'price')
-GENERIC_OPTIONAL = ('commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier')
+GENERIC_OPTIONAL = (
+    'commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier', 'timezone'
+)
 
 _GENERIC_ALIASES = {
     'ticker': 'symbol', 'qty': 'quantity', 'shares': 'quantity', 'contracts': 'quantity',
@@ -1514,6 +1740,8 @@ _GENERIC_ALIASES = {
     'type': 'asset_type', 'instrument': 'asset_type', 'instrument_type': 'asset_type',
     'expiration': 'expiry', 'exp': 'expiry', 'call_put': 'put_call', 'right': 'put_call',
     'strike_price': 'strike',
+    'time_zone': 'timezone', 'timezone_name': 'timezone',
+    'tz': 'timezone', 'source_timezone': 'timezone',
 }
 
 
@@ -1601,6 +1829,7 @@ def _num(text):
 
 def parse_generic_rows(content):
     """Read the generic template into execution dicts. Raises ValueError naming every bad line."""
+    file_timezone_info = detect_csv_timezone(content, "generic")
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
 
     header_at, col = None, None
@@ -1626,10 +1855,21 @@ def parse_generic_rows(content):
         why = []
 
         symbol = cell(cells, 'symbol').upper()
-        date = _generic_date(cell(cells, 'date'))
-        time_ = _generic_time(cell(cells, 'time'))
+        raw_date = cell(cells, 'date')
+        raw_time = cell(cells, 'time')
+        date = _generic_date(raw_date)
+        time_ = _generic_time(raw_time)
         action = _generic_side(cell(cells, 'side'))
         asset = _generic_asset(cell(cells, 'asset_type'), symbol)
+        timezone_info = None
+        try:
+            row_timezone = cell(cells, 'timezone')
+            timezone_info = (
+                detect_csv_timezone("", "generic", row_timezone=row_timezone)
+                if row_timezone else file_timezone_info
+            )
+        except ValueError as exc:
+            why.append(str(exc))
 
         try:
             qty = abs(_num(cell(cells, 'quantity')))
@@ -1712,10 +1952,14 @@ def parse_generic_rows(content):
             'date': date,
             'iso_date': date,
             'time': time_,
+            'source_timestamp': f"{raw_date} {raw_time}".strip(),
             'amount': round(amount, 2),
             'commission': round(commission, 2),
             'raw_description': f"{action} {qty} {ticker} @{price}",
         })
+        executions[-1] = attach_detected_execution_timestamp(
+            executions[-1], "generic", timezone_info
+        )
 
     if problems:
         more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ""
@@ -1729,8 +1973,27 @@ def parse_generic_rows(content):
 
 
 def parse_generic_csv(content, account_id, conn=None):
-    """Generic template pipeline. Same output contract as the broker parsers."""
-    return build_trades_from_executions(parse_generic_rows(content), account_id, conn)
+    """Generic template pipeline with explicit timezone safety."""
+    executions = parse_generic_rows(content)
+    low_confidence = [
+        ex for ex in executions
+        if ex.get("timezone_detection_confidence") == "low"
+    ]
+    if low_confidence:
+        raise ValueError(
+            "Timezone could not be verified for this generic CSV. Nothing was imported. "
+            "Add a timezone column using an IANA zone such as America/Chicago "
+            "(recommended) or a supported US abbreviation such as CT/CST/CDT."
+        )
+    missing_ts = [ex for ex in executions if not ex.get("timestamp_utc")]
+    if missing_ts:
+        sample = missing_ts[0]
+        raise ValueError(
+            "Execution timestamp is ambiguous or invalid in its detected timezone; "
+            "nothing was imported. "
+            f"Example: {sample.get('source_timestamp') or sample.get('time')}"
+        )
+    return build_trades_from_executions(executions, account_id, conn)
 
 
 # ── Broker dispatch ────────────────────────────────────────────────────────────
