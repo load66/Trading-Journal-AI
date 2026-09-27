@@ -615,7 +615,14 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
 
   expect(await screen.findByRole('heading', { name: /Trade management/i })).toBeVisible();
   expect(screen.getByText('Profit capture')).toBeVisible();
-  expect(screen.getAllByText('64%').length).toBeGreaterThan(0);
+  // The dense dashboard presents each decision-making value once. Repeating
+  // headline P&L and capture percentages made the old view harder to scan.
+  expect(screen.getAllByText('+$4340.34')).toHaveLength(1);
+  expect(screen.getAllByText('64%')).toHaveLength(1);
+  const captureMeter = screen.getByRole('meter', { name: 'Profit capture' });
+  expect(captureMeter).toHaveAttribute('aria-valuenow', '64');
+  expect(captureMeter).toHaveAttribute('aria-valuetext', '64% captured, 36% left on table');
+  expect(screen.getByText('Cumulative net P&L')).toBeVisible();
   expect(screen.queryByText('Profit vs. left on table')).not.toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i })).toBeVisible();
   expect(screen.getByText('September Smoking Gun')).toBeVisible();
@@ -628,4 +635,23 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   fireEvent.click(screen.getByRole('button', { name: /View full report/i }));
   const smokingTab = await screen.findByRole('tab', { name: 'Smoking Gun' });
   expect(smokingTab).toHaveAttribute('aria-selected', 'true');
+});
+
+test('Dashboard reports unavailable profit capture without invalid meter semantics', async () => {
+  kpisApi.get.mockResolvedValue({
+    data: {
+      total_net_pnl: 0,
+      total_trades: 0,
+      trading_days: 0,
+      exit_efficiency: null,
+      daily_pnl: [],
+    },
+  });
+
+  await renderApp();
+
+  const unavailableCapture = await screen.findByRole('status', { name: 'Profit capture unavailable' });
+  expect(unavailableCapture).toBeVisible();
+  expect(unavailableCapture).not.toHaveAttribute('aria-valuetext');
+  expect(screen.queryByRole('meter', { name: 'Profit capture' })).not.toBeInTheDocument();
 });

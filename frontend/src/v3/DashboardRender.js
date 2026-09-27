@@ -191,11 +191,19 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             </div>
           </div>
 
-          <div className="v3-capture-split v3-capture-split-clean" aria-label="Captured versus left on table">
-            <div className="captured" style={{ '--w': captureBar + '%' }}>
-              {capture == null ? 'No data' : captureBar.toFixed(0) + '%'}
-            </div>
-            <div className="left">{leftOnTable == null ? '' : leftOnTable.toFixed(0) + '%'}</div>
+          <div
+            className={`v3-capture-split v3-capture-split-clean${capture == null ? ' is-empty' : ''}`}
+            role={capture == null ? 'status' : 'meter'}
+            aria-label={capture == null ? 'Profit capture unavailable' : 'Profit capture'}
+            aria-valuemin={capture == null ? undefined : 0}
+            aria-valuemax={capture == null ? undefined : 100}
+            aria-valuenow={capture == null ? undefined : captureBar}
+            aria-valuetext={capture == null
+              ? undefined
+              : `${captureBar.toFixed(0)}% captured, ${leftOnTable.toFixed(0)}% left on table`}
+          >
+            <div className="captured" style={{ '--w': captureBar + '%' }} aria-hidden="true" />
+            <div className="left" aria-hidden="true" />
           </div>
 
           <div className="v3-management-meta">
@@ -633,7 +641,7 @@ export default function DashboardRender(p) {
   const readout = days.length ? days[days.length - 1] : null;
 
   return (
-    <div>
+    <div className="v3-dashboard">
       <div className="v3-hero v3-hero-compact">
         <div className="v3-eyeline">
           <div>
@@ -686,12 +694,12 @@ export default function DashboardRender(p) {
               <div className="v3-chart-panel">
                 <div className="v3-chart-title">
                   <div>
-                    <div className="v3-lab">Cumulative P&amp;L</div>
-                    <strong className={tone(net)}>{money2(net)}</strong>
+                    <div className="v3-lab">Cumulative net P&amp;L</div>
+                    <strong>Net growth curve</strong>
                   </div>
                   <span>after commissions</span>
                 </div>
-                <EquityCurve days={days} height={210} onPick={onDayClick} />
+                <EquityCurve days={days} height={150} onPick={onDayClick} />
               </div>
               <div className="v3-chart-panel">
                 <div className="v3-chart-title">
@@ -701,7 +709,7 @@ export default function DashboardRender(p) {
                   </div>
                   <span>click a bar to review the day</span>
                 </div>
-                <DailyPnlBars days={days} height={210} onPick={onDayClick} />
+                <DailyPnlBars days={days} height={150} onPick={onDayClick} />
               </div>
             </div>
           </section>
