@@ -3303,7 +3303,7 @@ def get_edge_report(
 ):
     sql = """
         SELECT t.trade_group, t.ticker, t.side, t.net_pnl, t.date, t.executions,
-               ta.r_multiple, ta.emotional_state, ta.mistakes
+               ta.r_multiple, ta.risk_per_trade, ta.emotional_state, ta.mistakes
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
         WHERE 1=1
@@ -3321,11 +3321,12 @@ def get_edge_report(
     sql += " ORDER BY t.date"
 
     rows = conn.execute(sql, params).fetchall()
-    trades = [row_to_dict(r) for r in rows]
+    trades = canonical_completed_trades([row_to_dict(r) for r in rows])
+    completed_groups = {str(t.get("trade_group") or "") for t in trades}
 
-    # Mistake frequency from trade_tags
+    # Mistake frequency from trade_tags, restricted to the same completed cohort.
     tag_sql = """
-        SELECT tt.tag_value, COUNT(*) as cnt
+        SELECT tt.trade_group, tt.tag_value
         FROM trade_tags tt
         JOIN trades t ON t.trade_group = tt.trade_group
         WHERE tt.tag_type = 'mistake'
@@ -3340,87 +3341,36 @@ def get_edge_report(
     if date_to:
         tag_sql += " AND t.date <= ?"
         tag_params.append(date_to)
-    tag_sql += " GROUP BY tt.tag_value ORDER BY cnt DESC LIMIT 8"
 
-    tag_rows = conn.execute(tag_sql, tag_params).fetchall()
-    mistake_counts: dict[str, int] = {r["tag_value"]: r["cnt"] for r in tag_rows}
+    mistake_counts: dict[str, int] = {}
+    for row in conn.execute(tag_sql, tag_params).fetchall():
+        if str(row["trade_group"] or "") not in completed_groups:
+            continue
+        value = str(row["tag_value"] or "").strip()
+        if value:
+            mistake_counts[value] = mistake_counts.get(value, 0) + 1
 
     # Also mine free-text mistakes field
     for trade in trades:
-        text = (trade.get("mistakes") or "").strip()
-        if not text:
-            continue
-        parts = [p.strip() for p in text.replace("\n", ",").replace(";", ",").split(",") if p.strip()]
-        for part in parts:
-            key = part[:60]
-            if key not in mistake_counts:
-                mistake_counts[key] = 1
-            else:
-                mistake_counts[key] += 1
-
-    mistake_freq = sorted(
-        [{"mistake": k, "count": v} for k, v in mistake_counts.items()],
-        key=lambda x: -x["count"],
-    )[:8]
-
-    # 30-min time buckets 9:30 -> 15:30
-    BUCKETS: list[str] = []
-    t_min = 9 * 60 + 30
-    while t_min < 16 * 60:
-        h, m = divmod(t_min, 60)
-        BUCKETS.append(f"{h:02d}:{m:02d}")
-        t_min += 30
-
-    bucket_pnl: dict[str, float] = {b: 0.0 for b in BUCKETS}
-    bucket_counts: dict[str, int] = {b: 0 for b in BUCKETS}
-
-    DOW_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-    dow_pnl: dict[str, float] = {d: 0.0 for d in DOW_ORDER}
-    dow_counts: dict[str, int] = {d: 0 for d in DOW_ORDER}
-    DOW_NAMES = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri"}
-
-    winner_hold: list[float] = []
-    loser_hold: list[float] = []
-
-    r_bucket_counts: dict[float, int] = {}
-    for i in range(-7, 8):
-        r_bucket_counts[round(i * 0.5, 1)] = 0
-
-    EMOTIONS = ["calm", "anxious", "overconfident", "disciplined", "frustrated", "revenge"]
-    emo_data: dict[str, dict] = {
-        e: {"count": 0, "wins": 0, "total_pnl": 0.0, "r_vals": []} for e in EMOTIONS
-    }
-
-    for trade in trades:
-        pnl = trade.get("net_pnl") or 0.0
+        pnl = float(trade.get("net_pnl") or 0.0)
         date_str = trade.get("date", "")
-        side = (trade.get("side") or "LONG").upper()
 
-        try:
-            execs = json.loads(trade.get("executions") or "[]")
-        except Exception:
-            execs = []
-
-        all_times = sorted([e.get("time", "") for e in execs if e.get("time")])
-        entry_action = "BOT" if side == "LONG" else "SOLD"
-        entry_times = sorted([e.get("time", "") for e in execs if e.get("action") == entry_action and e.get("time")])
-
-        # Time-of-day bucket (entry time)
-        if entry_times:
-            try:
-                parts = entry_times[0].split(":")
-                h, m = int(parts[0]), int(parts[1])
-                entry_mins = h * 60 + m
-                bucket_floor = ((entry_mins - 9 * 60 - 30) // 30) * 30 + 9 * 60 + 30
-                bh, bm = divmod(bucket_floor, 60)
+        # Time-of-day bucket from the first broker entry execution (CT).
+        entry_mins = canonical_first_entry_clock_minutes(trade)
+        if entry_mins is not None:
+            if entry_mins < 8 * 60 + 30:
+                bkey = "Pre-market"
+            elif entry_mins >= 15 * 60:
+                bkey = "After-hours"
+            else:
+                floor = int((entry_mins - (8 * 60 + 30)) // 30) * 30 + 8 * 60 + 30
+                bh, bm = divmod(floor, 60)
                 bkey = f"{bh:02d}:{bm:02d}"
-                if bkey in bucket_pnl:
-                    bucket_pnl[bkey] += pnl
-                    bucket_counts[bkey] += 1
-            except Exception:
-                pass
+            if bkey in bucket_pnl:
+                bucket_pnl[bkey] += pnl
+                bucket_counts[bkey] += 1
 
-        # Day of week
+        # Day of week.
         if date_str:
             try:
                 d = datetime.strptime(date_str, "%Y-%m-%d")
@@ -3432,23 +3382,22 @@ def get_edge_report(
             except Exception:
                 pass
 
-        # Hold time
-        if len(all_times) >= 2:
-            try:
-                def to_mins(t_str: str) -> float:
-                    p = t_str.split(":")
-                    return int(p[0]) * 60 + int(p[1]) + (int(p[2]) / 60 if len(p) == 3 else 0)
-                hold = to_mins(all_times[-1]) - to_mins(all_times[0])
-                if hold >= 0:
-                    if pnl > 0:
-                        winner_hold.append(hold)
-                    elif pnl < 0:
-                        loser_hold.append(hold)
-            except Exception:
-                pass
+        # Hold time uses canonical timestamps and therefore handles seconds,
+        # cross-day trades, and DST correctly when broker provenance exists.
+        hold_sec = canonical_hold_seconds(trade)
+        if hold_sec is not None:
+            hold = hold_sec / 60
+            if pnl > 0:
+                winner_hold.append(hold)
+            elif pnl < 0:
+                loser_hold.append(hold)
 
-        # R-multiple distribution
-        r = trade.get("r_multiple")
+        # Canonical R: explicit planned risk wins over any legacy stored value.
+        r = canonical_realized_r(
+            trade,
+            risk_per_trade=trade.get("risk_per_trade"),
+            stored_r_multiple=trade.get("r_multiple"),
+        )
         if r is not None:
             r_clipped = max(-3.5, min(3.5, float(r)))
             bucket_key = round(round(r_clipped * 2) / 2, 1)
@@ -3502,6 +3451,7 @@ def get_edge_report(
         return round(value, 1)
 
     hold_n = len(winner_hold) + len(loser_hold)
+    directional_n = sum(1 for trade in trades if float(trade.get("net_pnl") or 0) != 0)
     hold_time = {
         "winners_avg_min": round(sum(winner_hold) / len(winner_hold), 1) if winner_hold else None,
         "losers_avg_min": round(sum(loser_hold) / len(loser_hold), 1) if loser_hold else None,
@@ -3510,23 +3460,14 @@ def get_edge_report(
         "winner_count": len(winner_hold),
         "loser_count": len(loser_hold),
         "sample_count": hold_n,
-        "coverage_pct": round(hold_n / len(trades) * 100, 1) if trades else 0.0,
+        "coverage_pct": round(hold_n / directional_n * 100, 1) if directional_n else 0.0,
+        "eligible_count": directional_n,
         "source": "broker_csv_executions",
     }
 
-    # Expectancy for edge report
-    all_pnl = [t.get("net_pnl") or 0 for t in trades]
-    wins_er = [p for p in all_pnl if p > 0]
-    losses_er = [p for p in all_pnl if p < 0]
-    total_er = len(all_pnl)
-    if total_er > 0 and wins_er and losses_er:
-        er_expectancy = round(
-            (len(wins_er) / total_er) * (sum(wins_er) / len(wins_er))
-            + (len(losses_er) / total_er) * (sum(losses_er) / len(losses_er)),
-            2,
-        )
-    else:
-        er_expectancy = 0.0
+    # Expectancy is mean realized net P&L per completed trade.
+    total_er = len(trades)
+    er_expectancy = canonical_expectancy(trades)
 
     return {
         "time_of_day": time_of_day,
