@@ -101,11 +101,11 @@ def test_embedded_numeric_offset_is_authoritative_over_broker_profile():
     )
     trades, _ = parse_schwab_transactions_csv(content, account_id=1, conn=None)
     execs = json.loads(trades[0]["executions"])
-    first = execs[0]
-    assert first["source_timezone"] == "UTC-04:00"
-    assert first["timezone_detection_method"] == "embedded_timestamp_timezone"
-    assert first["timezone_detection_confidence"] == "authoritative"
-    assert first["timestamp_utc"] == "2026-09-25T13:47:00Z"
+    offset_fill = next(e for e in execs if "-04:00" in e["source_timestamp"])
+    assert offset_fill["source_timezone"] == "UTC-04:00"
+    assert offset_fill["timezone_detection_method"] == "embedded_timestamp_timezone"
+    assert offset_fill["timezone_detection_confidence"] == "authoritative"
+    assert offset_fill["timestamp_utc"] == "2026-09-25T13:47:00Z"
 
 
 def test_conflicting_file_timezone_metadata_is_rejected():
