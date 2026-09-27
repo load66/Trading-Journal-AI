@@ -7,13 +7,13 @@ def trade(group, date, ticker, pnl, entry, exit_, qty=1, price=10.0,
           instrument="OPTION", side="LONG", extra_entries=None, open_position=False):
     entry_action, exit_action = ("BOT", "SOLD") if side == "LONG" else ("SOLD", "BOT")
     executions = [
-        {"date": date, "time": entry, "action": entry_action, "qty": qty, "price": price, "commission": 0},
+        {"date": date, "time": entry, "action": entry_action, "qty": qty, "price": price, "commission": 0, "source_timezone": "America/New_York"},
     ]
     for when, add_qty, add_price in (extra_entries or []):
-        executions.append({"date": date, "time": when, "action": entry_action, "qty": add_qty, "price": add_price, "commission": 0})
+        executions.append({"date": date, "time": when, "action": entry_action, "qty": add_qty, "price": add_price, "commission": 0, "source_timezone": "America/New_York"})
     if not open_position:
         total_qty = qty + sum(x[1] for x in (extra_entries or []))
-        executions.append({"date": date, "time": exit_, "action": exit_action, "qty": total_qty, "price": price + 1, "commission": 0})
+        executions.append({"date": date, "time": exit_, "action": exit_action, "qty": total_qty, "price": price + 1, "commission": 0, "source_timezone": "America/New_York"})
     return {
         "id": len(group), "account_id": 1, "trade_group": group, "date": date,
         "ticker": ticker, "instrument_type": instrument, "side": side,
