@@ -123,6 +123,32 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const mfe = data.avg_mfe == null ? null : Number(data.avg_mfe);
   const mae = data.avg_mae == null ? null : Number(data.avg_mae);
   const excursionN = Number(data.excursion_n || 0);
+  const holdMax = Math.max(winnerHold || 0, loserHold || 0, 1);
+  const winnerHoldPct = winnerHold == null ? 0 : Math.max(6, Math.min(100, (winnerHold / holdMax) * 100));
+  const loserHoldPct = loserHold == null ? 0 : Math.max(6, Math.min(100, (loserHold / holdMax) * 100));
+  const favorableMove = mfe == null ? null : Math.abs(mfe);
+  const adverseMove = mae == null ? null : Math.abs(mae);
+  const moveMax = Math.max(favorableMove || 0, adverseMove || 0, 1);
+  const favorablePct = favorableMove == null ? 0 : Math.max(6, Math.min(100, (favorableMove / moveMax) * 100));
+  const adversePct = adverseMove == null ? 0 : Math.max(6, Math.min(100, (adverseMove / moveMax) * 100));
+
+  const captureState = capture == null
+    ? { tone: 'neutral', label: 'NEED DATA' }
+    : capture >= captureGoal
+      ? { tone: 'good', label: 'ABOVE GOAL' }
+      : { tone: 'caution', label: 'BELOW GOAL' };
+
+  const holdState = holdRatio == null
+    ? { tone: 'neutral', label: 'NEED DATA' }
+    : holdRatio > 1.05
+      ? { tone: 'bad', label: 'LOSERS HELD LONGER' }
+      : { tone: 'good', label: 'CONTROLLED' };
+
+  const riskState = favorableMove == null || adverseMove == null
+    ? { tone: 'neutral', label: 'NEED DATA' }
+    : adverseMove > favorableMove
+      ? { tone: 'bad', label: 'ADVERSE > FAVORABLE' }
+      : { tone: 'good', label: 'FAVORABLE > ADVERSE' };
 
   const primaryInsight = (() => {
     if (holdRatio != null && holdRatio > 1.05) {
@@ -158,7 +184,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       <div className="v3-sec-head v3-management-head">
         <div>
           <h2 className="v3-h v3-icon-title"><Target size={18} /> Trade management</h2>
-          <p className="v3-h-sub">Three non-overlapping views of what happens after entry.</p>
+          <p className="v3-h-sub">How well do you manage trades after you enter?</p>
         </div>
         <div className="v3-management-range" role="group" aria-label="Trade management range">
           {['7D', '30D', '90D', 'ALL'].map((option) => (
@@ -176,34 +202,29 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       </div>
 
       <div className="v3-management-grid v3-management-grid-clean">
-        <article className="v3-management-card v3-management-card-feature">
-          <div className="v3-management-label"><Trophy size={17} /><span>Profit capture</span></div>
-          <p>How much of the favorable move you retained on winning trades.</p>
-
-          <div className="v3-capture-hero">
-            <div>
-              <span className="v3-lab">Captured</span>
-              <strong className="v3-management-value v3-pos">{capture == null ? 'N/A' : capture.toFixed(0) + '%'}</strong>
-            </div>
-            <div className="v3-capture-left">
-              <span className="v3-lab">Left on table</span>
-              <strong>{leftOnTable == null ? '—' : leftOnTable.toFixed(0) + '%'}</strong>
-            </div>
+        <article className="v3-management-card v3-management-card-feature v3-management-card-capture">
+          <div className="v3-management-card-top">
+            <div className="v3-management-label"><Trophy size={17} /><span>Profit capture</span></div>
+            <span className={'v3-management-status ' + captureState.tone}>{captureState.label}</span>
           </div>
+          <p className="v3-management-question">How much of the available favorable move are you actually keeping?</p>
 
+          <div className="v3-capture-score">
+            <strong className={capture != null && capture >= 0 ? 'v3-pos' : 'v3-neg'}>
+              {capture == null ? 'N/A' : capture.toFixed(0) + '%'}
+            </strong>
+          </div>
           <div
-            className={`v3-capture-split v3-capture-split-clean${capture == null ? ' is-empty' : ''}`}
+            className={`v3-management-progress v3-capture-progress${capture == null ? ' is-empty' : ''}`}
             role={capture == null ? 'status' : 'meter'}
             aria-label={capture == null ? 'Profit capture unavailable' : 'Profit capture'}
             aria-valuemin={capture == null ? undefined : 0}
             aria-valuemax={capture == null ? undefined : 100}
             aria-valuenow={capture == null ? undefined : captureBar}
-            aria-valuetext={capture == null
-              ? undefined
-              : `${captureBar.toFixed(0)}% captured, ${leftOnTable.toFixed(0)}% left on table`}
+            aria-valuetext={capture == null ? undefined : `${capture.toFixed(0)}% exit efficiency; goal ${captureGoal.toFixed(0)}%`}
           >
-            <div className="captured" style={{ '--w': captureBar + '%' }} aria-hidden="true" />
-            <div className="left" aria-hidden="true" />
+            <i style={{ '--w': captureBar + '%' }} aria-hidden="true" />
+            <span className="v3-capture-goal" style={{ '--goal': Math.max(0, Math.min(100, captureGoal)) + '%' }} aria-hidden="true" />
           </div>
 
           <div className="v3-management-meta">
@@ -211,42 +232,117 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             <span>{excursionN ? excursionN + ' measured trades' : 'No excursion sample'}</span>
           </div>
 
-          <div className={'v3-management-callout ' + (capture != null && capture >= captureGoal ? 'good' : 'caution')}>
+          <div className={'v3-management-callout ' + (capture != null && capture >= captureGoal ? 'good' : capture != null && capture < 0 ? 'bad' : 'caution')}>
+            <b>What it means:</b>{' '}
             {capture == null
-              ? 'Excursion data is required to score profit capture.'
+              ? 'Excursion data is required before profit capture can be scored.'
               : capture >= captureGoal
-                ? 'Winner monetization is above your current target.'
-                : 'Focus on exit structure rather than trying to sell the exact intraday high.'}
+                ? 'You are retaining enough of the favorable move to clear your current target.'
+                : capture < 0
+                  ? 'The favorable move was fully given back before exit on average. Exit discipline is the immediate priority.'
+                  : 'Too much of the favorable move is being given back before exit. Improve exit structure, not prediction.'}
           </div>
         </article>
 
         <article className="v3-management-card">
-          <div className="v3-management-label"><Clock3 size={17} /><span>Holding behavior</span></div>
-          <p>Whether time in the trade is helping winners or extending losers.</p>
-          <div className="v3-hold-pair">
-            <div><span>Winners</span><strong className="v3-pos">{winnerHold == null ? 'N/A' : winnerHold.toFixed(1) + ' min'}</strong></div>
-            <div><span>Losers</span><strong className="v3-neg">{loserHold == null ? 'N/A' : loserHold.toFixed(1) + ' min'}</strong></div>
+          <div className="v3-management-card-top">
+            <div className="v3-management-label"><Clock3 size={17} /><span>Holding behavior</span></div>
+            <span className={'v3-management-status ' + holdState.tone}>{holdState.label}</span>
           </div>
+          <p className="v3-management-question">Are you giving losing trades more time than winning trades?</p>
+
+          <div className="v3-comparison-list" aria-label="Average hold time comparison">
+            <div className="v3-comparison-row">
+              <div className="v3-comparison-value">
+                <span>Winning trades</span>
+                <strong className="v3-pos">{winnerHold == null ? 'N/A' : winnerHold.toFixed(1) + ' min'}</strong>
+              </div>
+              <div className="v3-comparison-track" aria-hidden="true"><i className="pos" style={{ '--w': winnerHoldPct + '%' }} /></div>
+            </div>
+            <div className="v3-comparison-row">
+              <div className="v3-comparison-value">
+                <span>Losing trades</span>
+                <strong className="v3-neg">{loserHold == null ? 'N/A' : loserHold.toFixed(1) + ' min'}</strong>
+              </div>
+              <div className="v3-comparison-track" aria-hidden="true"><i className="neg" style={{ '--w': loserHoldPct + '%' }} /></div>
+            </div>
+          </div>
+
           <div className={'v3-management-callout ' + (holdRatio != null && holdRatio > 1.05 ? 'bad' : 'good')}>
+            <b>What it means:</b>{' '}
             {holdRatio == null
-              ? 'Need closed trades with usable entry and exit timestamps.'
+              ? 'Closed trades need usable entry and exit timestamps before holding behavior can be compared.'
               : holdRatio > 1.05
-                ? 'Time is working against you on losing trades. Prioritize faster invalidation.'
-                : 'Losers are not being held materially longer than winners.'}
+                ? 'Losing trades are being given more time. Faster invalidation is the clearest correction.'
+                : 'Losing trades are not being held materially longer than winners.'}
+          </div>
+        </article>
+
+        <article className="v3-management-card v3-management-card-giveback">
+          <div className="v3-management-card-top">
+            <div className="v3-management-label"><Target size={17} /><span>Left on table</span></div>
+            <span className={'v3-management-status ' + (leftOnTable == null ? 'neutral' : leftOnTable <= 40 ? 'good' : 'caution')}>
+              {leftOnTable == null ? 'NEED DATA' : leftOnTable <= 40 ? 'LOW GIVEBACK' : 'HIGH GIVEBACK'}
+            </span>
+          </div>
+          <p className="v3-management-question">How much favorable movement are you giving back before exit?</p>
+
+          <div className="v3-giveback-score">
+            <strong className={leftOnTable != null && leftOnTable > 40 ? 'v3-neg' : 'v3-pos'}>
+              {leftOnTable == null ? 'N/A' : leftOnTable.toFixed(0) + '%'}
+            </strong>
+            <span>unretained favorable movement</span>
+          </div>
+
+          <div className="v3-giveback-track" aria-hidden="true">
+            <i style={{ '--w': leftOnTable == null ? '0%' : Math.max(0, Math.min(100, leftOnTable)) + '%' }} />
+          </div>
+
+          <div className={'v3-management-callout ' + (leftOnTable != null && leftOnTable <= 40 ? 'good' : 'caution')}>
+            <b>What it means:</b>{' '}
+            {leftOnTable == null
+              ? 'There is not enough excursion data to measure giveback.'
+              : leftOnTable <= 40
+                ? 'Giveback is contained; most of the favorable move is being retained.'
+                : capture < 0
+                  ? 'Exit efficiency is negative in this window, meaning gains were fully surrendered and then some before exit.'
+                  : 'A large share of the favorable move is being surrendered before exit.'}
           </div>
         </article>
 
         <article className="v3-management-card">
-          <div className="v3-management-label"><ShieldAlert size={17} /><span>Risk during trade</span></div>
-          <p>How far trades move in your favor and against you before exit.</p>
-          <div className="v3-risk-pair">
-            <div><span>Avg favorable move</span><strong className="v3-pos">{mfe == null ? 'N/A' : '+' + mfe.toFixed(2) + '%'}</strong><small>MFE</small></div>
-            <div><span>Avg adverse move</span><strong className="v3-neg">{mae == null ? 'N/A' : '-' + mae.toFixed(2) + '%'}</strong><small>MAE</small></div>
+          <div className="v3-management-card-top">
+            <div className="v3-management-label"><ShieldAlert size={17} /><span>Risk during trade</span></div>
+            <span className={'v3-management-status ' + riskState.tone}>{riskState.label}</span>
           </div>
-          <div className="v3-management-callout caution">
+          <p className="v3-management-question">How far do trades move for you versus against you before exit?</p>
+
+          <div className="v3-comparison-list" aria-label="Favorable and adverse move comparison">
+            <div className="v3-comparison-row">
+              <div className="v3-comparison-value">
+                <span>Favorable move <small>MFE</small></span>
+                <strong className="v3-pos">{favorableMove == null ? 'N/A' : '+' + favorableMove.toFixed(2) + '%'}</strong>
+              </div>
+              <div className="v3-comparison-track" aria-hidden="true"><i className="pos" style={{ '--w': favorablePct + '%' }} /></div>
+            </div>
+            <div className="v3-comparison-row">
+              <div className="v3-comparison-value">
+                <span>Adverse move <small>MAE</small></span>
+                <strong className="v3-neg">{adverseMove == null ? 'N/A' : '-' + adverseMove.toFixed(2) + '%'}</strong>
+              </div>
+              <div className="v3-comparison-track" aria-hidden="true"><i className="neg" style={{ '--w': adversePct + '%' }} /></div>
+            </div>
+          </div>
+
+          <div className={'v3-management-callout ' + (riskState.tone === 'bad' ? 'bad' : 'caution')}>
+            <b>What it means:</b>{' '}
             {excursionN
-              ? 'Path analysis is based on ' + excursionN + ' measured trades.' + (data.excursion_option_n ? ' Options use the underlying directional path.' : '')
-              : 'No measured excursion sample in this window.'}
+              ? (adverseMove != null && favorableMove != null && adverseMove > favorableMove
+                ? 'Trades are moving farther against you than for you on average. Tighten invalidation and position risk.'
+                : 'Favorable excursion is at least as large as adverse excursion in this window.')
+                + ' Based on ' + excursionN + ' measured trades.'
+                + (data.excursion_option_n ? ' Options use the underlying directional path.' : '')
+              : 'No measured excursion sample is available in this window.'}
           </div>
         </article>
       </div>
@@ -254,7 +350,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       <div className={'v3-bottom-line v3-bottom-line-clean ' + primaryInsight.tone}>
         <div className="v3-bottom-line-head">
           <Lightbulb size={20} />
-          <div><strong>Bottom line</strong><span>One priority from the selected management window</span></div>
+          <div><strong>Bottom line</strong><span>Your single most important management priority</span></div>
         </div>
         <div className="v3-bottom-line-copy">
           <p>
@@ -616,25 +712,25 @@ export default function DashboardRender(p) {
     {
       label: 'Profit factor',
       value: k.profit_factor == null ? '—' : Number(k.profit_factor).toFixed(2),
-      read: k.profit_factor == null ? 'Needs both wins and losses' : 'Net winning P&L ÷ absolute net losing P&L',
+      read: k.profit_factor == null ? 'Needs both wins and losses' : 'Above 1.00 means winning P&L outweighs losing P&L',
     },
     {
       label: 'Expectancy',
       value: money2(k.expectancy || 0),
       tone: Number(k.expectancy || 0) < 0 ? 'neg' : 'pos',
-      read: 'Average net P&L per completed trade',
+      read: 'Typical net result per completed trade',
     },
     {
       label: 'Avg R / trade',
       value: avgR == null ? 'N/A' : (avgR > 0 ? '+' : '') + avgR.toFixed(2) + 'R',
       tone: avgR != null && avgR < 0 ? 'neg' : undefined,
-      read: avgR == null ? 'Record planned risk to unlock' : (k.r_sample_count || 0) + ' trades with recorded R',
+      read: avgR == null ? 'Record planned risk to unlock' : 'Risk-adjusted result from ' + (k.r_sample_count || 0) + ' trades with planned risk',
     },
     {
       label: 'Max drawdown',
       value: money2(k.max_drawdown || 0),
       tone: 'neg',
-      read: 'Largest realized peak-to-trough drawdown',
+      read: 'Worst realized decline from a prior equity peak',
     },
   ];
 
@@ -646,6 +742,7 @@ export default function DashboardRender(p) {
         <div className="v3-eyeline">
           <div>
             <p className="v3-acct">{accountLabel}{span ? ' · ' + span : ''}</p>
+            <div className="v3-hero-label">Total net P&amp;L</div>
             <h1 className={'v3-money ' + tone(net)}>{money2(net)}</h1>
             <p className="v3-money-sub">
               {(k.total_trades || 0).toLocaleString()} completed trades
@@ -686,7 +783,7 @@ export default function DashboardRender(p) {
             <div className="v3-sec-head">
               <div>
                 <h2 className="v3-h">Performance trend</h2>
-                <p className="v3-h-sub">Is the edge compounding, and which sessions are moving the account?</p>
+                <p className="v3-h-sub">See whether performance is trending up and which sessions are driving the result.</p>
               </div>
               <span className="v3-evidence verified">VERIFIED</span>
             </div>
@@ -695,7 +792,7 @@ export default function DashboardRender(p) {
                 <div className="v3-chart-title">
                   <div>
                     <div className="v3-lab">Cumulative net P&amp;L</div>
-                    <strong>Net growth curve</strong>
+                    <strong>Account growth</strong>
                   </div>
                   <span>after commissions</span>
                 </div>
