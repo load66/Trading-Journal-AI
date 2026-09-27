@@ -3625,12 +3625,19 @@ def get_daily_summary(
     force: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    # Check cache first
+    # Check cache first. Branch the nullable-account query explicitly so
+    # PostgreSQL never has to infer the type of a bare "? IS NULL" parameter.
     if not force:
-        row = conn.execute(
-            "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND (account_id = ? OR (account_id IS NULL AND ? IS NULL))",
-            (date, account_id, account_id)
-        ).fetchone()
+        if account_id is None:
+            row = conn.execute(
+                "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
+                (date,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id = ?",
+                (date, account_id),
+            ).fetchone()
         if row:
             try:
                 content = json.loads(row['ai_content'])
