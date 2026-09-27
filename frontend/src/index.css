@@ -1329,10 +1329,10 @@ button.month-card:active { transform: translateY(1px); }
 .trade-view-table td {
   padding: 11px 10px;
 }
-.trade-view-table th:nth-child(1) { width: 108px; }
-.trade-view-table th:nth-child(2) { width: 126px; }
-.trade-view-table th:nth-child(3) { width: 120px; text-align: right; }
-.trade-view-table th:nth-child(4) { width: 268px; }
+.trade-view-table th:nth-child(1) { width: 96px; }
+.trade-view-table th:nth-child(2) { width: 108px; }
+.trade-view-table th:nth-child(3) { width: 104px; text-align: right; }
+.trade-view-table th:nth-child(4) { width: 334px; }
 .trade-view-table th:nth-child(5) { width: 104px; text-align: right; }
 .trade-view-table th:nth-child(6) { width: 108px; }
 .trade-view-table th:nth-child(7) { width: 126px; text-align: right; }
@@ -1573,6 +1573,9 @@ button.month-card:active { transform: translateY(1px); }
   .trade-view-table {
     min-width: 1050px;
   }
-  .trade-view-table th:nth-child(4) { width: 235px; }
+  .trade-view-table th:nth-child(1) { width: 92px; }
+  .trade-view-table th:nth-child(2) { width: 104px; }
+  .trade-view-table th:nth-child(3) { width: 100px; }
+  .trade-view-table th:nth-child(4) { width: 300px; }
   .trade-view-table th:nth-child(6) { width: 100px; }
 }
