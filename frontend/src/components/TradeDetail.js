@@ -4,7 +4,7 @@ import { tradesApi, libraryApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
-import { tradeStats as canonicalTradeStats } from '../tradeMetrics';
+import { executionMarketParts, tradeStats as canonicalTradeStats } from '../tradeMetrics';
 
 const fmt$ = (v) => {
   if (v == null) return '—';
@@ -109,8 +109,10 @@ function parseExecs(trade) {
 
 function computeStats(trade) {
   const stats = canonicalTradeStats(trade);
-  const openTime = stats.entryFills[0]?.time || null;
-  const closeTime = stats.exitFills[stats.exitFills.length - 1]?.time || null;
+  const openExecution = stats.entryFills[0] || null;
+  const closeExecution = stats.exitFills[stats.exitFills.length - 1] || null;
+  const openTime = openExecution?.time || null;
+  const closeTime = closeExecution?.time || null;
 
   const fmtHold = (m) => {
     if (m == null || !Number.isFinite(Number(m))) return '—';
@@ -126,6 +128,8 @@ function computeStats(trade) {
     ...stats,
     openTime,
     closeTime,
+    openExecution,
+    closeExecution,
     fmtHold,
   };
 }
@@ -724,6 +728,11 @@ export function formatExecutionTimeET(dateStr, timeStr) {
   return parts ? `${parts.hhmm} ET` : '—';
 }
 
+function formatExecutionObjectET(execution, fallbackDate) {
+  const parts = executionMarketParts(execution, fallbackDate);
+  return parts ? `${parts.hhmm} ET` : '—';
+}
+
 export function executionTimeETMinutes(dateStr, timeStr) {
   const parts = etPartsForExecution(dateStr, timeStr);
   return parts ? parts.hour * 60 + parts.minute : null;
@@ -738,10 +747,11 @@ const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', 
 // ── Main TradeDetail component ────────────────────────────────────────────────
 
 function getDayTradeTime(t, which) {
-  const execs = Array.isArray(t.executions) ? t.executions : [];
-  const times = execs.map(e => e.time).filter(Boolean).sort();
-  const raw = which === 'open' ? times[0] : times[times.length - 1];
-  return raw ? formatExecutionTimeET(t.date, raw) : null;
+  const stats = canonicalTradeStats(t);
+  const execution = which === 'open'
+    ? stats.entryFills[0]
+    : stats.exitFills[stats.exitFills.length - 1];
+  return execution ? formatExecutionObjectET(execution, t.date) : null;
 }
 
 function DaySidebar({ currentTrade, onOpenDetail }) {
@@ -1247,8 +1257,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           <span className="num">{trade.date}</span>
           {' / '}{trade.instrument_type ? trade.instrument_type.charAt(0) + trade.instrument_type.slice(1).toLowerCase() : 'Stock'}
           {' / '}{trade.side === 'LONG' ? 'Long' : trade.side === 'SHORT' ? 'Short' : trade.side}
-          {stats.openTime && <> · Opened <span className="num">{formatExecutionTimeET(trade.date, stats.openTime)}</span></>}
-          {stats.closeTime && stats.isClosed && <> · Closed <span className="num">{formatExecutionTimeET(trade.date, stats.closeTime)}</span></>}
+          {stats.openTime && <> · Opened <span className="num">{formatExecutionObjectET(stats.openExecution, trade.date)}</span></>}
+          {stats.closeTime && stats.isClosed && <> · Closed <span className="num">{formatExecutionObjectET(stats.closeExecution, trade.date)}</span></>}
           {stats.holdMinutes != null && <> · Held <span className="num">{stats.fmtHold(stats.holdMinutes)}</span></>}
         </>}
         actions={tradeNavList.length > 1 ? <>
@@ -1408,8 +1418,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 <StatRow label="Adjusted Cost" value={stats.adjustedCost ? fmt$(stats.adjustedCost) : '—'} />
                 <StatRow label="Average Entry" value={stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : '—'} />
                 <StatRow label="Average Exit" value={stats.avgExit ? `$${stats.avgExit.toFixed(2)}` : '—'} />
-                <StatRow label="Entry Time" value={stats.openTime ? formatExecutionTimeET(trade.date, stats.openTime) : '—'} />
-                <StatRow label="Exit Time" value={(stats.isClosed && stats.closeTime) ? formatExecutionTimeET(trade.date, stats.closeTime) : '—'} />
+                <StatRow label="Entry Time" value={stats.openTime ? formatExecutionObjectET(stats.openExecution, trade.date) : '—'} />
+                <StatRow label="Exit Time" value={(stats.isClosed && stats.closeTime) ? formatExecutionObjectET(stats.closeExecution, trade.date) : '—'} />
                 <StatRow label="Hold Time" value={stats.fmtHold(stats.holdMinutes)} />
 
                 {editingStats ? (
