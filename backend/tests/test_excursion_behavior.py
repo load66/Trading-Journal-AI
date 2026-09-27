@@ -38,13 +38,13 @@ def test_stock_excursion_uses_actual_fill_prices():
     ]
     result = calculate_trade_excursion(trade, bars)
     assert result["available"] is True
-    assert result["basis"] == "execution_price"
+    assert result["basis"] == "stock_1m"
     assert result["mfe_pct"] == 10.0
     assert result["mae_pct"] == 2.0
     assert result["exit_efficiency"] == 40.0
 
 
-def test_long_put_excursion_uses_inverse_underlying_direction():
+def test_option_excursion_uses_contract_premium_path_and_broker_fills():
     d = "2026-09-25"
     trade = {
         "trade_group": "put1",
@@ -60,15 +60,40 @@ def test_long_put_excursion_uses_inverse_underlying_direction():
         ],
     }
     bars = [
-        {"t": "2026-09-25T13:30:00Z", "o": 100, "h": 102, "l": 99, "c": 100},
-        {"t": "2026-09-25T13:31:00Z", "o": 100, "h": 101, "l": 95, "c": 96},
-        {"t": "2026-09-25T13:32:00Z", "o": 96, "h": 97, "l": 95.5, "c": 96},
+        {"t": "2026-09-25T13:30:00Z", "o": 1.00, "h": 1.10, "l": 0.95, "c": 1.05},
+        {"t": "2026-09-25T13:31:00Z", "o": 1.05, "h": 1.50, "l": 1.00, "c": 1.40},
+        {"t": "2026-09-25T13:32:00Z", "o": 1.40, "h": 1.45, "l": 1.20, "c": 1.25},
     ]
-    result = calculate_trade_excursion(trade, bars)
-    assert result["basis"] == "underlying_1m"
-    assert result["mfe_pct"] == 5.0
-    assert result["mae_pct"] == 2.0
-    assert result["exit_efficiency"] == 80.0
+    result = calculate_trade_excursion(trade, bars, bar_basis="option_premium_1m")
+    assert result["basis"] == "option_premium_1m"
+    assert result["mfe_pct"] == 50.0
+    assert result["mae_pct"] == 5.0
+    assert result["exit_efficiency"] == 50.0
+
+
+def test_option_excursion_rejects_underlying_path_as_profit_capture():
+    d = "2026-09-25"
+    trade = {
+        "trade_group": "call1",
+        "date": d,
+        "ticker": "TSM",
+        "instrument_type": "OPTION",
+        "option_type": "CALL",
+        "side": "LONG",
+        "net_pnl": 65.94,
+        "executions": [
+            fill(d, "09:30:10", "BOT", 1, 1.00),
+            fill(d, "09:32:20", "SOLD", 1, 1.25),
+        ],
+    }
+    underlying_bars = [
+        {"t": "2026-09-25T13:30:00Z", "o": 452.5, "h": 452.51, "l": 452.0, "c": 452.5},
+        {"t": "2026-09-25T13:31:00Z", "o": 452.5, "h": 452.52, "l": 451.9, "c": 452.0},
+        {"t": "2026-09-25T13:32:00Z", "o": 452.0, "h": 452.2, "l": 451.8, "c": 452.1},
+    ]
+    result = calculate_trade_excursion(trade, underlying_bars, bar_basis="stock_1m")
+    assert result["available"] is False
+    assert "option premium" in result["reason"].lower()
 
 
 def test_behavior_rules_are_execution_based_not_psychological():
