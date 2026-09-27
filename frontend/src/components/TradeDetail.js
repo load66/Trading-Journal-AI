@@ -617,6 +617,10 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const chartScreenshotDialogRef = useRef(null);
   const chartScreenshotBodyOverflowRef = useRef('');
 
+  const restoreChartScreenshotScroll = useCallback(() => {
+    document.body.style.overflow = chartScreenshotBodyOverflowRef.current;
+  }, []);
+
   const openChartScreenshot = useCallback(() => {
     const dialog = chartScreenshotDialogRef.current;
     if (!dialog || dialog.open) return;
@@ -637,10 +641,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       restoreChartScreenshotScroll();
     }
   }, [restoreChartScreenshotScroll]);
-
-  const restoreChartScreenshotScroll = useCallback(() => {
-    document.body.style.overflow = chartScreenshotBodyOverflowRef.current;
-  }, []);
 
   // Stats edit
   const [editingStats, setEditingStats]   = useState(false);
