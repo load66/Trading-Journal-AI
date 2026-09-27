@@ -954,6 +954,216 @@ tr.row-selected td:first-child { box-shadow: inset 3px 0 0 var(--accent-line); }
 .settings-panel-row > td { padding: 0 !important; }
 .settings-panel-row .settings-form { border: 0; }
 
+.settings-item-list {
+  max-width: 100%;
+  min-width: 0;
+}
+.settings-items-table {
+  width: 100%;
+  min-width: 640px;
+}
+.settings-mobile-label {
+  display: none;
+}
+
+@media (max-width: 680px) {
+  .settings-item-list {
+    overflow: hidden;
+  }
+
+  .settings-item-list .settings-head {
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .settings-item-list .settings-tools {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .settings-item-list .settings-search {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .settings-item-list .settings-search input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .settings-item-list .settings-tools > .btn {
+    min-height: 40px;
+    padding-inline: 14px;
+    white-space: nowrap;
+  }
+
+  .settings-item-list .settings-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 16px 16px;
+  }
+
+  .settings-item-list .settings-form > label {
+    width: 100%;
+    min-width: 0;
+    flex: none;
+  }
+
+  .settings-item-list .settings-form input,
+  .settings-item-list .settings-form select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .settings-item-list .settings-form-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .settings-item-list .settings-form-actions .btn {
+    width: 100%;
+    min-height: 42px;
+    justify-content: center;
+  }
+
+  .settings-items-table-wrap {
+    overflow: hidden;
+  }
+
+  .settings-items-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .settings-items-table thead {
+    display: none;
+  }
+
+  .settings-items-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .settings-items-table .settings-item-row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 10px;
+    border-bottom: 1px solid var(--divider-soft);
+  }
+
+  .settings-items-table .settings-item-row > td {
+    width: auto;
+    min-width: 0;
+    border: 0;
+  }
+
+  .settings-items-table .settings-item-name {
+    grid-column: 1 / -1;
+    padding: 14px 16px 4px !important;
+    color: var(--text-primary);
+    font-size: 15px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .settings-items-table .settings-item-description {
+    grid-column: 1 / -1;
+    padding: 0 16px 12px !important;
+    font-size: 13px !important;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .settings-items-table .settings-item-description:empty {
+    display: none;
+  }
+
+  .settings-items-table .settings-item-trades {
+    grid-column: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 0 14px 16px !important;
+    color: var(--text-secondary);
+    text-align: left !important;
+    font-size: 12px;
+  }
+
+  .settings-mobile-label {
+    display: inline;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+
+  .settings-items-table .settings-item-actions {
+    grid-column: 2;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    padding: 0 12px 12px 8px !important;
+    white-space: normal !important;
+  }
+
+  .settings-items-table .settings-item-actions .btn {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    font-size: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+  }
+
+  .settings-items-table .settings-item-actions .btn svg {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+  }
+
+  .settings-items-table .settings-item-actions .btn:hover,
+  .settings-items-table .settings-item-actions .btn:focus-visible {
+    border-color: var(--divider);
+    background: var(--surface-hover);
+  }
+
+  .settings-items-table .settings-panel-row {
+    display: block;
+    width: 100%;
+    border-bottom: 1px solid var(--divider-soft);
+  }
+
+  .settings-items-table .settings-panel-row > td {
+    display: block;
+    width: 100%;
+  }
+
+  .settings-items-table tbody > tr:not(.settings-item-row):not(.settings-panel-row) {
+    display: block;
+    width: 100%;
+  }
+
+  .settings-items-table tbody > tr:not(.settings-item-row):not(.settings-panel-row) > td {
+    display: block;
+    width: 100%;
+  }
+}
+
 .account-settings-shell {
   background: var(--surface-panel);
   border: 1px solid var(--divider-soft);
