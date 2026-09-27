@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, Pencil, GitMerge, Trash2, Search } from 'lucide-react';
-import { libraryApi } from '../api';
+import { Plus, Pencil, GitMerge, Trash2, Search, HardDrive, RefreshCw, ShieldCheck, AlertTriangle, ExternalLink, Activity } from 'lucide-react';
+import { libraryApi, storageApi } from '../api';
 import { PageHeader } from './ui';
 
 const SECTIONS = [
   { id: 'strategy', label: 'Strategies' },
   { id: 'source', label: 'Sources' },
   { id: 'tag', label: 'Tags' },
+  { id: 'storage', label: 'Storage' },
 ];
 
 const TAG_TYPE_LABEL = {
@@ -270,6 +271,195 @@ function ItemList({ kind, tagType = '', title, sub, noun, items, onChanged }) {
   );
 }
 
+
+const fmtBytes = (bytes) => {
+  const n = Number(bytes || 0);
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / (1024 ** 2)).toFixed(1)} MB`;
+  return `${(n / (1024 ** 3)).toFixed(2)} GB`;
+};
+
+const fmtCount = (value) => Number(value || 0).toLocaleString('en-US');
+
+function StorageHealthPanel() {
+  const [health, setHealth] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+
+  const loadHealth = useCallback(async (force = false) => {
+    force ? setRefreshing(true) : setLoading(true);
+    setError(null);
+    try {
+      const res = await storageApi.health(force);
+      setHealth(res.data);
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => { loadHealth(false); }, [loadHealth]);
+
+  if (loading && !health) {
+    return <div className="skeleton" style={{ height: 360 }} />;
+  }
+
+  if (error && !health) {
+    return (
+      <section className="storage-health-shell">
+        <div className="notice neg" role="alert">{error}</div>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => loadHealth(true)}>
+          <RefreshCw size={14} /> Retry
+        </button>
+      </section>
+    );
+  }
+
+  if (!health?.enabled) {
+    return (
+      <section className="storage-health-shell">
+        <div className="storage-health-hero">
+          <div className="storage-health-icon"><HardDrive size={20} /></div>
+          <div>
+            <h2>Cloudflare R2 storage</h2>
+            <p>{health?.message || 'R2 storage monitoring is not active.'}</p>
+          </div>
+          <span className="storage-health-badge disabled">Not active</span>
+        </div>
+      </section>
+    );
+  }
+
+  const status = health.status || 'healthy';
+  const percent = Math.min(100, Math.max(0, Number(health.storage_used_percent || 0)));
+  const noProjectedCharge = Number(health.projected_storage_cost_usd_if_held_month || 0) === 0;
+  const latest = health.latest_object_at
+    ? new Date(health.latest_object_at).toLocaleString()
+    : 'No objects yet';
+  const checked = health.checked_at
+    ? new Date(health.checked_at).toLocaleString()
+    : '—';
+
+  return (
+    <section className="storage-health-shell">
+      <div className="storage-health-hero">
+        <div className="storage-health-icon"><HardDrive size={20} /></div>
+        <div className="storage-health-hero-copy">
+          <div className="storage-health-title-row">
+            <h2>Cloudflare R2 storage</h2>
+            <span className={`storage-health-badge ${status}`}>
+              {status === 'healthy' ? 'Healthy'
+                : status === 'watch' ? 'Watch'
+                  : status === 'warning' ? 'Near limit'
+                    : status === 'billable' ? 'Billable risk'
+                      : 'Check failed'}
+            </span>
+          </div>
+          <p>Bucket <span className="num">{health.bucket}</span> · exact object usage from the private R2 bucket.</p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm storage-health-refresh"
+          disabled={refreshing}
+          onClick={() => loadHealth(true)}
+          title="Force a fresh R2 bucket scan. A list scan uses one or more Class A operations."
+        >
+          <RefreshCw size={14} className={refreshing ? 'spin' : ''} />
+          {refreshing ? 'Checking…' : 'Refresh'}
+        </button>
+      </div>
+
+      {error && <div className="notice neg" role="alert">{error}</div>}
+
+      <div className="storage-health-grid">
+        <article className="storage-health-kpi">
+          <span>Stored</span>
+          <strong className="num">{fmtBytes(health.stored_bytes)}</strong>
+          <small>{fmtCount(health.object_count)} objects</small>
+        </article>
+        <article className="storage-health-kpi">
+          <span>Free tier used</span>
+          <strong className="num">{Number(health.storage_used_percent || 0).toFixed(2)}%</strong>
+          <small>{fmtBytes(health.remaining_free_bytes)} remaining</small>
+        </article>
+        <article className="storage-health-kpi">
+          <span>500 KB screenshots left</span>
+          <strong className="num">{fmtCount(health.estimated_500kb_screenshots_remaining)}</strong>
+          <small>before the 10 GB storage reference</small>
+        </article>
+        <article className="storage-health-kpi">
+          <span>Projected storage cost</span>
+          <strong className={noProjectedCharge ? 'pos num' : 'neg num'}>
+            ${Number(health.projected_storage_cost_usd_if_held_month || 0).toFixed(2)}
+          </strong>
+          <small>if today&apos;s size were held all month</small>
+        </article>
+      </div>
+
+      <div className="storage-health-meter-card">
+        <div className="storage-health-meter-head">
+          <div>
+            <strong>Standard storage free-tier headroom</strong>
+            <span>10 GB-month monthly reference</span>
+          </div>
+          <strong className="num">{Number(health.stored_gb || 0).toFixed(3)} / 10 GB</strong>
+        </div>
+        <div className="storage-health-meter" role="progressbar" aria-label="R2 free storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(percent)}>
+          <span className={status} style={{ width: `${percent}%` }} />
+        </div>
+        <div className="storage-health-meter-foot">
+          <span>Latest object: {latest}</span>
+          <span>Avg object: {fmtBytes(health.average_object_bytes)}</span>
+        </div>
+      </div>
+
+      {!health.standard_free_tier_applicable && (
+        <div className="storage-health-warning">
+          <AlertTriangle size={16} />
+          <div>
+            <strong>Non-Standard storage detected</strong>
+            <span>The 10 GB free-tier comparison applies only to R2 Standard storage.</span>
+          </div>
+        </div>
+      )}
+
+      <div className="storage-health-lower-grid">
+        <article className="storage-health-detail">
+          <div className="storage-health-detail-title"><ShieldCheck size={16} /> Billing guard</div>
+          <div className={`storage-health-charge ${noProjectedCharge ? 'safe' : 'risk'}`}>
+            {noProjectedCharge ? 'No storage charge projected at the current snapshot.' : 'Current snapshot could create storage charges.'}
+          </div>
+          <p>{health.projected_cost_note}</p>
+          <div className="storage-health-meta">
+            <span>Last checked</span><strong>{checked}{health.cached ? ' · cached' : ''}</strong>
+          </div>
+          <div className="storage-health-meta">
+            <span>Health scan cost</span><strong>{fmtCount(health.health_scan_class_a_operations)} Class A list {Number(health.health_scan_class_a_operations) === 1 ? 'request' : 'requests'}</strong>
+          </div>
+        </article>
+
+        <article className="storage-health-detail">
+          <div className="storage-health-detail-title"><Activity size={16} /> Request limits</div>
+          <div className="storage-health-op-row">
+            <span>Class A free</span><strong className="num">{fmtCount(health.class_a_free_operations)} / month</strong>
+          </div>
+          <div className="storage-health-op-row">
+            <span>Class B free</span><strong className="num">{fmtCount(health.class_b_free_operations)} / month</strong>
+          </div>
+          <p className="storage-health-op-note">{health.operation_usage_reason}</p>
+          <a className="storage-health-pricing" href={health.pricing_url} target="_blank" rel="noreferrer">
+            Cloudflare R2 pricing <ExternalLink size={12} />
+          </a>
+        </article>
+      </div>
+    </section>
+  );
+}
+
 export default function Settings() {
   const [lib, setLib] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -315,7 +505,7 @@ export default function Settings() {
             onKeyDown={onTabKey}
           >
             {s.label}
-            {lib && (
+            {lib && s.id !== 'storage' && (
               <span className="text-muted num" style={{ marginLeft: 6, fontWeight: 500 }}>
                 {s.id === 'tag'
                   ? TAG_TYPE_ORDER.reduce((n, t) => n + (lib.tags?.[t]?.length || 0), 0)
@@ -327,8 +517,10 @@ export default function Settings() {
       </div>
 
       <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${section}`}>
-        {loadError && <div className="notice neg" role="alert">{loadError}</div>}
-        {!lib && !loadError && <div className="skeleton" style={{ height: 320 }} />}
+        {section !== 'storage' && loadError && <div className="notice neg" role="alert">{loadError}</div>}
+        {section !== 'storage' && !lib && !loadError && <div className="skeleton" style={{ height: 320 }} />}
+
+        {section === 'storage' && <StorageHealthPanel />}
 
         {lib && section === 'strategy' && (
           <ItemList kind="strategy" {...SECTION_COPY.strategy} items={lib.strategies} onChanged={load} />

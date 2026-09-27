@@ -1487,6 +1487,12 @@ def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = 
     return row_to_dict(row)
 
 
+@app.get("/api/storage/health")
+def get_storage_health(force: bool = Query(False)):
+    """Current chart-storage health without exposing storage credentials."""
+    return CHART_STORAGE.health(force=force)
+
+
 @app.get("/api/analysis-options")
 def get_analysis_options(conn: sqlite3.Connection = Depends(get_connection)):
     strategies = conn.execute(

@@ -163,3 +163,90 @@ def test_chart_storage_existing_mode_does_not_construct_r2(tmp_path, monkeypatch
     store = ChartStorage(settings)
     store.save("trade-review/local/chart.webp", b"local", "image/webp")
     assert store.read("trade-review/local/chart.webp") == (b"local", "image/webp")
+
+
+def test_r2_usage_summary_paginates_and_totals_bucket(tmp_path, monkeypatch):
+    settings = cfg(
+        tmp_path,
+        CHART_STORAGE_MODE="r2",
+        R2_BUCKET="trading-journal-screenshots",
+        R2_ENDPOINT_URL="https://account.r2.cloudflarestorage.com",
+        R2_ACCESS_KEY_ID="access",
+        R2_SECRET_ACCESS_KEY="secret",
+    )
+
+    from datetime import datetime, timezone
+
+    class FakeS3:
+        def __init__(self):
+            self.calls = []
+
+        def list_objects_v2(self, **kwargs):
+            self.calls.append(kwargs)
+            if "ContinuationToken" not in kwargs:
+                return {
+                    "Contents": [
+                        {"Key": "a.webp", "Size": 512000, "StorageClass": "STANDARD", "LastModified": datetime(2026, 9, 1, tzinfo=timezone.utc)},
+                        {"Key": "b.webp", "Size": 256000, "StorageClass": "STANDARD", "LastModified": datetime(2026, 9, 2, tzinfo=timezone.utc)},
+                    ],
+                    "IsTruncated": True,
+                    "NextContinuationToken": "next",
+                }
+            return {
+                "Contents": [
+                    {"Key": "c.webp", "Size": 128000, "StorageClass": "STANDARD", "LastModified": datetime(2026, 9, 3, tzinfo=timezone.utc)},
+                ],
+                "IsTruncated": False,
+            }
+
+    fake = FakeS3()
+    monkeypatch.setattr("storage.boto3.client", lambda *args, **kwargs: fake)
+    summary = R2Storage(settings).usage_summary()
+
+    assert summary["object_count"] == 3
+    assert summary["stored_bytes"] == 896000
+    assert summary["average_object_bytes"] == round(896000 / 3)
+    assert summary["latest_object_at"].startswith("2026-09-03")
+    assert summary["storage_classes"] == {"STANDARD": 3}
+    assert summary["scan_class_a_operations"] == 2
+    assert fake.calls[1]["ContinuationToken"] == "next"
+
+
+def test_chart_storage_health_uses_free_tier_guard_and_cache(tmp_path, monkeypatch):
+    settings = cfg(
+        tmp_path,
+        CHART_STORAGE_MODE="r2",
+        R2_BUCKET="trading-journal-screenshots",
+        R2_ENDPOINT_URL="https://account.r2.cloudflarestorage.com",
+        R2_ACCESS_KEY_ID="access",
+        R2_SECRET_ACCESS_KEY="secret",
+    )
+
+    class FakeS3:
+        def __init__(self):
+            self.calls = 0
+
+        def list_objects_v2(self, **kwargs):
+            self.calls += 1
+            return {
+                "Contents": [
+                    {"Key": "one.webp", "Size": 500 * 1024, "StorageClass": "STANDARD"},
+                ],
+                "IsTruncated": False,
+            }
+
+    fake = FakeS3()
+    monkeypatch.setattr("storage.boto3.client", lambda *args, **kwargs: fake)
+    store = ChartStorage(settings)
+
+    first = store.health()
+    second = store.health()
+    refreshed = store.health(force=True)
+
+    assert first["status"] == "healthy"
+    assert first["projected_storage_cost_usd_if_held_month"] == 0
+    assert first["estimated_500kb_screenshots_remaining"] > 19000
+    assert first["operation_usage_available"] is False
+    assert second["cached"] is True
+    assert fake.calls == 2
+    assert refreshed["cached"] is False
