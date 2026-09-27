@@ -165,3 +165,28 @@ def test_daily_context_signature_ignores_unrelated_all_time_benchmark_changes():
 
     assert daily_summary.daily_context_signature(later_history) == first
 
+def test_daily_cache_matches_identical_evidence_even_after_version_bump():
+    content = {
+        "input_signature": "same-day-evidence",
+        "evidence_version": 1,
+        "analytics_engine_version": "old-engine",
+    }
+    assert daily_summary.daily_cache_matches(content, "same-day-evidence") is True
+
+
+def test_daily_cache_invalidates_when_day_evidence_changes():
+    content = {
+        "input_signature": "old-day-evidence",
+        "evidence_version": 999,
+        "analytics_engine_version": "new-engine",
+    }
+    assert daily_summary.daily_cache_matches(content, "new-day-evidence") is False
+
+
+def test_daily_cache_does_not_trust_legacy_summary_without_signature():
+    content = {
+        "evidence_version": 4,
+        "analytics_engine_version": "current",
+    }
+    assert daily_summary.daily_cache_matches(content, "current-day-evidence") is False
+

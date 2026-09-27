@@ -367,6 +367,8 @@ export function Coaching({ summary, loading, error, onRetry, onRegenerate }) {
             Written against your trades and your diary together, and graded on process
             {summary.ai_provider ? ` · ${summary.ai_provider === 'groq' ? 'Groq' : 'Anthropic'} · ${summary.ai_model || ''}` : ''}
             {summary.evidence_locked ? ' · Evidence-locked' : ''}
+            {summary.cached && summary.cache_reason === 'evidence_unchanged' ? ' · Saved diagnosis · evidence unchanged' : ''}
+            {!summary.cached && summary.regeneration_reason === 'manual_override' ? ' · Manually refreshed' : ''}
           </p>
         </div>
         <div className="v3-acts">
