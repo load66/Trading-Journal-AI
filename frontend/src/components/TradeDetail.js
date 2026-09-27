@@ -605,7 +605,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [editingStats, setEditingStats]   = useState(false);
   const [statsForm, setStatsForm]         = useState({});
   const [savingStats, setSavingStats]     = useState(false);
-  const plannedRiskInputRef = useRef(null);
+  const rrPlanInputRef = useRef(null);
   const plannedRiskFocusHandled = useRef(false);
 
   // Strategy edit
@@ -651,8 +651,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     });
     setEditingStats(true);
     window.setTimeout(() => {
-      plannedRiskInputRef.current?.focus();
-      plannedRiskInputRef.current?.select?.();
+      rrPlanInputRef.current?.focus();
+      rrPlanInputRef.current?.select?.();
     }, 0);
   }, [focusPlannedRisk, analysis]);
 
@@ -1105,22 +1105,43 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         placeholder="Select source"
                       />
                     </div>
-                    <EditField label="Stop Loss ($)" type="number" value={String(statsForm.stop_loss)} onChange={v => setStatsForm(f => ({ ...f, stop_loss: v }))} />
                     <div>
-                      <EditField inputRef={plannedRiskInputRef} autoFocus={focusPlannedRisk} label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
+                      <EditField inputRef={rrPlanInputRef} autoFocus={focusPlannedRisk} label="Stop Distance ($)" type="number" value={String(statsForm.stop_loss)} onChange={v => setStatsForm(f => ({ ...f, stop_loss: v }))} />
                       <div className="text-muted" style={{ fontSize: 11.5, marginTop: 4, lineHeight: 1.35 }}>
-                        Dollar amount you accepted losing at entry. This unlocks a reliable realized R.
+                        Distance from entry to invalidation. For options, use the underlying-chart distance for chart R:R, not as contract premium loss.
                       </div>
                     </div>
-                    <EditField label="Profit Target ($)" type="number" value={String(statsForm.target_price)} onChange={v => setStatsForm(f => ({ ...f, target_price: v }))} />
+                    <EditField label="Target Distance ($)" type="number" value={String(statsForm.target_price)} onChange={v => setStatsForm(f => ({ ...f, target_price: v }))} />
+                    <div className="notice accent" style={{ margin: 0, padding: '9px 11px' }}>
+                      Planned R:R: <strong className="num">{
+                        Number(statsForm.stop_loss) > 0 && Number(statsForm.target_price) > 0
+                          ? `1:${(Number(statsForm.target_price) / Number(statsForm.stop_loss)).toFixed(2)}`
+                          : 'Enter stop and target distance'
+                      }</strong>
+                    </div>
+                    <div>
+                      <EditField label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
+                      <div className="text-muted" style={{ fontSize: 11.5, marginTop: 4, lineHeight: 1.35 }}>
+                        Total dollars accepted at risk for the full position. Option dollar risk requires a premium-based stop, not only the underlying-chart distance.
+                      </div>
+                    </div>
                     <EditField label="Emotional State" value={statsForm.emotional_state} onChange={v => setStatsForm(f => ({ ...f, emotional_state: v }))} options={EMOTIONAL_STATES} />
                   </div>
                 ) : analysis && (
                   <>
                     <StatRow label="Strategy" value={analysis.strategy} valueColor="var(--accent-line)" />
                     <StatRow label="Source" value={analysis.idea_source} valueColor="var(--text-secondary)" />
-                    <StatRow label="Stop Loss" value={analysis.stop_loss ? `${analysis.stop_loss}` : null} valueColor="var(--caution)" />
-                    <StatRow label="Profit Target" value={analysis.target_price ? `${analysis.target_price}` : null} valueColor="var(--accent-line)" />
+                    <StatRow label="Stop Distance" value={analysis.stop_loss ? '$' + Number(analysis.stop_loss).toFixed(2) : null} valueColor="var(--caution)" />
+                    <StatRow label="Target Distance" value={analysis.target_price ? '$' + Number(analysis.target_price).toFixed(2) : null} valueColor="var(--accent-line)" />
+                    <StatRow
+                      label="Planned R:R"
+                      value={
+                        Number(analysis.stop_loss) > 0 && Number(analysis.target_price) > 0
+                          ? `1:${(Number(analysis.target_price) / Number(analysis.stop_loss)).toFixed(2)}`
+                          : null
+                      }
+                      valueColor="var(--accent-line)"
+                    />
                     <StatRow label="Planned Risk" value={plannedRisk ? fmt$(-plannedRisk) : 'Not set'} valueColor={plannedRisk ? 'var(--caution)' : 'var(--text-secondary)'} />
                     <StatRow label="Realized R" value={realizedR || 'Set planned risk to calculate'} valueColor={realizedRValue == null ? 'var(--text-secondary)' : realizedRValue >= 0 ? 'var(--green)' : 'var(--red)'} />
                     {/* Excursion: how far the trade went your way and against you,
