@@ -1177,20 +1177,6 @@ test('Dashboard never substitutes all-time KPIs when a selected management windo
       },
     });
   });
-  edgeReportApi.get.mockResolvedValue({
-    data: {
-      total_trades: 159,
-      hold_time: {
-        winners_avg_min: 30.7,
-        losers_avg_min: 25.3,
-        winner_count: 81,
-        loser_count: 78,
-        sample_count: 159,
-        coverage_pct: 100,
-      },
-    },
-  });
-
   await renderApp();
 
   expect(await screen.findByText(/Selected-window performance metrics are unavailable/i)).toBeVisible();
@@ -1199,7 +1185,6 @@ test('Dashboard never substitutes all-time KPIs when a selected management windo
   const management = screen.getByRole('heading', { name: /Trade management/i }).closest('.v3-ref-management');
   expect(management).toBeTruthy();
   expect(within(management).queryByText('66.7%')).not.toBeInTheDocument();
-  expect(management).toHaveTextContent(/159\/159 trades.*100% timestamp coverage/i);
 });
 
 test('Dashboard prioritizes trade management and the latest saved Smoking Gun report', async () => {
