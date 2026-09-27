@@ -140,8 +140,9 @@ function ReviewTag({ tag, existing, applying, onApply }) {
 const CHECK_LABELS = {
   level_break: 'Directional level broke first',
   ema_alignment: 'Price aligned with 10m 8 EMA',
-  ema_extension: 'Entry not airgapped',
+  ema_extension: 'Flag / EMA snugness',
   ema_beyond_broken_level: '8 EMA crossed the broken level',
+  market_sign: 'SPY / QQQ confirm direction',
   chop_range: 'Outside PMH–PML chop',
 };
 
@@ -307,6 +308,7 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
   const checks = ev.entry_checks || {};
   const management = ev.management_10m8ema || {};
   const emaLevel = ev.ema_vs_broken_level || {};
+  const marketSign = ev.market_sign || {};
   const proven = review.auto_tags || [];
   const ai = review.ai;
   const strategy = ai?.strategy;
@@ -327,6 +329,18 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
       ? 'pass'
       : 'neutral';
   const emaCrossState = emaLevel.valid === true ? 'pass' : emaLevel.valid === false ? 'fail' : 'neutral';
+  const marketSignState = marketSign.status === 'confirmed'
+    ? 'pass'
+    : ['mixed', 'failed'].includes(marketSign.status)
+      ? 'fail'
+      : 'neutral';
+  const marketSignDetail = marketSign.status === 'confirmed'
+    ? 'SPY and QQQ both agree on the 10m 8 EMA'
+    : marketSign.status === 'mixed'
+      ? 'SPY and QQQ are not aligned with each other'
+      : marketSign.status === 'failed'
+        ? 'SPY and QQQ both oppose the trade direction'
+        : 'Consolidated market-sign evidence unavailable';
   const managementRead = exitRelation(management.exit_relation_to_ema_break);
   const structureTone = ev.entry_structure_status === 'aligned'
     ? 'pass'
@@ -347,8 +361,8 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
           <span className="le-review-kicker"><ShieldCheck size={13} /> LE system · objective review</span>
           <h2>10-Minute 8 EMA Structure Review</h2>
           <p>
-            Review the trade against verified LE structure first: level break, 8 EMA alignment,
-            EMA position versus the broken level, entry extension, and final exit behavior.
+            Review the trade against verified LE structure first: level break, Flag / EMA snugness,
+            10-minute 8 EMA alignment, SPY / QQQ Market Sign, and final exit behavior.
           </p>
         </div>
         <div className="le-review-hero-actions">
@@ -433,11 +447,11 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
           icon={Gauge}
         />
         <SignalCard
-          label="Entry extension"
-          value={ev.ema_distance_pct == null ? 'Unverified' : pct(ev.ema_distance_pct)}
-          detail={ev.ema_extension_state === 'airgapped' ? 'Beyond LE 1% airgap threshold' : ev.ema_extension_state === 'within_1pct' ? 'Within LE 1% threshold' : 'Distance unavailable'}
-          state={extensionState}
-          icon={Gauge}
+          label="Market Sign"
+          value={marketSign.status ? cleanLabel(marketSign.status) : 'Unverified'}
+          detail={marketSignDetail}
+          state={marketSignState}
+          icon={TrendingUp}
         />
         <SignalCard
           label="Final exit"
@@ -468,6 +482,18 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
             <DataPoint label="Underlying at entry" value={money(ev.underlying_price_last_completed_1m)} detail="Last completed 1m close" />
             <DataPoint label="10m 8 EMA" value={money(ev.ema8_10m_last_completed)} detail={cleanLabel(ev.ema_integrity_status)} />
             <DataPoint label="EMA slope" value={cleanLabel(ev.ema_slope_direction)} detail={ev.ema_slope_pct == null ? '—' : `${Number(ev.ema_slope_pct) >= 0 ? '+' : ''}${pct(ev.ema_slope_pct)}`} />
+            <DataPoint
+              label="SPY Market Sign"
+              value={marketSign.spy?.ema_aligned == null ? 'Unverified' : marketSign.spy.ema_aligned ? 'Aligned' : 'Opposed'}
+              detail={marketSign.spy ? `${cleanLabel(marketSign.spy.position_vs_ema)} 10m 8 EMA · ${cleanLabel(marketSign.spy.integrity_status)}` : 'No verified SPY evidence'}
+              tone={marketSign.spy?.ema_aligned === true ? 'pos' : marketSign.spy?.ema_aligned === false ? 'neg' : undefined}
+            />
+            <DataPoint
+              label="QQQ Market Sign"
+              value={marketSign.qqq?.ema_aligned == null ? 'Unverified' : marketSign.qqq.ema_aligned ? 'Aligned' : 'Opposed'}
+              detail={marketSign.qqq ? `${cleanLabel(marketSign.qqq.position_vs_ema)} 10m 8 EMA · ${cleanLabel(marketSign.qqq.integrity_status)}` : 'No verified QQQ evidence'}
+              tone={marketSign.qqq?.ema_aligned === true ? 'pos' : marketSign.qqq?.ema_aligned === false ? 'neg' : undefined}
+            />
             <DataPoint
               label="Nearest broken level"
               value={ev.nearest_broken_level?.name || '—'}
@@ -625,6 +651,8 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
             <DataPoint label="PML" value={money(levels.PML)} detail={levelStatusLabel(levelMeta.PML)} />
             <DataPoint label="Broker time zone" value={ev.execution_time_zone || '—'} />
             <DataPoint label="Market calendar" value={ev.market_calendar_verified ? 'Verified' : 'Unverified'} />
+            <DataPoint label="SPY feed" value={feedLabel(ev.market_data_feed?.spy)} detail={cleanLabel(marketSign.spy?.integrity_status)} />
+            <DataPoint label="QQQ feed" value={feedLabel(ev.market_data_feed?.qqq)} detail={cleanLabel(marketSign.qqq?.integrity_status)} />
           </div>
 
           {quality.reason && <p className="le-quality-reason">{quality.reason}</p>}

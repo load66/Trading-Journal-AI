@@ -353,7 +353,7 @@ def list_custom_setups(conn: sqlite3.Connection = Depends(get_connection)):
     rows = conn.execute(
         "SELECT cs.*, "
         " (SELECT COUNT(*) FROM trades t WHERE t.setup = cs.name) AS trade_count, "
-        " (SELECT ROUND(SUM(t.net_pnl),2) FROM trades t WHERE t.setup = cs.name) AS net_pnl "
+        " (SELECT ROUND(CAST(SUM(t.net_pnl) AS NUMERIC), 2) FROM trades t WHERE t.setup = cs.name) AS net_pnl "
         "FROM custom_setups cs WHERE cs.active = 1 ORDER BY cs.name"
     ).fetchall()
     return [dict(r) for r in rows]

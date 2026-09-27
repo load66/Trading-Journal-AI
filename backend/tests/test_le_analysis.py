@@ -14,6 +14,7 @@ from le_analysis import (
     _session_vwap_snapshot,
     analyze_context,
     build_le_levels,
+    build_le_review,
     entry_datetime,
     exit_datetime,
     market_direction,
@@ -184,6 +185,40 @@ def test_fetch_alpaca_falls_back_when_recent_sip_is_restricted(monkeypatch):
     assert calls == ["sip", "delayed_sip"]
 
 
+def test_build_le_review_fetches_spy_and_qqq_for_market_sign(monkeypatch):
+    calls = []
+
+    async def fake_fetch(symbol, when, through_dt=None):
+        calls.append((symbol, through_dt))
+        if symbol == "SPY":
+            rows = market_bars(current=102.0)
+        elif symbol == "QQQ":
+            rows = market_bars(current=103.0)
+        else:
+            rows = market_bars(pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0)
+        return rows, "sip"
+
+    async def fake_calendar(when):
+        return verified_calendar()
+
+    import le_analysis
+    monkeypatch.setattr(le_analysis, "_fetch_alpaca_1m", fake_fetch)
+    monkeypatch.setattr(le_analysis, "_fetch_market_calendar", fake_calendar)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    result = asyncio.run(build_le_review(base_trade("CALL")))
+
+    assert result["available"] is True
+    assert {symbol for symbol, _ in calls} == {"TEST", "SPY", "QQQ"}
+    assert result["evidence"]["market_sign"]["verified"] is True
+    assert result["evidence"]["market_sign"]["status"] == "confirmed"
+    assert result["evidence"]["market_data_feed"] == {
+        "underlying": "sip",
+        "spy": "sip",
+        "qqq": "sip",
+    }
+
+
 def test_build_le_levels_returns_same_reference_levels_without_ai(monkeypatch):
     async def fake_fetch(symbol, when):
         return market_bars(pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0), "sip"
@@ -336,15 +371,45 @@ def test_vwap_snapshot_uses_only_completed_regular_session_bars():
     assert snap["position_vs_vwap"] == "above"
 
 
-def test_market_sign_is_removed_from_le_review():
+def test_market_sign_requires_spy_and_qqq_to_confirm_on_10m_8ema():
     bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
     review = review_context(base_trade("CALL"), bars)
-    names = tag_names(review)
+    sign = review["evidence"]["market_sign"]
 
-    assert "market_sign" not in review["evidence"]
-    assert "spy" not in review["evidence"]
-    assert "qqq" not in review["evidence"]
-    assert ("mistake", "No Market Sign") not in names
+    assert sign["verified"] is True
+    assert sign["status"] == "confirmed"
+    assert sign["spy"]["ema_aligned"] is True
+    assert sign["qqq"]["ema_aligned"] is True
+    assert review["evidence"]["entry_checks"]["market_sign"]["status"] == "pass"
+    assert ("mistake", "No Market Sign") not in tag_names(review)
+
+
+def test_market_sign_fails_when_spy_and_qqq_do_not_both_agree():
+    underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    spy = minute_run((2026, 9, 25), 9, 30, 30, lambda i: 100.0 + i * 0.1)
+    qqq = minute_run((2026, 9, 25), 9, 30, 30, lambda i: 100.0 - i * 0.1)
+    trade = base_trade("CALL", entry="08:47:04")
+
+    review = review_context(trade, underlying, spy=spy, qqq=qqq)
+    sign = review["evidence"]["market_sign"]
+
+    assert sign["verified"] is True
+    assert sign["status"] == "mixed"
+    assert sign["spy"]["ema_aligned"] is True
+    assert sign["qqq"]["ema_aligned"] is False
+    assert review["evidence"]["entry_checks"]["market_sign"]["status"] == "fail"
+    assert ("mistake", "No Market Sign") in tag_names(review)
+
+
+def test_market_sign_is_unverified_on_limited_iex_data():
+    bars = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    review = review_context(base_trade("CALL"), bars, feed="iex")
+
+    sign = review["evidence"]["market_sign"]
+    assert sign["verified"] is False
+    assert sign["status"] == "unknown"
+    assert review["evidence"]["entry_checks"]["market_sign"]["status"] == "unverified"
+    assert ("mistake", "No Market Sign") not in tag_names(review)
 
 
 def test_outside_day_requires_both_directional_levels_before_entry():
