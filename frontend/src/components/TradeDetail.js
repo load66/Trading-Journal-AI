@@ -774,7 +774,7 @@ function DaySidebar({ currentTrade, onOpenDetail }) {
       .catch(() => {});
   }, [currentTrade.date, currentTrade.account_id]);
 
-  const dayPnl = dayTrades.reduce((s, t) => s + (t.net_pnl || 0), 0);
+  const dayPnl = dayTrades.filter(t => !t.is_open).reduce((s, t) => s + (t.net_pnl || 0), 0);
 
   return (
     <section className="card panel-flush" aria-label="This session">
