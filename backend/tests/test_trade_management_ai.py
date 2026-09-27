@@ -275,3 +275,53 @@ def test_trade_management_cache_only_miss_never_calls_ai(monkeypatch):
     assert result["cached"] is False
     assert result["cache_miss"] is True
     assert result["input_signature"] == "sig-123"
+
+
+def test_management_ai_sanitizes_internal_machine_labels(monkeypatch):
+    payload = model_payload()
+    payload["diagnosis"] = (
+        "Holding times do not leak on losers (signal:no_loser_hold_leak). "
+        "Exit efficiency remains strong."
+    )
+    payload["next_focus"] = "Monitor signal:no_loser_hold_leak while collecting more trades."
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(tm, "_groq_management_analysis", lambda *_args, **_kwargs: payload)
+
+    result = tm.generate_trade_management_analysis(evidence())
+
+    assert "signal:" not in result["diagnosis"]
+    assert "no_loser_hold_leak" not in result["diagnosis"]
+    assert "signal:" not in result["next_focus"]
+    assert "no_loser_hold_leak" not in result["next_focus"]
+    assert result["diagnosis"] == "Holding times do not leak on losers. Exit efficiency remains strong."
+
+
+def test_cached_management_ai_is_sanitized_before_restore(monkeypatch):
+    _patch_management_endpoint_inputs(monkeypatch)
+    cached = {
+        "diagnosis": "Healthy hold behavior (signal:no_loser_hold_leak).",
+        "headline": "No dominant management leak is confirmed.",
+        "input_signature": "sig-123",
+        "evidence_version": 1,
+        "analytics_engine_version": main.ANALYTICS_ENGINE_VERSION,
+    }
+    conn = _FakeCacheConn({
+        "ai_content": json.dumps(cached),
+        "generated_at": "2026-09-27T14:00:00",
+    })
+
+    result = main.get_trade_management_analysis(
+        account_id=4,
+        range_key="7D",
+        date_from="2026-09-19",
+        date_to="2026-09-25",
+        force=False,
+        cached_only=True,
+        conn=conn,
+    )
+
+    assert result["cached"] is True
+    assert result["diagnosis"] == "Healthy hold behavior."
+    assert "signal:" not in result["diagnosis"]

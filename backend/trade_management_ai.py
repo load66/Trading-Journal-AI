@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 import httpx
 
@@ -33,6 +34,8 @@ STRICT RULES:
 - If a metric has LOW/insufficient coverage, do not promote it to a firm conclusion.
 - The supplied deterministic_priority and deterministic signals are locked. Do not contradict or replace them.
 - Reference only numbers present in the supplied evidence.
+- Never expose internal machine labels, field names, signal IDs, evidence keys, snake_case enums, cache/version identifiers, or strings such as signal:no_loser_hold_leak in user-facing prose.
+- Translate internal evidence into natural trader language instead of echoing raw keys or enum values.
 - Keep the response concise, useful, and specific.
 - Return ONLY valid JSON, no markdown.
 
@@ -298,6 +301,57 @@ def _anthropic_management_analysis(user_content: str) -> dict:
     return json.loads(_strip_json_fence(response_text(response)))
 
 
+_INTERNAL_LABEL_PATTERNS = (
+    re.compile(
+        r"\(\s*(?:signal|evidence|deterministic_priority|focus_area|evidence_version|"
+        r"analytics_engine_version|input_signature)\s*:\s*[A-Za-z0-9_.-]+\s*\)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:signal|evidence|deterministic_priority|focus_area|evidence_version|"
+        r"analytics_engine_version|input_signature)\s*:\s*[A-Za-z0-9_.-]+\b",
+        re.IGNORECASE,
+    ),
+)
+
+_INTERNAL_ENUM_TOKENS = (
+    "no_loser_hold_leak",
+    "loser_hold_leak",
+    "entry_quality_early_invalidation",
+    "no_dominant_management_leak",
+    "mixed_evidence",
+    "risk_containment",
+)
+
+
+def sanitize_management_ai_text(value) -> str:
+    """Remove machine-only labels from user-facing Trade Management AI prose."""
+    text = str(value or "").strip()
+    if not text:
+        return text
+
+    for pattern in _INTERNAL_LABEL_PATTERNS:
+        text = pattern.sub("", text)
+
+    for token in _INTERNAL_ENUM_TOKENS:
+        text = re.sub(rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])", "", text)
+
+    text = re.sub(r"\(\s*\)", "", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\s+\n", "\n", text)
+    return text.strip()
+
+
+def sanitize_management_ai_result(payload: dict) -> dict:
+    """Sanitize every user-visible AI prose field without touching evidence metadata."""
+    cleaned = dict(payload or {})
+    for key in ("headline", "diagnosis", "strongest_behavior", "primary_improvement", "next_focus"):
+        if key in cleaned:
+            cleaned[key] = sanitize_management_ai_text(cleaned.get(key))
+    return cleaned
+
+
 def _locked_headline(priority: str) -> str:
     return {
         "holding_losers_too_long": "Holding losers too long is the clearest management leak.",
@@ -356,6 +410,7 @@ def generate_trade_management_analysis(evidence: dict) -> dict:
         result.get("primary_improvement") or "No dominant management leak is confirmed"
     ).strip()
     result["next_focus"] = str(result.get("next_focus") or "Keep collecting verified management evidence.").strip()
+    result = sanitize_management_ai_result(result)
     result["evidence_locked"] = True
     result["evidence_version"] = MANAGEMENT_AI_EVIDENCE_VERSION
     result["analytics_engine_version"] = ANALYTICS_ENGINE_VERSION
