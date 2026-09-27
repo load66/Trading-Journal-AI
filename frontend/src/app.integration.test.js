@@ -569,6 +569,7 @@ test('trade screenshot can be pasted from clipboard without saving a local file'
 });
 
 test('saved chart screenshot sits below Tags as a compact click-to-enlarge preview', async () => {
+  URL.createObjectURL.mockImplementation(() => 'blob:trade-chart-review');
   tradesApi.getAnalysis.mockResolvedValue({
     data: {
       analysis: { chart_screenshot_path: 'trade-review/test/chart.webp' },
