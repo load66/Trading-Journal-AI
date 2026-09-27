@@ -668,6 +668,57 @@ def test_excursion_kpis_expose_medians_to_detect_outlier_skew(monkeypatch, tmp_p
         conn.close()
 
 
+def test_excursion_kpis_expose_winner_loser_actionable_separation(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Actionable Excursion Test", "day_trading", "schwab"),
+        )
+        rows = [
+            ("w1", 50.0, 20.0, 10.0),
+            ("w2", 50.0, 25.0, 12.0),
+            ("w3", 50.0, 30.0, 18.0),
+            ("w4", 50.0, 35.0, 30.0),
+            ("l1", -50.0, 1.0, 28.0),
+            ("l2", -50.0, 2.0, 32.0),
+            ("l3", -50.0, 4.0, 36.0),
+            ("l4", -50.0, 12.0, 42.0),
+        ]
+        for i, (group, pnl, mfe, mae) in enumerate(rows):
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source,
+                    option_expiry, option_strike, option_type,
+                    mfe_pct, mae_pct, exit_efficiency, excursion_basis)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, group, f"2026-09-{20 + i:02d}", "QQQ", "OPTION", "LONG",
+                    pnl, pnl, 0.0, "[]", "imported",
+                    "2026-10-02", 500.0, "CALL",
+                    mfe, mae, 70.0 if pnl > 0 else None, "option_premium_1m",
+                ),
+            )
+        conn.commit()
+
+        result = main._excursion_kpis(conn, account_id=account_id)
+
+        assert result["winner_median_mae"] == 15.0
+        assert result["loser_median_mae"] == 34.0
+        assert result["winner_median_mfe"] == 27.5
+        assert result["loser_median_mfe"] == 3.0
+        assert result["winner_mae_le_20_pct"] == 75.0
+        assert result["loser_mfe_le_5_pct"] == 75.0
+        assert result["loser_mfe_le_10_pct"] == 75.0
+        assert result["loser_mae_ge_25_pct"] == 100.0
+    finally:
+        conn.close()
+
+
 def test_excursion_confidence_requires_multiple_days(monkeypatch, tmp_path):
     main = fresh_main(monkeypatch, tmp_path)
     main.init_db()

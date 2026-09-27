@@ -619,7 +619,7 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
 });
 
 
-test('Risk During Trade withholds a positive diagnosis when mean and median disagree', async () => {
+test('Risk During Trade turns winner-vs-loser excursion into actionable coaching', async () => {
   kpisApi.get.mockResolvedValue({
     data: {
       total_net_pnl: 1200,
@@ -636,6 +636,14 @@ test('Risk During Trade withholds a positive diagnosis when mean and median disa
       avg_mae: 30.87,
       median_mfe: 12.82,
       median_mae: 26.14,
+      winner_median_mfe: 22.86,
+      loser_median_mfe: 0.85,
+      winner_median_mae: 14.57,
+      loser_median_mae: 33.76,
+      winner_mae_le_20_pct: 59.1,
+      loser_mfe_le_5_pct: 66.7,
+      loser_mfe_le_10_pct: 72.2,
+      loser_mae_ge_25_pct: 66.7,
       excursion_n: 40,
       excursion_total_trades: 47,
       management_coverage_pct: 85.1,
@@ -647,9 +655,11 @@ test('Risk During Trade withholds a positive diagnosis when mean and median disa
 
   await renderApp();
 
-  expect(await screen.findByText(/Mean and median excursion disagree/i)).toBeVisible();
-  expect(screen.getByText(/medians \+12\.82% \/ -26\.14%/i)).toBeVisible();
-  expect(screen.queryByText(/Both average and median favorable excursion exceed adverse excursion/i)).not.toBeInTheDocument();
+  expect(await screen.findByText(/Main improvement: tighten entry quality and invalidate failed trades sooner/i)).toBeVisible();
+  expect(screen.getByText(/Typical winner: \+22\.9% MFE \/ -14\.6% MAE\. Typical loser: \+0\.9% MFE \/ -33\.8% MAE/i)).toBeVisible();
+  expect(screen.getByText(/67% of losers never reach \+5% MFE, 72% never reach \+10%, and 67% reach at least -25% MAE/i)).toBeVisible();
+  expect(screen.getByText(/41% of winners exceeded -20% MAE, so avoid a blanket -20% stop/i)).toBeVisible();
+  expect(screen.queryByText(/Mean and median excursion disagree/i)).not.toBeInTheDocument();
 });
 
 test('Dashboard withholds extreme capture when evidence coverage is low', async () => {

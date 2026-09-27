@@ -3889,3 +3889,13 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     font-size: 8.5px;
   }
 }
+
+
+/* ---------- actionable risk diagnosis ---------- */
+.v3-ref-risk-notes p.caution {
+  color: #f3ddb0;
+}
+.v3-ref-risk-notes p.caution span {
+  color: #342600;
+  background: #f3b63c;
+}

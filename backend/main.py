@@ -1431,6 +1431,22 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         "avg_mae": avg([r["mae_pct"] for r in rows]),
         "median_mfe": med([r["mfe_pct"] for r in rows]),
         "median_mae": med([r["mae_pct"] for r in rows]),
+        "winner_median_mfe": med([r["mfe_pct"] for r in wins]),
+        "loser_median_mfe": med([r["mfe_pct"] for r in losses]),
+        "winner_median_mae": med([r["mae_pct"] for r in wins]),
+        "loser_median_mae": med([r["mae_pct"] for r in losses]),
+        "winner_mae_le_20_pct": round(
+            100.0 * sum(1 for r in wins if float(r["mae_pct"]) <= 20) / len(wins), 1
+        ) if wins else None,
+        "loser_mfe_le_5_pct": round(
+            100.0 * sum(1 for r in losses if float(r["mfe_pct"]) <= 5) / len(losses), 1
+        ) if losses else None,
+        "loser_mfe_le_10_pct": round(
+            100.0 * sum(1 for r in losses if float(r["mfe_pct"]) <= 10) / len(losses), 1
+        ) if losses else None,
+        "loser_mae_ge_25_pct": round(
+            100.0 * sum(1 for r in losses if float(r["mae_pct"]) >= 25) / len(losses), 1
+        ) if losses else None,
         "avg_mae_win": avg([r["mae_pct"] for r in wins]),
         "avg_mae_loss": avg([r["mae_pct"] for r in losses]),
         "excursion_n": excursion_n,
