@@ -29,12 +29,30 @@ def _execs(trade: dict) -> list[dict]:
 
 
 def _exec_dt(e: dict) -> datetime | None:
+    """Resolve an execution to the exchange (ET) timeline.
+
+    Canonical UTC broker timestamps are authoritative. Legacy executions without
+    provenance preserve the historical ET fallback so older/manual rows remain
+    interpretable instead of being silently shifted.
+    """
+    raw_utc = str(e.get("timestamp_utc") or "").strip()
+    if raw_utc:
+        try:
+            return datetime.fromisoformat(raw_utc.replace("Z", "+00:00")).astimezone(ET)
+        except Exception:
+            pass
+
     date = str(e.get("date") or "").strip()
     time = str(e.get("time") or "").strip()
     if not date or not time:
         return None
+
+    source_timezone = str(e.get("source_timezone") or "").strip()
     try:
-        return datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=ET)
+        naive = datetime.fromisoformat(f"{date}T{time}")
+        if source_timezone:
+            return naive.replace(tzinfo=ZoneInfo(source_timezone)).astimezone(ET)
+        return naive.replace(tzinfo=ET)
     except Exception:
         return None
 
