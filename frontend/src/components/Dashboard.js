@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { kpisApi, tradesApi, edgeReportApi, goalsApi, smokingGunLibraryApi } from '../api';
+import { kpisApi, tradesApi, edgeReportApi, goalsApi, smokingGunLibraryApi, excursionApi } from '../api';
 import DateRangePicker from './DateRangePicker';
 import DashboardRender from '../v3/DashboardRender';
 import {
@@ -90,6 +90,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   const kpiRun = useRef(0);
   const recentRun = useRef(0);
   const managementRun = useRef(0);
+  const managementBackfillKey = useRef(null);
   const smokingGunRun = useRef(0);
 
   useEffect(() => {
@@ -158,10 +159,14 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       params.date_to = latestTradeDate;
     }
 
-    Promise.all([
+    const loadManagement = () => Promise.all([
       kpisApi.get(params).then(r => r.data),
       edgeReportApi.get(params).then(r => r.data),
-    ]).then(([nextKpis, nextEdge]) => {
+    ]);
+
+    // Broker-derived metrics render immediately. Market-path backfill is
+    // supplemental and refreshes MFE/MAE/capture when it finishes.
+    loadManagement().then(([nextKpis, nextEdge]) => {
       if (!current()) return;
       setManagementKpis(nextKpis);
       setManagementEdge(nextEdge);
@@ -170,6 +175,30 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       setManagementKpis(null);
       setManagementEdge(null);
     });
+
+    if (params.date_from && params.date_to) {
+      const backfillKey = [
+        accountId == null ? 'all' : accountId,
+        params.date_from,
+        params.date_to,
+        reloadKey,
+      ].join('|');
+
+      if (managementBackfillKey.current !== backfillKey) {
+        managementBackfillKey.current = backfillKey;
+        excursionApi.calculateRange(params)
+          .then(() => loadManagement())
+          .then(([nextKpis, nextEdge]) => {
+            if (!current()) return;
+            setManagementKpis(nextKpis);
+            setManagementEdge(nextEdge);
+          })
+          .catch(() => {
+            // CSV-first management metrics remain valid even if supplemental
+            // market-path data is unavailable.
+          });
+      }
+    }
   }, [accountId, managementRange, recentTrades, kpis, reloadKey]);
 
   useEffect(() => {

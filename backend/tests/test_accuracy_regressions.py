@@ -575,3 +575,116 @@ def test_context_edge_confidence_excludes_low_samples_and_open_positions(monkeyp
         assert main._edge_confidence(15) == "RELIABLE"
     finally:
         conn.close()
+
+
+def test_occ_option_symbol_uses_broker_contract_metadata(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    symbol = main._occ_option_symbol({
+        "ticker": "TSM",
+        "option_expiry": "2026-09-25",
+        "option_strike": 452.5,
+        "option_type": "CALL",
+    })
+    assert symbol == "TSM260925C00452500"
+
+
+def test_excursion_kpis_ignore_legacy_underlying_option_efficiency(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Excursion Test", "day_trading", "schwab"),
+        )
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source,
+                option_expiry, option_strike, option_type,
+                mfe_pct, mae_pct, exit_efficiency)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                account_id, "legacy-option", "2026-09-25", "TSM", "OPTION", "LONG",
+                65.94, 65.94, 0.0, "[]", "imported",
+                "2026-09-25", 452.5, "CALL",
+                0.0011, 0.1947, -12600.0,
+            ),
+        )
+        conn.commit()
+
+        result = main._excursion_kpis(
+            conn,
+            account_id=account_id,
+            date_from="2026-09-19",
+            date_to="2026-09-25",
+        )
+
+        assert result["exit_efficiency"] is None
+        assert result["excursion_n"] == 0
+        assert result["capture_n"] == 0
+        assert result["capture_confidence"] == "LOW"
+    finally:
+        conn.close()
+
+
+def test_excursion_confidence_requires_multiple_days(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Coverage Test", "day_trading", "schwab"),
+        )
+        for i in range(20):
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source,
+                    option_expiry, option_strike, option_type,
+                    mfe_pct, mae_pct, exit_efficiency, excursion_basis)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, f"one-day-{i}", "2026-09-25", "QCOM", "OPTION", "LONG",
+                    50.0, 50.0, 0.0, "[]", "imported",
+                    "2026-09-25", 200.0, "CALL",
+                    10.0, 3.0, 70.0, "option_premium_1m",
+                ),
+            )
+        conn.commit()
+
+        one_day = main._excursion_kpis(conn, account_id=account_id)
+        assert one_day["excursion_n"] == 20
+        assert one_day["management_coverage_pct"] == 100.0
+        assert one_day["excursion_days"] == 1
+        assert one_day["excursion_confidence"] == "LOW"
+        assert one_day["capture_confidence"] == "LOW"
+
+        for i, date in enumerate(("2026-09-23", "2026-09-24"), start=20):
+            for j in range(8):
+                conn.execute(
+                    """INSERT INTO trades
+                       (account_id, trade_group, date, ticker, instrument_type, side,
+                        gross_pnl, net_pnl, commissions, executions, source,
+                        option_expiry, option_strike, option_type,
+                        mfe_pct, mae_pct, exit_efficiency, excursion_basis)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        account_id, f"multi-{i}-{j}", date, "QCOM", "OPTION", "LONG",
+                        50.0, 50.0, 0.0, "[]", "imported",
+                        "2026-09-25", 200.0, "CALL",
+                        10.0, 3.0, 70.0, "option_premium_1m",
+                    ),
+                )
+        conn.commit()
+
+        multi_day = main._excursion_kpis(conn, account_id=account_id)
+        assert multi_day["excursion_days"] == 3
+        assert multi_day["excursion_confidence"] == "RELIABLE"
+        assert multi_day["capture_confidence"] == "RELIABLE"
+        assert multi_day["management_primary_source"] == "broker_csv"
+    finally:
+        conn.close()

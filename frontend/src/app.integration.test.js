@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, smokingGunLibraryApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -192,6 +192,10 @@ jest.mock('./api', () => {
       downloadLedger: fn(() => ok(new Blob(['csv'], { type: 'text/csv' }))),
     }),
     edgeReportApi: withDefault({}),
+    excursionApi: withDefault({
+      calculate: fn(() => ok({ computed: 0 })),
+      calculateRange: fn(() => ok({ computed: 0, skipped: 0 })),
+    }),
     weeklySummaryApi: withDefault({}),
     yearlyKpisApi: withDefault({ get: fn(() => ok({ months: [] })) }),
     libraryApi: withDefault({
@@ -559,9 +563,19 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
       r_sample_count: 83,
       max_drawdown: -1626.32,
       exit_efficiency: 64,
+      capture_n: 83,
+      capture_winner_total: 111,
+      capture_coverage_pct: 74.8,
+      capture_confidence: 'RELIABLE',
+      capture_days: 20,
       avg_mfe: 2.4,
       avg_mae: 0.8,
-      excursion_n: 83,
+      excursion_n: 150,
+      excursion_total_trades: 191,
+      management_coverage_pct: 78.5,
+      excursion_confidence: 'RELIABLE',
+      excursion_days: 22,
+      management_primary_source: 'broker_csv',
       daily_pnl: [{ date: '2026-09-25', net_pnl: 528, cumulative: 4340.34 }],
       trading_days: 28,
     },
@@ -571,7 +585,7 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
 
   expect(await screen.findByRole('heading', { name: /Trade management/i })).toBeVisible();
   expect(screen.getByText('Total net P&L')).toBeVisible();
-  expect(screen.getByText(/How well do you manage trades after you enter/i)).toBeVisible();
+  expect(screen.getByText(/Broker CSV fills are authoritative/i)).toBeVisible();
   expect(screen.getByRole('heading', { name: /Profit capture/i })).toBeVisible();
   expect(screen.getByRole('heading', { name: /Holding behavior/i })).toBeVisible();
   expect(screen.getByRole('heading', { name: /Profit vs\. left on table/i })).toBeVisible();
@@ -586,7 +600,7 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   const captureMeter = screen.getByRole('meter', { name: 'Profit capture' });
   expect(captureMeter).toHaveAttribute('aria-valuenow', '64');
   expect(captureMeter).toHaveAttribute('aria-valuetext', '64% exit efficiency; goal 60%');
-  expect(screen.getByText(/You’re doing a good job capturing winners/i)).toBeVisible();
+  expect(screen.getByText(/retain a solid portion of the favorable move/i)).toBeVisible();
   expect(screen.getByText('Cumulative net P&L')).toBeVisible();
   expect(screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i })).toBeVisible();
   expect(screen.getByText('Diagnosis')).toBeVisible();
@@ -602,6 +616,39 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   fireEvent.click(screen.getByRole('button', { name: /View full report/i }));
   const smokingTab = await screen.findByRole('tab', { name: 'Smoking Gun' });
   expect(smokingTab).toHaveAttribute('aria-selected', 'true');
+});
+
+
+test('Dashboard withholds extreme capture when evidence coverage is low', async () => {
+  kpisApi.get.mockResolvedValue({
+    data: {
+      total_net_pnl: 500,
+      total_trades: 47,
+      trading_days: 5,
+      exit_efficiency: -3036,
+      capture_n: 4,
+      capture_winner_total: 27,
+      capture_coverage_pct: 14.8,
+      capture_confidence: 'LOW',
+      avg_mfe: 0.55,
+      avg_mae: 0.36,
+      excursion_n: 10,
+      excursion_total_trades: 47,
+      management_coverage_pct: 21.3,
+      excursion_confidence: 'LOW',
+      excursion_days: 1,
+      daily_pnl: [{ date: '2026-09-25', net_pnl: 500, cumulative: 500 }],
+    },
+  });
+
+  await renderApp();
+
+  expect(await screen.findByText('LOW COVERAGE')).toBeVisible();
+  expect(screen.queryByText(/-3036%/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/3136%/)).not.toBeInTheDocument();
+  expect(screen.getByRole('status', { name: 'Profit capture unavailable' })).toBeVisible();
+  expect(screen.getByText(/No excursion-based diagnosis is issued/i)).toBeVisible();
+  expect(screen.getByText(/10\/47 trades · 21% coverage · LOW/i)).toBeVisible();
 });
 
 test('Dashboard reports unavailable profit capture without invalid meter semantics', async () => {
@@ -621,4 +668,40 @@ test('Dashboard reports unavailable profit capture without invalid meter semanti
   expect(unavailableCapture).toBeVisible();
   expect(unavailableCapture).not.toHaveAttribute('aria-valuetext');
   expect(screen.queryByRole('meter', { name: 'Profit capture' })).not.toBeInTheDocument();
+});
+
+
+test('Dashboard suppresses absurd capture values when coverage is low', async () => {
+  kpisApi.get.mockResolvedValue({
+    data: {
+      total_net_pnl: 100,
+      total_trades: 47,
+      winning_trades: 27,
+      losing_trades: 20,
+      trading_days: 5,
+      exit_efficiency: -3036,
+      capture_n: 2,
+      capture_winner_total: 27,
+      capture_coverage_pct: 7.4,
+      capture_confidence: 'LOW',
+      capture_days: 1,
+      avg_mfe: 0.55,
+      avg_mae: 0.36,
+      excursion_n: 10,
+      excursion_total_trades: 47,
+      management_coverage_pct: 21.3,
+      excursion_confidence: 'LOW',
+      excursion_days: 1,
+      daily_pnl: [{ date: '2026-09-25', net_pnl: 528, cumulative: 100 }],
+    },
+  });
+
+  await renderApp();
+
+  expect(await screen.findByText('LOW COVERAGE')).toBeVisible();
+  expect(screen.queryByText('-3036%')).not.toBeInTheDocument();
+  expect(screen.queryByText('3136%')).not.toBeInTheDocument();
+  expect(screen.getAllByText('N/A').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getByText(/No excursion-based diagnosis is issued/i)).toBeVisible();
+  expect(excursionApi.calculateRange).toHaveBeenCalled();
 });

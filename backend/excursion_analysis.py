@@ -1,8 +1,12 @@
-"""Deterministic MAE/MFE and directional exit-efficiency calculations.
+"""Deterministic MAE/MFE and exit-efficiency calculations.
 
 Execution timestamps remain the source of truth for when a trade was open.
-Alpaca 1-minute bars provide the market path. For option trades, the journal
-measures the UNDERLYING ticker's directional excursion, not option-premium P&L.
+Alpaca 1-minute bars provide the market path.
+
+Stocks use stock bars with actual execution-price anchors. Options use the
+actual OCC option contract's 1-minute premium bars with Schwab option fills as
+entry/exit anchors. Futures may still use a configured ETF proxy, so futures
+excursion remains market-context rather than contract-premium excursion.
 """
 from __future__ import annotations
 
@@ -98,12 +102,17 @@ def _bar_for_minute(bars: list[dict], dt: datetime) -> dict | None:
     return None
 
 
-def calculate_trade_excursion(trade: dict, bars: list[dict]) -> dict:
+def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str | None = None) -> dict:
     """Calculate market excursion while the trade was open.
 
-    STOCK trades use actual execution prices as entry/exit anchors.
-    OPTION/FUTURE trades use the 1-minute underlying/proxy bar close because
-    broker option/future fills are not prices of the charted underlying.
+    bar_basis describes the supplied market path:
+      - stock_1m: actual stock bars
+      - option_premium_1m: actual OCC option premium bars
+      - proxy_1m: proxy/underlying bars (currently futures fallback)
+
+    For stocks and options, execution fills anchor the realized entry/exit.
+    Including those fills in the extrema prevents sparse 1-minute bars from
+    reporting an MFE smaller than a realized profitable exit.
     """
     window = trade_window(trade)
     if not window:
@@ -124,18 +133,35 @@ def calculate_trade_excursion(trade: dict, bars: list[dict]) -> dict:
         return {"available": False, "reason": "No 1-minute market bars overlap the holding window."}
 
     inst = str(trade.get("instrument_type") or "STOCK").upper()
+    side = str(trade.get("side") or "LONG").upper()
     entry_bar = _bar_for_minute(held, entry_dt)
     exit_bar = _bar_for_minute(held, exit_dt)
+
     if inst == "STOCK":
-        # Anchor excursion to the first actual fill so later scale-ins never
-        # leak future cost-basis information backward into earlier bars.
+        basis = bar_basis or "stock_1m"
         entry_ref = window["first_entry_price"]
         exit_ref = window["avg_exit"]
-        basis = "execution_price"
+        direction = underlying_direction(trade)
+        actual_instrument_path = True
+    elif inst == "OPTION":
+        if bar_basis != "option_premium_1m":
+            return {
+                "available": False,
+                "reason": "Option excursion requires contract-level option premium bars.",
+            }
+        basis = "option_premium_1m"
+        entry_ref = window["first_entry_price"]
+        exit_ref = window["avg_exit"]
+        # On the option contract itself, LONG benefits from a premium rise and
+        # SHORT benefits from a premium fall. Call/put direction is irrelevant.
+        direction = 1 if side == "LONG" else -1
+        actual_instrument_path = True
     else:
+        basis = bar_basis or "proxy_1m"
         entry_ref = float((entry_bar or held[0]).get("c") or 0)
         exit_ref = float((exit_bar or held[-1]).get("c") or 0)
-        basis = "underlying_1m" if inst == "OPTION" else "proxy_1m"
+        direction = underlying_direction(trade)
+        actual_instrument_path = False
 
     if not entry_ref or not exit_ref:
         return {"available": False, "reason": "Entry/exit market reference price is unavailable."}
@@ -145,7 +171,12 @@ def calculate_trade_excursion(trade: dict, bars: list[dict]) -> dict:
     if not highs or not lows:
         return {"available": False, "reason": "Market bars are missing high/low prices."}
 
-    direction = underlying_direction(trade)
+    if actual_instrument_path:
+        # Sparse option bars can miss the exact second of a real broker fill.
+        # The fills are authoritative and must be part of the attainable path.
+        highs.extend([float(entry_ref), float(exit_ref)])
+        lows.extend([float(entry_ref), float(exit_ref)])
+
     if direction > 0:
         favorable_price = max(highs)
         adverse_price = min(lows)
@@ -159,7 +190,17 @@ def calculate_trade_excursion(trade: dict, bars: list[dict]) -> dict:
         mae_pct = max(0.0, (adverse_price - entry_ref) / entry_ref * 100)
         captured_pct = (entry_ref - exit_ref) / entry_ref * 100
 
-    efficiency = (captured_pct / mfe_pct * 100) if mfe_pct > 1e-12 else None
+    efficiency = None
+    if mfe_pct > 1e-12 and captured_pct >= 0:
+        efficiency = max(0.0, min(100.0, captured_pct / mfe_pct * 100))
+
+    notes = {
+        "stock_1m": "Stock excursion uses Alpaca 1-minute stock bars with actual Schwab fills as entry/exit anchors.",
+        "option_premium_1m": "Option excursion uses Alpaca 1-minute OCC option-premium bars with actual Schwab option fills as entry/exit anchors.",
+        "proxy_1m": "Futures excursion uses the configured ETF proxy and should be interpreted as market context.",
+    }
+    note = notes.get(basis, "Excursion uses 1-minute market bars and broker execution timestamps.")
+
     return {
         "available": True,
         "mfe_pct": round(mfe_pct, 4),
@@ -173,10 +214,5 @@ def calculate_trade_excursion(trade: dict, bars: list[dict]) -> dict:
         "basis": basis,
         "bar_count": len(held),
         "resolution": "1Min",
-        "note": (
-            "Options use the underlying ticker's 1-minute path; futures use the configured ETF proxy. "
-            "Entry/exit-minute highs and lows can include seconds just outside the exact fill timestamp."
-            if inst != "STOCK"
-            else "Stock excursions are anchored to the first fill, with realized average exit and Alpaca 1-minute highs/lows."
-        ),
+        "note": note,
     }

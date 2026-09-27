@@ -229,10 +229,13 @@ def deterministic_strengths(trades: list[dict], day_kpis: dict) -> list[dict]:
             "text": f"Average winner (USD {avg_win:,.2f}) was {ratio:.2f}× the average loss (USD {avg_loss:,.2f}).",
             "evidence": "VERIFIED",
         })
+    valid_excursion_bases = {"stock_1m", "option_premium_1m"}
     effs = [
         float(t.get("exit_efficiency"))
         for t in trades
-        if t.get("exit_efficiency") is not None and float(t.get("net_pnl") or 0) > 0
+        if t.get("exit_efficiency") is not None
+        and float(t.get("net_pnl") or 0) > 0
+        and str(t.get("excursion_basis") or "") in valid_excursion_bases
     ]
     if effs:
         avg_eff = sum(effs) / len(effs)

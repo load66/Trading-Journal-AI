@@ -11,7 +11,7 @@ from config import Settings
 
 load_dotenv()
 
-APPLICATION_SCHEMA_VERSION = '20260926_002_smoking_gun_reports'
+APPLICATION_SCHEMA_VERSION = '20260927_003_excursion_provenance'
 
 
 class DBAPIRow(Mapping[str, Any]):
@@ -173,6 +173,8 @@ MIGRATIONS = (
     Migration('009_trades_mfe_pct', 'trades', 'mfe_pct', 'ALTER TABLE trades ADD COLUMN mfe_pct REAL'),
     Migration('010_trades_mae_pct', 'trades', 'mae_pct', 'ALTER TABLE trades ADD COLUMN mae_pct REAL'),
     Migration('011_trades_exit_efficiency', 'trades', 'exit_efficiency', 'ALTER TABLE trades ADD COLUMN exit_efficiency REAL'),
+    Migration('012_trades_excursion_basis', 'trades', 'excursion_basis', 'ALTER TABLE trades ADD COLUMN excursion_basis TEXT'),
+    Migration('013_trades_excursion_calculated_at', 'trades', 'excursion_calculated_at', 'ALTER TABLE trades ADD COLUMN excursion_calculated_at TEXT'),
 )
 
 

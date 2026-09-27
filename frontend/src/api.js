@@ -77,6 +77,7 @@ export const chartApi = {
 
 export const excursionApi = {
   calculate: (params) => api.post('/api/excursions/calculate', null, { params }),
+  calculateRange: (params) => api.post('/api/excursions/calculate-range', null, { params }),
 };
 
 export const insightsApi = {

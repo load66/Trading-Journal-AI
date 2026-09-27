@@ -103,36 +103,51 @@ const absMoney = (value) => {
 function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const data = kpis || {};
   const hold = edge?.hold_time || {};
-  const capture = data.exit_efficiency == null ? null : Number(data.exit_efficiency);
-  const captureBar = capture == null ? 0 : Math.max(0, Math.min(100, capture));
+  const totalTrades = Number(data.total_trades || edge?.total_trades || 0);
   const captureGoal = Number(goals?.exit_efficiency ?? 60);
-  const leftOnTable = capture == null ? null : Math.max(0, 100 - Math.min(100, capture));
-  const leftBar = capture == null ? 0 : Math.max(0, 100 - captureBar);
+
+  const rawCapture = data.exit_efficiency == null ? null : Number(data.exit_efficiency);
+  const captureN = Number(data.capture_n || 0);
+  const captureWinnerTotal = Number(data.capture_winner_total || 0);
+  const captureCoverage = Number(data.capture_coverage_pct || 0);
+  const captureConfidence = String(data.capture_confidence || 'LOW').toUpperCase();
+  const captureUsable = rawCapture != null && captureConfidence !== 'LOW';
+  const capture = captureUsable ? Math.max(0, Math.min(100, rawCapture)) : null;
+  const captureBar = capture == null ? 0 : capture;
+  const leftOnTable = capture == null ? null : Math.max(0, 100 - capture);
+  const leftBar = leftOnTable == null ? 0 : leftOnTable;
 
   const winnerHold = hold.winners_avg_min == null ? null : Number(hold.winners_avg_min);
   const loserHold = hold.losers_avg_min == null ? null : Number(hold.losers_avg_min);
-  const holdRatio = winnerHold > 0 && loserHold != null ? loserHold / winnerHold : null;
+  const winnerMedian = hold.winners_median_min == null ? null : Number(hold.winners_median_min);
+  const loserMedian = hold.losers_median_min == null ? null : Number(hold.losers_median_min);
+  const winnerHoldN = Number(hold.winner_count || 0);
+  const loserHoldN = Number(hold.loser_count || 0);
+  const holdN = Number(hold.sample_count || (winnerHoldN + loserHoldN));
+  const holdCoverage = Number(hold.coverage_pct ?? (totalTrades ? holdN / totalTrades * 100 : 0));
+  const avgHoldLeak = winnerHold != null && loserHold != null && loserHold > winnerHold * 1.10;
+  const medianHoldLeak = winnerMedian != null && loserMedian != null && loserMedian > winnerMedian * 1.10;
+  const holdReliable = winnerHoldN >= 5 && loserHoldN >= 5 && winnerHold != null && loserHold != null;
+  const holdMixed = holdReliable && winnerMedian != null && loserMedian != null && avgHoldLeak !== medianHoldLeak;
 
-  const mfe = data.avg_mfe == null ? null : Number(data.avg_mfe);
-  const mae = data.avg_mae == null ? null : Number(data.avg_mae);
+  const rawMfe = data.avg_mfe == null ? null : Number(data.avg_mfe);
+  const rawMae = data.avg_mae == null ? null : Number(data.avg_mae);
   const excursionN = Number(data.excursion_n || 0);
+  const managementCoverage = Number(data.management_coverage_pct || 0);
+  const excursionConfidence = String(data.excursion_confidence || 'LOW').toUpperCase();
+  const riskUsable = rawMfe != null && rawMae != null && excursionConfidence !== 'LOW';
+  const favorableMove = riskUsable ? Math.abs(rawMfe) : null;
+  const adverseMove = riskUsable ? Math.abs(rawMae) : null;
+
   const holdMax = Math.max(winnerHold || 0, loserHold || 0, 1);
   const winnerHoldPct = winnerHold == null ? 0 : Math.max(8, Math.min(100, (winnerHold / holdMax) * 100));
   const loserHoldPct = loserHold == null ? 0 : Math.max(8, Math.min(100, (loserHold / holdMax) * 100));
-  const favorableMove = mfe == null ? null : Math.abs(mfe);
-  const adverseMove = mae == null ? null : Math.abs(mae);
   const moveMax = Math.max(favorableMove || 0, adverseMove || 0, 1);
   const favorablePct = favorableMove == null ? 0 : Math.max(8, Math.min(100, (favorableMove / moveMax) * 100));
   const adversePct = adverseMove == null ? 0 : Math.max(8, Math.min(100, (adverseMove / moveMax) * 100));
 
-  const captureState = capture == null
-    ? { tone: 'neutral', label: 'NEED DATA' }
-    : capture >= captureGoal
-      ? { tone: 'good', label: 'ABOVE GOAL' }
-      : { tone: capture < 0 ? 'bad' : 'caution', label: 'BELOW GOAL' };
-
-  const holdLeak = holdRatio != null && holdRatio > 1.05;
-  const riskLeak = favorableMove != null && adverseMove != null && adverseMove > favorableMove;
+  const holdLeak = holdReliable && avgHoldLeak && (winnerMedian == null || loserMedian == null || medianHoldLeak);
+  const riskLeak = riskUsable && adverseMove > favorableMove;
   const rangeCopy = range === '7D'
     ? 'last 7 days'
     : range === '90D'
@@ -145,46 +160,86 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
     <span className="v3-ref-help" title={label} aria-label={label}>?</span>
   );
 
-  const captureSummary = capture == null
-    ? 'Profit capture needs excursion data before it can be scored.'
-    : capture >= captureGoal
-      ? `You capture a solid portion of your winners.`
-      : capture < 0
-        ? 'Winning moves are being fully surrendered before exit.'
-        : 'Too much of the available move is being given back before exit.';
+  const captureState = !captureUsable
+    ? { tone: 'neutral', label: captureN ? 'LOW COVERAGE' : 'NEED DATA' }
+    : captureConfidence === 'DEVELOPING'
+      ? { tone: 'caution', label: 'DEVELOPING' }
+      : capture >= captureGoal
+        ? { tone: 'good', label: 'ABOVE GOAL' }
+        : { tone: 'caution', label: 'BELOW GOAL' };
 
-  const holdSummary = holdRatio == null
-    ? 'More timestamped closed trades are needed to compare holding behavior.'
-    : holdLeak
-      ? 'You hold losers longer than winners.'
-      : 'Losers are not being held materially longer than winners.';
+  const captureSummary = !captureUsable
+    ? 'Not enough actual stock/option-premium path coverage to diagnose profit capture yet.'
+    : captureConfidence === 'DEVELOPING'
+      ? 'Early capture signal only. Treat this as developing evidence until more trades are covered.'
+      : capture >= captureGoal
+        ? 'You retain a solid portion of the favorable move on covered winning trades.'
+        : 'Covered winning trades are giving back too much of the favorable move before exit.';
 
-  const captureSplitSummary = capture == null
-    ? 'There is not enough excursion data to compare captured movement with giveback.'
-    : leftOnTable <= 40
-      ? 'You’re capturing a good portion of the available move.'
-      : capture < 0
-        ? 'Favorable movement is being fully surrendered before exit.'
-        : 'A large share of the favorable move is being left on the table.';
+  const holdSummary = !holdReliable
+    ? 'More broker-timestamped winners and losers are needed before comparing holding behavior.'
+    : holdMixed
+      ? 'Average and median hold times point in different directions, so no strong holding-time leak is diagnosed.'
+      : holdLeak
+        ? 'Broker executions show losers are held longer than winners in both average and median behavior.'
+        : 'Broker executions do not show a consistent loser-holding leak in this window.';
+
+  const captureSplitSummary = !captureUsable
+    ? 'Capture vs. giveback is withheld until actual-instrument path coverage is sufficient.'
+    : captureConfidence === 'DEVELOPING'
+      ? 'This capture/giveback split is a developing signal, not a firm diagnosis.'
+      : leftOnTable <= 40
+        ? 'Covered winners retain most of the available favorable move.'
+        : 'Covered winners leave a large share of the favorable move on the table.';
+
+  const riskSummary = !riskUsable
+    ? 'MFE/MAE diagnosis is withheld until actual-instrument path coverage is sufficient.'
+    : excursionConfidence === 'DEVELOPING'
+      ? 'MFE/MAE is a developing signal based only on currently covered trades.'
+      : riskLeak
+        ? 'Average adverse excursion exceeds favorable excursion on covered trades.'
+        : 'Average favorable excursion exceeds adverse excursion on covered trades.';
 
   const bottomCopy = (() => {
-    const captureSentence = capture == null
-      ? 'Profit capture is not yet measurable in this window.'
-      : capture >= captureGoal
-        ? `You’re doing a good job capturing winners, with ${capture.toFixed(0)}% of the available move versus your ${captureGoal.toFixed(0)}% goal.`
-        : `Profit capture is ${capture.toFixed(0)}%, below your ${captureGoal.toFixed(0)}% goal.`;
+    const csvSentence = holdReliable
+      ? 'Broker CSV executions show winners average ' + winnerHold.toFixed(1) + ' min and losers average ' + loserHold.toFixed(1) + ' min.'
+      : 'Broker CSV executions do not yet provide enough hold-time evidence for a firm comparison.';
 
     if (holdLeak) {
-      return `${captureSentence} The main issue is holding losing trades too long — losers average ${loserHold.toFixed(1)} minutes while winners average ${winnerHold.toFixed(1)} minutes. Focus on cutting losing trades faster to improve overall performance.`;
+      return csvSentence + ' The clearest broker-verified management issue is holding losing trades longer, and the median confirms the same pattern. Excursion-based capture/risk stays secondary.';
     }
-    if (riskLeak) {
-      return `${captureSentence} The main issue is adverse excursion: trades move farther against you than for you on average. Tighten invalidation and position-risk discipline.`;
+
+    if (holdMixed) {
+      return csvSentence + ' Average and median hold times disagree, so the broker CSV does not support a firm hold-time diagnosis. Supplemental market-path coverage is ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
     }
-    if (capture != null && capture < captureGoal) {
-      return `${captureSentence} The clearest improvement is preserving more of the favorable move with a more mechanical exit process.`;
+
+    if (!captureUsable && !riskUsable) {
+      return csvSentence + ' No excursion-based diagnosis is issued because actual stock/option-premium path coverage is only ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
     }
-    return `${captureSentence} No single management leak dominates this window, so protect the same exit discipline and keep the process repeatable.`;
+
+    if (captureUsable && captureConfidence === 'RELIABLE' && capture < captureGoal) {
+      return csvSentence + ' Profit capture is ' + capture.toFixed(0) + '% on ' + captureN + ' covered winners, below your ' + captureGoal.toFixed(0) + '% goal. That is the strongest excursion-based management leak in this window.';
+    }
+
+    if (riskUsable && excursionConfidence === 'RELIABLE' && riskLeak) {
+      return csvSentence + ' Covered trades show more adverse than favorable excursion on average, so risk containment is the strongest excursion-based concern.';
+    }
+
+    if ((captureUsable && captureConfidence === 'DEVELOPING') || (riskUsable && excursionConfidence === 'DEVELOPING')) {
+      return csvSentence + ' Excursion evidence is still developing, so the dashboard will not promote it to a firm diagnosis yet.';
+    }
+
+    return csvSentence + ' The currently covered excursion data does not identify a dominant management leak.';
   })();
+
+  const captureEvidence = captureN + '/' + captureWinnerTotal + ' winning trades · ' + captureCoverage.toFixed(0) + '% coverage · ' + captureConfidence;
+  const riskEvidence = excursionN + '/' + totalTrades + ' trades · ' + managementCoverage.toFixed(0) + '% coverage · ' + excursionConfidence;
+  const holdEvidence = holdN + '/' + totalTrades + ' trades · ' + holdCoverage.toFixed(0) + '% broker timestamp coverage';
+  const bottomTone = holdLeak
+    ? 'bad'
+    : (!captureUsable && !riskUsable) || captureConfidence === 'DEVELOPING' || excursionConfidence === 'DEVELOPING'
+      ? 'caution'
+      : 'good';
 
   return (
     <div className="v3-ref-management">
@@ -193,7 +248,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <span className="v3-ref-title-icon"><BarChart3 size={26} /></span>
           <div>
             <h2>Trade management <HelpDot label="How well you manage trades after entry" /></h2>
-            <p>How well do you manage trades after you enter?</p>
+            <p>Broker CSV fills are authoritative; market bars are used only for the path between entry and exit.</p>
           </div>
         </div>
         <div className="v3-management-range v3-ref-range" role="group" aria-label="Trade management range">
@@ -216,33 +271,34 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <div className="v3-ref-card-heading">
             <span className="v3-ref-card-icon green"><Trophy size={20} /></span>
             <div>
-              <h3>Profit capture <HelpDot label="Exit efficiency: how much favorable movement you retain" /></h3>
-              <p>How much of the available move you actually keep on winning trades.</p>
+              <h3>Profit capture <HelpDot label="How much favorable premium/price movement was retained on covered winners" /></h3>
+              <p>Uses broker fills plus the actual stock or option-premium path.</p>
             </div>
           </div>
 
           <div className="v3-ref-capture-line">
-            <strong className={capture != null && capture >= 0 ? 'v3-pos' : 'v3-neg'}>
+            <strong className={capture != null ? 'v3-pos' : ''}>
               {capture == null ? 'N/A' : capture.toFixed(0) + '%'}
             </strong>
             <span className={'v3-ref-goal-badge ' + captureState.tone}>{captureState.label}</span>
           </div>
 
           <div
-            className={`v3-ref-meter${capture == null ? ' is-empty' : ''}`}
+            className={'v3-ref-meter' + (capture == null ? ' is-empty' : '')}
             role={capture == null ? 'status' : 'meter'}
             aria-label={capture == null ? 'Profit capture unavailable' : 'Profit capture'}
             aria-valuemin={capture == null ? undefined : 0}
             aria-valuemax={capture == null ? undefined : 100}
             aria-valuenow={capture == null ? undefined : captureBar}
-            aria-valuetext={capture == null ? undefined : `${capture.toFixed(0)}% exit efficiency; goal ${captureGoal.toFixed(0)}%`}
+            aria-valuetext={capture == null ? undefined : capture.toFixed(0) + '% exit efficiency; goal ' + captureGoal.toFixed(0) + '%'}
           >
             <i className="green" style={{ '--w': captureBar + '%' }} aria-hidden="true" />
           </div>
           <div className="v3-ref-goal">Goal ≥ {captureGoal.toFixed(0)}%</div>
+          <div className="v3-ref-evidence-line">{captureEvidence}</div>
 
-          <div className={'v3-ref-message ' + (capture != null && capture >= captureGoal ? 'good' : capture != null && capture < 0 ? 'bad' : 'caution')}>
-            <span className="v3-ref-message-icon">{capture != null && capture >= captureGoal ? '✓' : '!'}</span>
+          <div className={'v3-ref-message ' + (!captureUsable ? 'caution' : capture >= captureGoal ? 'good' : 'caution')}>
+            <span className="v3-ref-message-icon">{captureUsable && capture >= captureGoal ? '✓' : '!'}</span>
             <p>{captureSummary}</p>
           </div>
         </article>
@@ -251,8 +307,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <div className="v3-ref-card-heading">
             <span className="v3-ref-card-icon amber"><Clock3 size={20} /></span>
             <div>
-              <h3>Holding behavior <HelpDot label="Average hold time for winning trades versus losing trades" /></h3>
-              <p>How long you hold winners vs. losers.</p>
+              <h3>Holding behavior <HelpDot label="Average hold time calculated from broker execution timestamps" /></h3>
+              <p>Based directly on your imported broker execution timestamps.</p>
             </div>
           </div>
 
@@ -268,10 +324,14 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
               <div className="v3-ref-mini-track"><i className="red" style={{ '--w': loserHoldPct + '%' }} /></div>
             </div>
           </div>
+          <div className="v3-ref-evidence-line">
+            {holdEvidence}
+            {winnerMedian != null && loserMedian != null ? ' · medians ' + winnerMedian.toFixed(1) + ' / ' + loserMedian.toFixed(1) + ' min' : ''}
+          </div>
 
-          <div className={'v3-ref-message ' + (holdLeak ? 'bad' : 'good')}>
-            <span className="v3-ref-message-icon">{holdLeak ? '!' : '✓'}</span>
-            <p><b>{holdSummary}</b>{holdLeak ? ' Try to cut losing trades faster.' : ''}</p>
+          <div className={'v3-ref-message ' + (!holdReliable || holdMixed ? 'caution' : holdLeak ? 'bad' : 'good')}>
+            <span className="v3-ref-message-icon">{holdReliable && !holdLeak && !holdMixed ? '✓' : '!'}</span>
+            <p><b>{holdSummary}</b>{holdLeak ? ' Consider a faster invalidation rule for losing trades.' : ''}</p>
           </div>
         </article>
 
@@ -280,13 +340,13 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             <span className="v3-ref-card-icon purple"><Target size={20} /></span>
             <div>
               <h3>Profit vs. left on table <HelpDot label="Captured favorable movement compared with movement surrendered before exit" /></h3>
-              <p>On winning trades, how much you captured vs. how much was left.</p>
+              <p>Shown only when actual-instrument path coverage is sufficient.</p>
             </div>
           </div>
 
           <div className="v3-ref-split-bar" aria-label="Captured movement versus left on table">
             <span className="captured" style={{ '--w': captureBar + '%' }}>
-              {capture == null ? 'No data' : capture.toFixed(0) + '% Captured'}
+              {capture == null ? 'Awaiting coverage' : capture.toFixed(0) + '% Captured'}
             </span>
             <span className="left" style={{ '--w': leftBar + '%' }}>
               {leftOnTable == null ? '' : leftOnTable.toFixed(0) + '% Left'}
@@ -294,12 +354,13 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           </div>
 
           <div className="v3-ref-split-values">
-            <div><span className="v3-pos">Captured</span><strong className="v3-pos">{capture == null ? 'N/A' : capture.toFixed(0) + '%'}</strong></div>
+            <div><span className={capture == null ? '' : 'v3-pos'}>Captured</span><strong className={capture == null ? '' : 'v3-pos'}>{capture == null ? 'N/A' : capture.toFixed(0) + '%'}</strong></div>
             <div><span>Left on Table</span><strong>{leftOnTable == null ? 'N/A' : leftOnTable.toFixed(0) + '%'}</strong></div>
           </div>
+          <div className="v3-ref-evidence-line">{captureEvidence}</div>
 
-          <div className={'v3-ref-message ' + (leftOnTable != null && leftOnTable <= 40 ? 'good' : 'caution')}>
-            <span className="v3-ref-message-icon">{leftOnTable != null && leftOnTable <= 40 ? '✓' : '!'}</span>
+          <div className={'v3-ref-message ' + (!captureUsable ? 'caution' : leftOnTable <= 40 ? 'good' : 'caution')}>
+            <span className="v3-ref-message-icon">{captureUsable && leftOnTable <= 40 ? '✓' : '!'}</span>
             <p>{captureSplitSummary}</p>
           </div>
         </article>
@@ -308,27 +369,28 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <div className="v3-ref-card-heading">
             <span className="v3-ref-card-icon red"><ShieldAlert size={20} /></span>
             <div>
-              <h3>Risk during trade <HelpDot label="Average favorable and adverse excursion before exit" /></h3>
-              <p>How much trades move for and against you before you exit (average).</p>
+              <h3>Risk during trade <HelpDot label="Average favorable and adverse excursion using actual stock/option-premium paths" /></h3>
+              <p>Broker fills define the window; actual instrument bars define the path.</p>
             </div>
           </div>
 
           <div className="v3-ref-dual v3-ref-risk-dual">
             <div>
-              <strong className="v3-pos">{favorableMove == null ? 'N/A' : '+' + favorableMove.toFixed(2) + '%'}</strong>
+              <strong className={favorableMove == null ? '' : 'v3-pos'}>{favorableMove == null ? 'N/A' : '+' + favorableMove.toFixed(2) + '%'}</strong>
               <div className="v3-ref-mini-track"><i className="green" style={{ '--w': favorablePct + '%' }} /></div>
               <span>Avg Favorable Move<br /><small>(MFE)</small></span>
             </div>
             <div>
-              <strong className="v3-neg">{adverseMove == null ? 'N/A' : '-' + adverseMove.toFixed(2) + '%'}</strong>
+              <strong className={adverseMove == null ? '' : 'v3-neg'}>{adverseMove == null ? 'N/A' : '-' + adverseMove.toFixed(2) + '%'}</strong>
               <div className="v3-ref-mini-track"><i className="red" style={{ '--w': adversePct + '%' }} /></div>
               <span>Avg Adverse Move<br /><small>(MAE)</small></span>
             </div>
           </div>
+          <div className="v3-ref-evidence-line">{riskEvidence}</div>
 
           <div className="v3-ref-risk-notes">
-            <p className="good"><span>✓</span> Winners have good upside potential.</p>
-            <p className={riskLeak ? 'bad' : 'good'}><span>{riskLeak ? '!' : '✓'}</span> {riskLeak ? 'Manage drawdown to still meaningful levels.' : 'Adverse movement is staying contained.'}</p>
+            <p className={!riskUsable ? 'neutral' : riskLeak ? 'bad' : 'good'}><span>{riskUsable && !riskLeak ? '✓' : '!'}</span> {riskSummary}</p>
+            <p className="good"><span>✓</span> Realized P&amp;L and fills remain broker-authoritative.</p>
           </div>
         </article>
       </div>
@@ -338,12 +400,12 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <span className="v3-ref-bulb"><Lightbulb size={24} /></span>
           <div>
             <h3>Bottom line</h3>
-            <p>Analysis based on your {rangeCopy}</p>
-            <span>({excursionN || 0} qualifying trades)</span>
+            <p>Broker CSV first · {rangeCopy}</p>
+            <span>{totalTrades} closed trades · market-path coverage {excursionN}/{totalTrades}</span>
           </div>
         </div>
         <div className="v3-ref-bottom-copy">
-          <span className="v3-ref-bottom-check">✓</span>
+          <span className={'v3-ref-bottom-check ' + bottomTone}>{bottomTone === 'good' ? '✓' : '!'}</span>
           <p>{bottomCopy}</p>
         </div>
       </div>

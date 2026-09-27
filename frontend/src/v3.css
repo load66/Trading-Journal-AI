@@ -3852,3 +3852,40 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     grid-template-columns: 1fr;
   }
 }
+
+
+/* ---------- Trade Management evidence accuracy ---------- */
+.v3-ref-evidence-line {
+  margin-top: 7px;
+  color: #7798b5;
+  font-size: 9.5px;
+  line-height: 1.35;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+.v3-ref-risk-notes p.neutral {
+  color: #c6d5e2;
+}
+.v3-ref-risk-notes p.neutral span {
+  color: #342600;
+  background: #f3b63c;
+}
+.v3-ref-bottom-check.caution {
+  color: #342600;
+  background: #f3b63c;
+  box-shadow: 0 0 16px rgba(243, 182, 60, .25);
+}
+.v3-ref-bottom-check.bad {
+  color: white;
+  background: #fa3655;
+  box-shadow: 0 0 16px rgba(250, 54, 85, .25);
+}
+.v3-ref-goal-badge.neutral {
+  color: #d8e4ee;
+  background: #38506a;
+}
+@media (min-width: 1181px) and (max-width: 1550px) {
+  .v3-ref-evidence-line {
+    font-size: 8.5px;
+  }
+}
