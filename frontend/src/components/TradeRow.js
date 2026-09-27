@@ -324,14 +324,14 @@ export default function TradeRow({ trade, openTime, onOpenDetail, onSetRisk, cus
           <button
             type="button"
             className="trade-r-missing trade-r-action"
-            title="Set Planned Risk ($) to calculate realized R."
+            title="Set stop and target distance to define the trade's planned R:R."
             onClick={(event) => {
               event.stopPropagation();
               if (onSetRisk) onSetRisk(trade);
               else handleOpen();
             }}
           >
-            Set risk
+            Set R:R
           </button>
         )}
       </td>
