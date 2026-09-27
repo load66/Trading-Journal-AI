@@ -1443,6 +1443,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         "excursion_stock_n": sum(1 for r in rows if r["instrument_type"] == "STOCK"),
         "excursion_option_n": sum(1 for r in rows if r["instrument_type"] == "OPTION"),
         "excursion_future_n": 0,
+        "management_primary_source": "broker_csv",
+        "market_path_source": "alpaca_actual_instrument_1m",
         "excursion_note": (
             "Trade-management excursion uses actual instrument paths only: "
             "stocks use stock bars and options use their own option-premium bars. "
