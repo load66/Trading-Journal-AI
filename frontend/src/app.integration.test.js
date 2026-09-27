@@ -633,17 +633,26 @@ test('saved chart screenshot sits below Tags as a compact inline expandable prev
 
   await waitFor(() => expect(tradesApi.getChartScreenshot).toHaveBeenCalled());
   expect(await screen.findByText('Chart screenshot')).toBeVisible();
-  const preview = await screen.findByTitle('Enlarge preview');
+  const preview = await screen.findByTitle('Open screenshot full screen');
   expect(preview).toBeVisible();
-  expect(preview).not.toHaveClass('is-expanded');
-  expect(preview).toHaveStyle({ width: '520px', maxWidth: '100%' });
-  expect(within(preview).getByRole('img')).toHaveStyle({ height: 'auto', maxHeight: '300px' });
+  expect(preview).toHaveStyle({ width: '800px', maxWidth: '100%' });
+  expect(within(preview).getByRole('img')).toHaveStyle({ height: 'auto', maxHeight: '600px' });
+
   fireEvent.click(preview);
-  expect(preview).toHaveClass('is-expanded');
-  expect(preview).toHaveAttribute('title', 'Reduce preview');
-  expect(preview).toHaveStyle({ width: '680px' });
-  expect(within(preview).getByRole('img')).toHaveStyle({ height: 'auto', maxHeight: '390px' });
-  expect(screen.queryByRole('dialog', { name: 'TradingView screenshot' })).not.toBeInTheDocument();
+  const lightbox = await screen.findByRole('dialog', { name: 'TradingView screenshot' });
+  expect(lightbox).toBeVisible();
+  expect(document.body.style.overflow).toBe('hidden');
+  expect(screen.getByRole('button', { name: 'Close screenshot' })).toBeVisible();
+  expect(screen.getByText(/Click outside or press Esc to close/i)).toBeVisible();
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'TradingView screenshot' })).not.toBeInTheDocument());
+  expect(document.body.style.overflow).toBe('');
+
+  fireEvent.click(preview);
+  const reopenedLightbox = await screen.findByRole('dialog', { name: 'TradingView screenshot' });
+  fireEvent.mouseDown(reopenedLightbox);
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'TradingView screenshot' })).not.toBeInTheDocument());
 });
 
 test('guided Review quick picks generate journal text and actionable correction', async () => {
