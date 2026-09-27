@@ -2408,6 +2408,15 @@ async def calculate_excursions_range(
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     """Backfill excursion metrics for the selected management window."""
+    if not ALPACA_KEY or ALPACA_KEY == "your_alpaca_api_key_here":
+        return {
+            "date_from": date_from,
+            "date_to": date_to,
+            "computed": 0,
+            "skipped": 0,
+            "unavailable": True,
+            "message": "Alpaca market data is not configured.",
+        }
     try:
         start = datetime.strptime(date_from, "%Y-%m-%d").date()
         end = datetime.strptime(date_to, "%Y-%m-%d").date()
