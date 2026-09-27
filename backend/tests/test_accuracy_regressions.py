@@ -1231,7 +1231,7 @@ def test_reports_endpoint_uses_canonical_hold_time_without_name_error(monkeypatc
 
         assert result["has_data"] is True
         assert result["trade_count"] == 1
-        assert result["by_hold_time"][0]["name"] == "0-5 min"
+        assert result["by_hold_time"][0]["label"] == "0-5 min"
     finally:
         conn.close()
 
