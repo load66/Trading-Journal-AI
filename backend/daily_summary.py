@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 
@@ -54,6 +55,32 @@ Required JSON schema:
   "tomorrow_focus": ["specific focus point 1", "specific focus point 2"],
   "patterns": ["pattern identified today 1", "pattern identified today 2"]
 }"""
+
+
+def daily_context_signature(context: dict) -> str:
+    """Return a stable fingerprint for the evidence used by a Day Review.
+
+    The signature intentionally follows day-specific evidence only. This lets a
+    cached diagnosis survive unrelated future trading while still refreshing
+    automatically when this day's trades, journal evidence, or deterministic
+    flags change.
+    """
+    material = {
+        "date": context.get("date"),
+        "trades": context.get("trades") or [],
+        "day_kpis": context.get("day_kpis") or {},
+        "diary_summary": context.get("diary_summary"),
+        "behavior_flags": context.get("behavior_flags") or [],
+        "verified_strengths": context.get("verified_strengths") or [],
+        "recorded_observations": context.get("recorded_observations") or [],
+    }
+    canonical = json.dumps(
+        material,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def build_daily_context(conn, date: str, account_id) -> dict:

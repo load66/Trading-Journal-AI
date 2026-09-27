@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, storageApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, reportsApi, edgeReportApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, storageApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, reportsApi, edgeReportApi, dailySummaryApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -999,10 +999,77 @@ test('Day Review keeps the loss-streak alert and its Dismiss control', async () 
   expect(alert).toHaveTextContent(/3 losses in a row/);
   fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss loss-streak alert' }));
   await waitFor(() => expect(screen.queryByText(/3 losses in a row/)).not.toBeInTheDocument());
-  // Previous, Next and Regenerate AI stay in the page header.
+  // Opening Day Review requests the diagnosis automatically; manual re-run stays available.
+  await waitFor(() => expect(dailySummaryApi.get).toHaveBeenCalled());
   expect(screen.getByRole('button', { name: /Previous/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Next/ })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /Regenerate AI/ })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Re-run Diagnosis/ })).toBeInTheDocument();
+});
+
+
+test('Day Review does not call AI for an empty trading day', async () => {
+  tradesApi.list.mockResolvedValue({ data: [] });
+  dailySummaryApi.get.mockClear();
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Day Review' }));
+
+  expect(await screen.findByText(/No completed trades to diagnose for this date/i)).toBeVisible();
+  expect(dailySummaryApi.get).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: /Re-run Diagnosis/ })).toBeDisabled();
+});
+
+test('Day Review shows AI failures in place and Retry reuses the automatic diagnosis path', async () => {
+  tradesApi.list.mockResolvedValue({
+    data: [{
+      id: 501, account_id: 1, trade_group: 'g501', date: '2026-09-25', ticker: 'QQQ',
+      instrument_type: 'OPTION', side: 'LONG', net_pnl: 100, gross_pnl: 100, commissions: 0,
+      executions: [
+        { date: '2026-09-25', time: '10:05:00', action: 'BOT', qty: 1, price: 2.00, commission: 0 },
+        { date: '2026-09-25', time: '10:20:00', action: 'SOLD', qty: 1, price: 3.00, commission: 0 },
+      ],
+    }],
+  });
+  dailySummaryApi.get
+    .mockRejectedValueOnce(new Error('AI offline'))
+    .mockResolvedValueOnce({ data: { narrative: 'Recovered diagnosis.', strengths: [], mistakes: [], coaching: [], patterns: [], trade_grades: [] } });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Day Review' }));
+
+  expect(await screen.findByText(/AI diagnosis could not be generated/i)).toBeVisible();
+  expect(screen.getByText(/AI offline/i)).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText('Recovered diagnosis.')).toBeVisible();
+  expect(dailySummaryApi.get).toHaveBeenCalledTimes(2);
+});
+
+test('Day Review manual Re-run Diagnosis forces a fresh AI pass', async () => {
+  tradesApi.list.mockResolvedValue({
+    data: [{
+      id: 601, account_id: 1, trade_group: 'g601', date: '2026-09-25', ticker: 'SPY',
+      instrument_type: 'OPTION', side: 'LONG', net_pnl: 50, gross_pnl: 50, commissions: 0,
+      executions: [
+        { date: '2026-09-25', time: '10:15:00', action: 'BOT', qty: 1, price: 1.00, commission: 0 },
+        { date: '2026-09-25', time: '10:25:00', action: 'SOLD', qty: 1, price: 1.50, commission: 0 },
+      ],
+    }],
+  });
+  dailySummaryApi.get.mockResolvedValue({
+    data: { narrative: 'Automatic diagnosis.', strengths: [], mistakes: [], coaching: [], patterns: [], trade_grades: [] },
+  });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Day Review' }));
+  expect(await screen.findByText('Automatic diagnosis.')).toBeVisible();
+
+  dailySummaryApi.get.mockClear();
+  fireEvent.click(screen.getByRole('button', { name: /Re-run Diagnosis/ }));
+
+  await waitFor(() => expect(dailySummaryApi.get).toHaveBeenCalledWith(
+    expect.objectContaining({ force: true })
+  ));
 });
 
 test('Settings has Strategies, Sources and Tags sections, and Tags leaves out strategy and source types', async () => {

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 
 import pytest
@@ -87,23 +88,13 @@ def test_report_hold_seconds_helper_is_bound_to_canonical_metric(monkeypatch, tm
     assert main.canonical_hold_seconds(trade) == 330
 
 
-def test_daily_summary_cache_query_is_postgres_safe_for_nullable_account(monkeypatch, tmp_path):
+def test_daily_summary_empty_day_skips_cache_and_ai(monkeypatch, tmp_path):
     main = fresh_main(monkeypatch, tmp_path)
 
-    class Cursor:
-        def fetchone(self):
-            return None
-
     class Conn:
-        def __init__(self):
-            self.calls = []
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("empty Day Review should not query the summary cache")
 
-        def execute(self, sql, params=()):
-            self.calls.append((sql, tuple(params)))
-            assert "? IS NULL" not in sql
-            return Cursor()
-
-    conn = Conn()
     monkeypatch.setattr(
         main,
         "build_daily_context",
@@ -114,9 +105,52 @@ def test_daily_summary_cache_query_is_postgres_safe_for_nullable_account(monkeyp
         date="2026-09-25",
         account_id=None,
         force=False,
-        conn=conn,
+        conn=Conn(),
     )
     assert result["no_trades"] is True
+
+
+def test_daily_summary_cache_query_is_postgres_safe_for_nullable_account(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+
+    cached_payload = {
+        "evidence_version": 4,
+        "analytics_engine_version": main.ANALYTICS_ENGINE_VERSION,
+        "input_signature": "day-signature",
+        "narrative": "Cached diagnosis",
+    }
+
+    class Cursor:
+        def fetchone(self):
+            return {
+                "ai_content": json.dumps(cached_payload),
+                "generated_at": "2026-09-27T08:00:00",
+            }
+
+    class Conn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((sql, tuple(params)))
+            assert "? IS NULL" not in sql
+            return Cursor()
+
+    monkeypatch.setattr(
+        main,
+        "build_daily_context",
+        lambda *_args, **_kwargs: {"trades": [{"trade_group": "g1"}]},
+    )
+    monkeypatch.setattr(main, "daily_context_signature", lambda _context: "day-signature")
+
+    conn = Conn()
+    result = main.get_daily_summary(
+        date="2026-09-25",
+        account_id=None,
+        force=False,
+        conn=conn,
+    )
+    assert result["cached"] is True
     assert "account_id IS NULL" in conn.calls[0][0]
     assert conn.calls[0][1] == ("2026-09-25",)
 
@@ -127,7 +161,7 @@ def test_daily_summary_cache_query_is_postgres_safe_for_nullable_account(monkeyp
         force=False,
         conn=conn,
     )
-    assert result["no_trades"] is True
+    assert result["cached"] is True
     assert "account_id = ?" in conn.calls[0][0]
     assert conn.calls[0][1] == ("2026-09-25", 4)
 

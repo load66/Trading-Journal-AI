@@ -30,6 +30,13 @@ function formatDateLabel(iso) {
   return d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 }
 
+function summaryErrorMessage(error) {
+  return error?.response?.data?.detail
+    || error?.response?.data?.error
+    || error?.message
+    || 'The AI diagnosis could not be generated.';
+}
+
 // ── R-Multiple chart ──────────────────────────────────────────────────────────
 function RMultipleChart({ trades }) {
   const data = trades.filter(t => t.r_multiple != null).map(t => ({
@@ -69,9 +76,12 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState('');
   const [regenerating, setRegenerating] = useState(false);
   const [cbDismissed, setCbDismissed] = useState(false);
   const allTimeKpisRef = useRef(null);
+  const dayRequestRef = useRef(0);
+  const summaryInFlightRef = useRef(null);
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -87,11 +97,37 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
     }
   }, [accountId]);
 
+  const fetchSummary = useCallback(async (d, { force = false } = {}) => {
+    const params = { date: d };
+    if (force) params.force = true;
+    if (accountId != null) params.account_id = accountId;
+
+    const key = `${accountId ?? 'all'}:${d}:auto`;
+    if (!force && summaryInFlightRef.current?.key === key) {
+      return summaryInFlightRef.current.promise;
+    }
+
+    const promise = dailySummaryApi.get(params);
+    if (!force) summaryInFlightRef.current = { key, promise };
+
+    try {
+      return await promise;
+    } finally {
+      if (!force && summaryInFlightRef.current?.promise === promise) {
+        summaryInFlightRef.current = null;
+      }
+    }
+  }, [accountId]);
+
   const fetchDay = useCallback(async (d) => {
+    const requestId = ++dayRequestRef.current;
     setLoading(true);
     setSummaryLoading(true);
+    setRegenerating(false);
+    setSummaryError('');
     setSummary(null);
     setCbDismissed(false);
+
     try {
       const params = { date_from: d, date_to: d, closed_only: true };
       if (accountId != null) params.account_id = accountId;
@@ -116,6 +152,8 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
         kpisApi.get(allParams),
       ]);
 
+      if (requestId !== dayRequestRef.current) return;
+
       const rawTrades = [...(tradesRes.data || [])].sort((a, b) => {
         const ax = tradeMarketHour(a, 'exit');
         const bx = tradeMarketHour(b, 'exit');
@@ -131,24 +169,42 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
       const diaryEntries = diaryRes.data || [];
       const dayDiary = diaryEntries.find(e => e.entry_date === d) || null;
       setDiary(dayDiary);
-    } catch (e) {
-      console.error('Failed to load day data', e);
-    } finally {
       setLoading(false);
-    }
 
-    // Fetch AI summary separately (can be slow)
-    try {
-      const sumParams = { date: d };
-      if (accountId != null) sumParams.account_id = accountId;
-      const sumRes = await dailySummaryApi.get(sumParams);
-      setSummary(sumRes.data);
+      // Empty sessions never call the AI provider.
+      if (!rawTrades.length) {
+        setSummary({
+          date: d,
+          cached: false,
+          no_trades: true,
+          narrative: 'No completed trades to diagnose for this date.',
+        });
+        setSummaryLoading(false);
+        return;
+      }
+
+      // Opening Day Review automatically resolves the current diagnosis.
+      // The backend reuses a matching evidence fingerprint and regenerates only
+      // when this day's trades/journal evidence changed.
+      try {
+        const sumRes = await fetchSummary(d);
+        if (requestId !== dayRequestRef.current) return;
+        setSummary(sumRes.data);
+      } catch (e) {
+        if (requestId !== dayRequestRef.current) return;
+        console.error('Failed to load automatic Day Review diagnosis', e);
+        setSummaryError(summaryErrorMessage(e));
+      } finally {
+        if (requestId === dayRequestRef.current) setSummaryLoading(false);
+      }
     } catch (e) {
-      console.error('Failed to load summary', e);
-    } finally {
+      if (requestId !== dayRequestRef.current) return;
+      console.error('Failed to load day data', e);
+      setLoading(false);
       setSummaryLoading(false);
+      setSummaryError(summaryErrorMessage(e));
     }
-  }, [accountId]);
+  }, [accountId, fetchSummary]);
 
   useEffect(() => {
     fetchAllTimeKpis();
@@ -159,19 +215,44 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
   }, [date, fetchDay]);
 
   const handleRegenerate = async () => {
+    if (!trades.length) return;
+    const requestId = dayRequestRef.current;
+    const requestedDate = date;
     setRegenerating(true);
     setSummaryLoading(true);
-    setSummary(null);
+    setSummaryError('');
     try {
-      const params = { date, force: true };
-      if (accountId != null) params.account_id = accountId;
-      const res = await dailySummaryApi.get(params);
+      const res = await fetchSummary(requestedDate, { force: true });
+      if (requestId !== dayRequestRef.current) return;
       setSummary(res.data);
     } catch (e) {
-      console.error('Regenerate failed', e);
+      if (requestId !== dayRequestRef.current) return;
+      console.error('Re-run diagnosis failed', e);
+      setSummaryError(summaryErrorMessage(e));
     } finally {
-      setRegenerating(false);
-      setSummaryLoading(false);
+      if (requestId === dayRequestRef.current) {
+        setRegenerating(false);
+        setSummaryLoading(false);
+      }
+    }
+  };
+
+  const handleRetrySummary = async () => {
+    if (!trades.length) return;
+    const requestId = dayRequestRef.current;
+    const requestedDate = date;
+    setSummaryLoading(true);
+    setSummaryError('');
+    try {
+      const res = await fetchSummary(requestedDate);
+      if (requestId !== dayRequestRef.current) return;
+      setSummary(res.data);
+    } catch (e) {
+      if (requestId !== dayRequestRef.current) return;
+      console.error('Retry diagnosis failed', e);
+      setSummaryError(summaryErrorMessage(e));
+    } finally {
+      if (requestId === dayRequestRef.current) setSummaryLoading(false);
     }
   };
 
@@ -213,10 +294,10 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
             type="button"
             className="btn btn-secondary"
             onClick={handleRegenerate}
-            disabled={regenerating || loading}
+            disabled={regenerating || loading || summaryLoading || !trades.length}
           >
             <RotateCcw size={14} style={{ animation: regenerating ? 'spin 1s linear infinite' : 'none' }} aria-hidden="true" />
-            {regenerating ? 'Regenerating...' : 'Regenerate AI'}
+            {regenerating ? 'Re-running…' : 'Re-run Diagnosis'}
           </button>
         </>}
       />
@@ -259,7 +340,13 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* Coaching first: you read the review, then the trades it is about */}
           <section className="card">
-            <Coaching summary={summary} loading={summaryLoading} onRegenerate={handleRegenerate} />
+            <Coaching
+              summary={summary}
+              loading={summaryLoading}
+              error={summaryError}
+              onRetry={handleRetrySummary}
+              onRegenerate={handleRegenerate}
+            />
           </section>
 
           {/* The trades */}

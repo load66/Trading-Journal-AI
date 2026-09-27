@@ -37,7 +37,7 @@ from ai_analysis import (
     generate_performance_diagnosis,
     performance_ai_is_configured,
 )
-from daily_summary import build_daily_context, generate_daily_summary
+from daily_summary import build_daily_context, daily_context_signature, generate_daily_summary
 from performance_report import build_performance_report
 from excursion_analysis import calculate_trade_excursion, EXCURSION_ENGINE_VERSION
 from library import router as library_router, init_library_tables, apply_aliases, library_names, TAG_TYPES as LIBRARY_TAG_TYPES
@@ -3739,8 +3739,27 @@ def get_daily_summary(
     force: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    # Check cache first. Branch the nullable-account query explicitly so
-    # PostgreSQL never has to infer the type of a bare "? IS NULL" parameter.
+    # Build the current day evidence first. Day Review should never spend an AI
+    # request on an empty session, and cached coaching is only valid while the
+    # evidence fingerprint still matches the underlying trades/journal data.
+    try:
+        context = build_daily_context(conn, date, account_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not context['trades']:
+        return {
+            "date": date,
+            "cached": False,
+            "no_trades": True,
+            "narrative": "No completed trades to diagnose for this date.",
+        }
+
+    input_signature = daily_context_signature(context)
+
+    # Check cache after the evidence fingerprint is known. Older summaries that
+    # predate input_signature are intentionally refreshed once, then become
+    # cacheable like any new diagnosis.
     if not force:
         if account_id is None:
             row = conn.execute(
@@ -3755,13 +3774,10 @@ def get_daily_summary(
         if row:
             try:
                 content = json.loads(row['ai_content'])
-                # Version 3 adds deterministic strengths/behavior flags and
-                # evidence badges. Older cached summaries are regenerated so
-                # the UI never mixes the previous free-form lists with the new
-                # evidence model.
                 if (
                     int(content.get('evidence_version') or 0) >= 4
                     and content.get('analytics_engine_version') == ANALYTICS_ENGINE_VERSION
+                    and content.get('input_signature') == input_signature
                 ):
                     content['date'] = date
                     content['cached'] = True
@@ -3771,14 +3787,10 @@ def get_daily_summary(
                 pass
 
     try:
-        context = build_daily_context(conn, date, account_id)
-        if not context['trades']:
-            return {"date": date, "cached": False, "no_trades": True, "narrative": "No trades recorded for this date."}
         summary = generate_daily_summary(context)
     except Exception as e:
         # Missing AI configuration is a normal unavailable state. If a provider
-        # is configured but the request fails, surface the real server error
-        # instead of incorrectly asking for an Anthropic key.
+        # is configured but the request fails, surface the real server error.
         if not performance_ai_is_configured():
             return {
                 "date": date,
@@ -3790,6 +3802,8 @@ def get_daily_summary(
                 ),
             }
         raise HTTPException(status_code=500, detail=str(e))
+
+    summary['input_signature'] = input_signature
 
     conn.execute(
         """INSERT INTO daily_summaries (summary_date, account_id, ai_content, generated_at)
