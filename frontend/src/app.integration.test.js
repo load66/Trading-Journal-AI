@@ -575,6 +575,9 @@ test('saved chart screenshot sits below Tags as a compact click-to-enlarge previ
       tags: [{ id: 1, tag_type: 'setup', tag_value: 'PDH Break' }],
     },
   });
+  tradesApi.getChartScreenshot.mockResolvedValue({
+    data: new Blob(['image'], { type: 'image/webp' }),
+  });
 
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
@@ -582,7 +585,8 @@ test('saved chart screenshot sits below Tags as a compact click-to-enlarge previ
   const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
   fireEvent.click(row);
 
-  expect(await screen.findByText('Tags')).toBeVisible();
+  await waitFor(() => expect(tradesApi.getChartScreenshot).toHaveBeenCalled());
+  expect(await screen.findByText('Chart screenshot')).toBeVisible();
   const preview = await screen.findByTitle('Click to enlarge');
   expect(preview).toBeVisible();
   fireEvent.click(preview);
