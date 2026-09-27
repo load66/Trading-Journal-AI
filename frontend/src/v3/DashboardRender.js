@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, AlertTriangle, BarChart3 } from 'lucide-react';
 import { calendarApi } from '../api';
+import LERiskPlanner from './LERiskPlanner';
 import {
   Measures, EquityCurve, DailyPnlBars, MonthGrid,
   money, money2, moneyK, tone, shortDate, MONTH_NAMES,
@@ -823,6 +824,7 @@ export default function DashboardRender(p) {
               onDayClick={onDayClick}
               latestDate={days.length ? days[days.length - 1].date : null}
             />
+            <LERiskPlanner accountId={accountId} />
           </section>
         </aside>
       </div>

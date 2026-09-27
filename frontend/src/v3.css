@@ -5126,3 +5126,438 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     min-height: 88px;
   }
 }
+
+
+/* ============================================================
+   LE Daily Risk Plan
+   Pre-market position sizing + Three Trade Rule guard, placed
+   directly beneath the dashboard calendar.
+   ============================================================ */
+.le-risk-planner {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--divider-soft);
+}
+.le-risk-head,
+.le-three-head,
+.le-risk-date-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.le-risk-heading {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+.le-risk-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--accent-line-soft);
+  border-radius: 8px;
+  color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.le-risk-heading h3,
+.le-three-head h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 760;
+  letter-spacing: -.015em;
+}
+.le-risk-heading p {
+  margin: 3px 0 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.le-risk-save {
+  flex: 0 0 auto;
+  min-width: 48px;
+  text-align: right;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.le-risk-save.saving,
+.le-risk-save.loading { color: var(--caution); }
+.le-risk-save.error { color: var(--result-neg); }
+
+.le-risk-date-row {
+  margin-top: 12px;
+  align-items: flex-end;
+}
+.le-risk-date-row label,
+.le-risk-capital,
+.le-risk-fields label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.le-risk-date-row label > span,
+.le-risk-capital > span,
+.le-risk-fields label > span {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .065em;
+  text-transform: uppercase;
+}
+.le-risk-date-row input,
+.le-risk-fields input,
+.le-risk-fields select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--divider-strong);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+.le-risk-reset {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 9px;
+  border: 1px solid var(--divider-soft);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.le-risk-reset:hover { color: var(--text-primary); background: var(--surface-hover); }
+
+.le-risk-capital { margin-top: 11px; }
+.le-risk-money-input {
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr);
+  align-items: center;
+  min-height: 42px;
+  overflow: hidden;
+  border: 1px solid var(--accent-line-soft);
+  border-radius: 8px;
+  background: var(--surface-inset);
+}
+.le-risk-money-input b {
+  padding-left: 11px;
+  color: var(--accent-line);
+  font-family: var(--font-mono);
+  font-size: 15px;
+}
+.le-risk-money-input input {
+  min-width: 0;
+  width: 100%;
+  height: 40px;
+  padding: 0 10px 0 6px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 760;
+}
+
+.le-risk-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 6px;
+  margin-top: 9px;
+}
+.le-risk-rule-grid > div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--divider-soft);
+  border-radius: 7px;
+  background: rgba(255,255,255,.012);
+}
+.le-risk-rule-grid span,
+.le-risk-rule-grid small {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 8.5px;
+  line-height: 1.25;
+}
+.le-risk-rule-grid strong {
+  display: block;
+  margin: 3px 0 2px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+.le-risk-rule-grid strong.pos { color: var(--result-pos); }
+.le-risk-rule-grid strong.neg { color: var(--result-neg); }
+
+.le-risk-sizing {
+  margin-top: 9px;
+  overflow: hidden;
+  border: 1px solid var(--divider-soft);
+  border-radius: 8px;
+  background: rgba(255,255,255,.008);
+}
+.le-risk-sizing > summary {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+.le-risk-sizing > summary::-webkit-details-marker { display: none; }
+.le-risk-sizing > summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.le-risk-sizing > summary svg { color: var(--accent-line); }
+.le-risk-sizing > summary small {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 650;
+}
+.le-risk-sizing[open] > summary {
+  border-bottom: 1px solid var(--divider-soft);
+  background: var(--surface-hover);
+}
+.le-risk-sizing-body { padding: 10px; }
+.le-risk-fields {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 8px;
+}
+.le-risk-fields label.wide { grid-column: 1 / -1; }
+.le-risk-fields label em {
+  color: var(--text-tertiary);
+  font-style: normal;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.le-risk-contract-result {
+  display: grid;
+  grid-template-columns: 76px minmax(0,1fr);
+  gap: 10px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid var(--accent-line-soft);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.le-risk-contract-primary {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  padding-right: 8px;
+  border-right: 1px solid var(--divider-soft);
+}
+.le-risk-contract-primary span,
+.le-risk-contract-primary small {
+  color: var(--text-tertiary);
+  font-size: 8px;
+  text-align: center;
+}
+.le-risk-contract-primary strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 28px;
+  line-height: 1;
+}
+.le-risk-contract-result dl {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+.le-risk-contract-result dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 9px;
+}
+.le-risk-contract-result dt { color: var(--text-tertiary); }
+.le-risk-contract-result dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-align: right;
+}
+.le-risk-contract-result dd.neg { color: var(--result-neg); }
+.le-risk-contract-result dd small { color: var(--text-tertiary); font-size: 8px; }
+.le-risk-inline-warning,
+.le-risk-target-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  font-size: 9px;
+  line-height: 1.35;
+}
+.le-risk-inline-warning,
+.le-risk-target-check.caution {
+  border: 1px solid var(--caution-line);
+  color: var(--caution);
+  background: var(--caution-soft);
+}
+.le-risk-target-check.good {
+  border: 1px solid var(--pos-line);
+  color: var(--result-pos);
+  background: rgba(102,215,172,.07);
+}
+.le-risk-target-check.neutral {
+  border: 1px solid var(--divider-soft);
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+}
+.le-risk-inline-warning svg,
+.le-risk-target-check svg { flex: 0 0 auto; margin-top: 1px; }
+
+.le-three-rule {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--divider-strong);
+  border-radius: 9px;
+  background: var(--surface-inset);
+}
+.le-three-head { align-items: flex-start; }
+.le-three-kicker {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-tertiary);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+.le-three-max {
+  min-width: 43px;
+  padding: 4px 6px;
+  border: 1px solid var(--neg-line);
+  border-radius: 999px;
+  color: var(--result-neg);
+  background: rgba(242,139,148,.08);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 800;
+  text-align: center;
+}
+.le-rule-commit {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 9px;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+.le-rule-commit.compact { margin-top: 7px; }
+.le-rule-commit input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--accent-line);
+}
+.le-risk-result-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0,1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+}
+.le-risk-result-row > span {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+}
+.le-risk-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.le-risk-seg button {
+  min-height: 29px;
+  padding: 4px 6px;
+  border: 1px solid var(--divider-soft);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.le-risk-seg button:disabled { opacity: .35; cursor: not-allowed; }
+.le-risk-seg button.active.green {
+  border-color: var(--pos-line);
+  color: var(--result-pos);
+  background: rgba(102,215,172,.08);
+}
+.le-risk-seg button.active.red {
+  border-color: var(--neg-line);
+  color: var(--result-neg);
+  background: rgba(242,139,148,.08);
+}
+.le-three-status {
+  display: grid;
+  gap: 3px;
+  margin-top: 9px;
+  padding: 8px 9px;
+  border: 1px solid var(--divider-soft);
+  border-left-width: 3px;
+  border-radius: 7px;
+  background: rgba(255,255,255,.012);
+}
+.le-three-status strong {
+  color: var(--text-primary);
+  font-size: 9px;
+  letter-spacing: .035em;
+}
+.le-three-status span {
+  color: var(--text-secondary);
+  font-size: 9px;
+  line-height: 1.35;
+}
+.le-three-status.good { border-left-color: var(--result-pos); }
+.le-three-status.caution { border-left-color: var(--caution); }
+.le-three-status.stop { border-left-color: var(--result-neg); }
+.le-three-status.neutral { border-left-color: var(--accent-line); }
+
+@media (max-width: 1100px) {
+  .le-risk-rule-grid { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .le-risk-fields { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .le-risk-fields label.wide { grid-column: span 2; }
+}
+@media (max-width: 720px) {
+  .le-risk-rule-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .le-risk-fields { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .le-risk-fields label.wide { grid-column: 1 / -1; }
+}
+@media (max-width: 420px) {
+  .le-risk-head { align-items: flex-start; }
+  .le-risk-date-row { align-items: stretch; }
+  .le-risk-date-row label { flex: 1; }
+  .le-risk-contract-result { grid-template-columns: 64px minmax(0,1fr); }
+}
