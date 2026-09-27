@@ -11,12 +11,6 @@ const signed$ = (v) => {
   });
 };
 
-const shortText = (value, max = 76) => {
-  const text = String(value || '').trim().replace(/\s+/g, ' ');
-  if (!text) return '';
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-};
-
 function ConfidenceDot({ level }) {
   return (
     <span
@@ -101,35 +95,6 @@ function SetupBadge({ setup, grade, notes, strategy }) {
       )}
       {highs > 0 && <span className="neg">✕{highs}</span>}
     </span>
-  );
-}
-
-function ReviewStatus({ trade }) {
-  const fields = [trade.entry_reason, trade.exit_reason, trade.mistakes];
-  const completed = fields.filter(value => String(value || '').trim()).length;
-  const reviewed = completed === 3;
-  const partial = completed > 0;
-  const state = reviewed ? 'complete' : partial ? 'partial' : 'empty';
-  const detail = [
-    reviewed ? 'Reviewed' : partial ? `${completed}/3 review fields documented` : 'Needs review',
-    trade.emotional_state ? `Emotion: ${trade.emotional_state}` : null,
-    trade.chart_screenshot_path ? 'Chart saved' : null,
-    trade.mistakes ? `Mistake: ${shortText(trade.mistakes, 90)}` : null,
-  ].filter(Boolean).join(' • ');
-
-  return (
-    <svg
-      className={`trade-review-dot ${state}`}
-      role="img"
-      aria-label={detail}
-      title={detail}
-      width="8"
-      height="8"
-      viewBox="0 0 8 8"
-      focusable="false"
-    >
-      <circle cx="4" cy="4" r="4" />
-    </svg>
   );
 }
 
@@ -392,9 +357,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
       <td className="trade-excursion-col"><ExcursionCell trade={trade} /></td>
       <td className="trade-exit-col"><ExitQuality trade={trade} /></td>
 
-      <td className="trade-review-cell">
-        <ReviewStatus trade={trade} />
-      </td>
 
       <td className="trade-open-cell">
         <span className="text-muted">

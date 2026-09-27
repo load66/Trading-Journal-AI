@@ -477,9 +477,6 @@ test('Trade View surfaces option strategy, review status, excursion and planned 
   expect(screen.getByText(/LE E-Entry — 10m 8 EMA Retest/)).toBeVisible();
   expect(screen.getByText('A')).toBeVisible();
   expect(screen.getByText('Followed')).toBeVisible();
-  expect(screen.getByRole('img', { name: /2\/3 review fields documented/ })).toBeVisible();
-  expect(screen.queryByText('2/3 documented')).not.toBeInTheDocument();
-  expect(screen.queryByText('Held first trim too long.')).not.toBeInTheDocument();
   expect(screen.getByText('+103.7')).toBeVisible();
   expect(screen.getByText('-72.2')).toBeVisible();
   expect(screen.getByText('71.8%')).toBeVisible();

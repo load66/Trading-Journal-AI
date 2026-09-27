@@ -222,7 +222,6 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                 <th title="Process adherence derived from setup grade.">Process</th>
                 <th title="Maximum favorable and adverse excursion while the trade was open.">Path</th>
                 <th title="Exit efficiency: share of covered favorable excursion retained at exit.">Exit</th>
-                <th className="trade-review-head" title="Review status: green complete, amber partial, gray not reviewed.">Review</th>
                 <th><span className="sr-only">Open trade</span></th>
               </tr>
             </thead>
@@ -230,14 +229,14 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
               {loading ? (
                 [...Array(5)].map((_, i) => (
                   <tr key={i}>
-                    {[...Array(10)].map((_, j) => (
+                    {[...Array(9)].map((_, j) => (
                       <td key={j}><div className="skeleton" style={{ height: 16, width: '80%' }} /></td>
                     ))}
                   </tr>
                 ))
               ) : paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="empty">
+                  <td colSpan={9} className="empty">
                     No trades found. Import a CSV to get started.
                   </td>
                 </tr>
