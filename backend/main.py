@@ -3630,11 +3630,9 @@ def get_daily_summary(
         if row:
             try:
                 content = json.loads(row['ai_content'])
-                # Version 3 adds deterministic strengths/behavior flags and
-                # evidence badges. Older cached summaries are regenerated so
-                # the UI never mixes the previous free-form lists with the new
-                # evidence model.
-                if int(content.get('evidence_version') or 0) >= 3:
+                # Version 4 standardizes all Day Review metrics on the canonical
+                # completed broker-trade ledger and current excursion version.
+                if int(content.get('evidence_version') or 0) >= 4:
                     content['date'] = date
                     content['cached'] = True
                     content['generated_at'] = row['generated_at']
