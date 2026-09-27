@@ -3494,6 +3494,11 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     inset 0 0 0 1px rgba(75, 200, 255, .10),
     0 0 20px rgba(0, 175, 255, .18);
 }
+.v3-ref-title-icon svg {
+  width: 32px;
+  height: 32px;
+  stroke-width: 2.2;
+}
 .v3-ref-management-title h2 {
   gap: 7px;
   font-size: 22px;
