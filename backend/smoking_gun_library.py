@@ -4,10 +4,12 @@ import hashlib
 import json
 from typing import Any
 
+from trade_metrics import trade_is_closed
+
 
 REPORT_SCHEMA_VERSION = "1"
-ANALYTICS_ENGINE_VERSION = "2026.09.26.1"
-BEHAVIOR_VERSION = "2026.09.26.1"
+ANALYTICS_ENGINE_VERSION = "2026.09.27.3"
+BEHAVIOR_VERSION = "2026.09.27.3"
 
 _FINGERPRINT_FIELDS = (
     "id",
@@ -311,6 +313,7 @@ def load_source_trades_for_range(
 
     sql += " ORDER BY date, trade_group, id"
     rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+    rows = [row for row in rows if trade_is_closed(row)]
     return rows, normalized
 
 
@@ -360,7 +363,14 @@ def decorate_stale_status(conn, reports: list[dict]) -> list[dict]:
             filters,
         )
         row = dict(report)
-        if current == report.get("data_fingerprint"):
+        engine_changed = (
+            str(report.get("analytics_engine_version") or "") != ANALYTICS_ENGINE_VERSION
+            or str(report.get("behavior_version") or "") != BEHAVIOR_VERSION
+        )
+        if engine_changed:
+            row["is_stale"] = True
+            row["stale_reason"] = "analytics-engine-changed"
+        elif current == report.get("data_fingerprint"):
             row["is_stale"] = False
             row["stale_reason"] = None
         elif current == empty_fingerprint:

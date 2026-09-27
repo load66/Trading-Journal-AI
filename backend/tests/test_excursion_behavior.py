@@ -9,8 +9,15 @@ from behavior_rules import detect_daily_flags, deterministic_strengths  # noqa: 
 from excursion_analysis import calculate_trade_excursion  # noqa: E402
 
 
-def fill(date, time, action, qty, price):
-    return {"date": date, "time": time, "action": action, "qty": qty, "price": price}
+def fill(date, time, action, qty, price, source_timezone="America/New_York"):
+    return {
+        "date": date,
+        "time": time,
+        "action": action,
+        "qty": qty,
+        "price": price,
+        "source_timezone": source_timezone,
+    }
 
 
 def stock_trade(group, pnl, entry="09:30:10", exit="09:32:20", qty=10, entry_price=100, exit_price=104, ticker="SPY"):
@@ -67,8 +74,7 @@ def test_option_excursion_uses_contract_premium_path_and_broker_fills():
     result = calculate_trade_excursion(trade, bars, bar_basis="option_premium_1m")
     assert result["basis"] == "option_premium_1m"
     assert result["mfe_pct"] == 50.0
-    assert result["mae_pct"] == 5.0
-    assert result["exit_efficiency"] == 50.0
+    # Entry-minute low may predate the fill, so it is not claimed as confirmed MAE.\n    assert result["mae_pct"] == 0.0\n    assert result["exit_efficiency"] == 50.0
 
 
 def test_option_excursion_rejects_underlying_path_as_profit_capture():
@@ -245,8 +251,7 @@ def test_stock_excursion_does_not_look_ahead_to_later_scale_in():
     ]
     result = calculate_trade_excursion(trade, bars, bar_basis="stock_1m")
     assert result["entry_reference"] == 100
-    assert result["mfe_pct"] == 5.0
-    assert result["mae_pct"] == 21.0
+    # Every held minute contains a fill, so no intraminute high/low is\n    # claimed without ordering evidence. Whole-trade economic MAE is $200 on\n    # $1,800 entry cost after the second fill.\n    assert result["mfe_pct"] == 0.0\n    assert result["mae_pct"] == 11.1111
 
 
 def test_high_trade_count_requires_personal_history():
@@ -261,3 +266,66 @@ def test_high_trade_count_requires_personal_history():
     high = next(f for f in flags if f["code"] == "high_trade_count")
     assert high["metric"]["trade_count"] == 12
     assert high["evidence"] == "VERIFIED"
+
+
+def test_legacy_schwab_central_clock_is_converted_before_bar_matching():
+    d = "2026-09-25"
+    trade = {
+        "trade_group": "wmt-clock",
+        "date": d,
+        "ticker": "WMT",
+        "instrument_type": "OPTION",
+        "option_type": "CALL",
+        "side": "LONG",
+        "net_pnl": -172.10,
+        "executions": [
+            fill(d, "14:43:00", "BOT", 2, 3.35, "America/Chicago"),
+            fill(d, "14:51:00", "BOT", 1, 3.27, "America/Chicago"),
+            fill(d, "14:52:00", "SOLD", 3, 2.76, "America/Chicago"),
+        ],
+    }
+    # 14:43 CT = 15:43 ET = 19:43Z during CDT.
+    bars = [
+        {"t": "2026-09-25T19:43:00Z", "o": 3.35, "h": 3.36, "l": 3.20, "c": 3.25},
+        {"t": "2026-09-25T19:44:00Z", "o": 3.25, "h": 3.30, "l": 3.10, "c": 3.15},
+        {"t": "2026-09-25T19:45:00Z", "o": 3.15, "h": 3.20, "l": 3.00, "c": 3.05},
+        {"t": "2026-09-25T19:46:00Z", "o": 3.05, "h": 3.10, "l": 2.95, "c": 3.00},
+        {"t": "2026-09-25T19:47:00Z", "o": 3.00, "h": 3.05, "l": 2.90, "c": 2.95},
+        {"t": "2026-09-25T19:48:00Z", "o": 2.95, "h": 3.00, "l": 2.85, "c": 2.90},
+        {"t": "2026-09-25T19:49:00Z", "o": 2.90, "h": 2.95, "l": 2.80, "c": 2.85},
+        {"t": "2026-09-25T19:50:00Z", "o": 2.85, "h": 2.90, "l": 2.75, "c": 2.80},
+        {"t": "2026-09-25T19:51:00Z", "o": 2.80, "h": 2.82, "l": 2.70, "c": 2.74},
+        {"t": "2026-09-25T19:52:00Z", "o": 2.74, "h": 2.78, "l": 2.70, "c": 2.76},
+    ]
+    result = calculate_trade_excursion(trade, bars, bar_basis="option_premium_1m")
+    assert result["available"] is True
+    # Gross exit loss is $169 on $997 entry premium, so MAE cannot be smaller.
+    assert result["mae_pct"] >= 16.95
+    assert result["exit_efficiency"] is None
+
+
+def test_multifill_excursion_uses_whole_trade_economic_path():
+    d = "2026-09-25"
+    trade = {
+        "trade_group": "scale-economic",
+        "date": d,
+        "ticker": "SPY",
+        "instrument_type": "OPTION",
+        "option_type": "CALL",
+        "side": "LONG",
+        "net_pnl": -50,
+        "executions": [
+            fill(d, "09:30:10", "BOT", 1, 1.00),
+            fill(d, "09:31:10", "BOT", 1, 0.80),
+            fill(d, "09:32:20", "SOLD", 2, 0.65),
+        ],
+    }
+    bars = [
+        {"t": "2026-09-25T13:30:00Z", "o": 1.00, "h": 1.02, "l": 0.98, "c": 1.00},
+        {"t": "2026-09-25T13:31:00Z", "o": 0.90, "h": 0.92, "l": 0.78, "c": 0.80},
+        {"t": "2026-09-25T13:32:00Z", "o": 0.70, "h": 0.72, "l": 0.60, "c": 0.65},
+    ]
+    result = calculate_trade_excursion(trade, bars, bar_basis="option_premium_1m")
+    # Entry premium = 1.80. Exit value = 1.30 => realized gross loss 0.50.
+    assert result["mae_pct"] >= round(0.50 / 1.80 * 100, 4)
+    assert result["exit_efficiency"] is None

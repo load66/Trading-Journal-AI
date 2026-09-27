@@ -6,6 +6,12 @@ import os
 import re
 from pathlib import Path
 from dotenv import load_dotenv
+from trade_metrics import (
+    execution_datetime,
+    split_entry_exit,
+    trade_is_closed,
+    weighted_price,
+)
 
 load_dotenv()
 
@@ -415,64 +421,41 @@ def save_analysis_to_db(conn, diary_entry_id: int, analysis: dict):
 
 
 def build_trades_context(conn, entry_date: str, account_id: int) -> list[dict]:
-    """
-    Fetch all trades for a given date and account, compute avg entry/exit prices
-    from executions JSON for Claude's context.
-    """
-    cursor = conn.execute(
+    """Closed-trade diary context derived from canonical broker executions."""
+    rows = conn.execute(
         "SELECT * FROM trades WHERE date = ? AND account_id = ?",
-        (entry_date, account_id)
-    )
-    rows = cursor.fetchall()
+        (entry_date, account_id),
+    ).fetchall()
 
     context = []
     for row in rows:
         trade = dict(row)
-        execs = json.loads(trade.get('executions') or '[]')
+        if not trade_is_closed(trade):
+            continue
+        entries, exits = split_entry_exit(trade)
+        avg_entry = weighted_price(entries)
+        avg_exit = weighted_price(exits)
 
-        buy_fills = [e for e in execs if e.get('action') == 'BOT']
-        sell_fills = [e for e in execs if e.get('action') == 'SOLD']
-
-        avg_entry = None
-        avg_exit = None
         first_entry_time = None
         last_exit_time = None
-
-        if buy_fills:
-            total_qty = sum(e.get('qty', 0) for e in buy_fills)
-            if total_qty > 0:
-                avg_entry = round(
-                    sum(e.get('qty', 0) * e.get('price', 0) for e in buy_fills) / total_qty, 2
-                )
-            times = [e.get('time', '') for e in buy_fills if e.get('time')]
-            if times:
-                first_entry_time = min(times)
-
-        if sell_fills:
-            total_qty = sum(e.get('qty', 0) for e in sell_fills)
-            if total_qty > 0:
-                avg_exit = round(
-                    sum(e.get('qty', 0) * e.get('price', 0) for e in sell_fills) / total_qty, 2
-                )
-            times = [e.get('time', '') for e in sell_fills if e.get('time')]
-            if times:
-                last_exit_time = max(times)
-
-        # For SHORT trades, avg_entry comes from SOLD fills and avg_exit from BOT fills
-        if trade.get('side') == 'SHORT':
-            avg_entry, avg_exit = avg_exit, avg_entry
-            first_entry_time, last_exit_time = last_exit_time, first_entry_time
+        if entries:
+            dt = execution_datetime(entries[0], fallback_date=trade.get("date"), target_timezone="America/New_York")
+            first_entry_time = dt.strftime("%H:%M:%S") if dt else None
+        if exits:
+            dt = execution_datetime(exits[-1], fallback_date=trade.get("date"), target_timezone="America/New_York")
+            last_exit_time = dt.strftime("%H:%M:%S") if dt else None
 
         context.append({
-            'trade_group': trade['trade_group'],
-            'ticker': trade['ticker'],
-            'instrument_type': trade['instrument_type'],
-            'side': trade['side'],
-            'avg_entry': avg_entry,
-            'avg_exit': avg_exit,
-            'first_entry_time': first_entry_time,
-            'last_exit_time': last_exit_time,
-            'net_pnl': trade.get('net_pnl', 0),
+            "trade_group": trade["trade_group"],
+            "ticker": trade["ticker"],
+            "instrument_type": trade["instrument_type"],
+            "side": trade["side"],
+            "avg_entry": round(avg_entry, 4) if avg_entry is not None else None,
+            "avg_exit": round(avg_exit, 4) if avg_exit is not None else None,
+            "first_entry_time": first_entry_time,
+            "last_exit_time": last_exit_time,
+            "time_zone": "America/New_York",
+            "net_pnl": trade.get("net_pnl", 0),
         })
 
     return context
@@ -532,16 +515,18 @@ def build_brain_context(conn, account_id) -> str:
     """Build a compact trading context string for Brain's system prompt."""
     rows = conn.execute("""
         SELECT t.date, t.ticker, t.side, t.instrument_type, t.net_pnl, t.gross_pnl,
+               t.executions,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.stop_loss, ta.target_price
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
         WHERE (? IS NULL OR t.account_id = ?)
         ORDER BY t.date DESC, t.id DESC
-        LIMIT 300
+        LIMIT 1000
     """, (account_id, account_id)).fetchall()
 
     trades = [dict(r) for r in rows]
+    trades = [t for t in trades if trade_is_closed(t)][:300]
     if not trades:
         return "No trade data available."
 

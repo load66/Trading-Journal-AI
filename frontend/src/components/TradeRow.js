@@ -63,6 +63,7 @@ function SetupBadge({ setup, strategy }) {
 }
 
 function ExcursionCell({ trade }) {
+  if (trade.excursion_stale) return <span className="text-faint">Recalculating</span>;
   const mfe = Number(trade.mfe_pct);
   const mae = Number(trade.mae_pct);
   const hasMfe = Number.isFinite(mfe);
@@ -80,6 +81,7 @@ function ExcursionCell({ trade }) {
 }
 
 function ExitQuality({ trade }) {
+  if (Number(trade.net_pnl || 0) <= 0) return <span className="text-faint">—</span>;
   const value = Number(trade.exit_efficiency);
   if (!Number.isFinite(value)) return <span className="text-faint">—</span>;
   const cls = value >= 60 ? 'pos' : value >= 35 ? 'caution' : 'neg';

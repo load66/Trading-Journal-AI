@@ -1213,7 +1213,11 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
                 new_date = max(f.get('iso_date', '') for f in all_fills) or pos.get('date', '')
 
             conn.execute(
-                "UPDATE trades SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=? WHERE trade_group=? AND account_id=?",
+                """UPDATE trades
+                   SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=?,
+                       mfe_pct=NULL, mae_pct=NULL, exit_efficiency=NULL,
+                       excursion_basis=NULL, excursion_calculated_at=NULL, excursion_version=NULL
+                   WHERE trade_group=? AND account_id=?""",
                 (agg['executions'], agg['gross_pnl'], agg['net_pnl'], agg['commissions'],
                  new_date, tg, account_id)
             )

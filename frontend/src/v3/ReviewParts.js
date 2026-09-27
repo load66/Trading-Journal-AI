@@ -1,30 +1,16 @@
 /* Review page pieces in the V3 language. Presentation only. */
 import { useState, useMemo } from 'react';
 import { Measures, Tabs, Grade, money, money2, tone } from './parts';
+import { tradeHoldSeconds, tradeMarketHour, tradeStats } from '../tradeMetrics';
 
 /* the clock every trading session runs on */
 const OPEN = 9.5;
 const CLOSE = 16;
 
-function tradeExecutions(t) {
-  let execs = t.executions || [];
-  if (!Array.isArray(execs)) {
-    try { execs = JSON.parse(execs || '[]'); } catch { execs = []; }
-  }
-  return execs;
-}
-
 function tradeHoldLabel(t) {
-  const execs = tradeExecutions(t)
-    .map((e) => {
-      const raw = e.date && e.time ? `${e.date}T${e.time}` : (e.datetime || '');
-      const ms = raw ? new Date(raw).getTime() : NaN;
-      return Number.isFinite(ms) ? ms : null;
-    })
-    .filter((v) => v != null)
-    .sort((a, b) => a - b);
-  if (execs.length < 2) return '—';
-  const sec = Math.max(0, Math.round((execs[execs.length - 1] - execs[0]) / 1000));
+  const secRaw = tradeHoldSeconds(t);
+  if (secRaw == null) return '—';
+  const sec = Math.max(0, Math.round(secRaw));
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
   const h = Math.floor(sec / 3600);
@@ -33,38 +19,11 @@ function tradeHoldLabel(t) {
 }
 
 function tradePLPercent(t) {
-  if (t.pl_pct != null && Number.isFinite(Number(t.pl_pct))) return Number(t.pl_pct);
-  const side = String(t.side || '').toUpperCase();
-  const entryAction = side === 'SHORT' ? 'SOLD' : 'BOT';
-  const entries = tradeExecutions(t).filter((e) => String(e.action || '').toUpperCase() === entryAction);
-  const qty = entries.reduce((s, e) => s + Number(e.qty || 0), 0);
-  if (!(qty > 0)) return null;
-  const weighted = entries.reduce((s, e) => s + Number(e.qty || 0) * Number(e.price || 0), 0);
-  const avgEntry = weighted / qty;
-  if (!(avgEntry > 0)) return null;
-  const inst = String(t.instrument_type || 'STOCK').toUpperCase();
-  if (inst === 'FUTURE') return null;
-  const multiplier = inst === 'OPTION' ? 100 : 1;
-  const entryCost = Math.abs(avgEntry * qty * multiplier);
-  if (!(entryCost > 0)) return null;
-  return Number(t.net_pnl || 0) / entryCost * 100;
+  return tradeStats(t).plPercent;
 }
 
 export function tradeTime(t, which = 'entry') {
-  let execs = t.executions || [];
-  if (!Array.isArray(execs)) {
-    try { execs = JSON.parse(execs || '[]'); } catch { execs = []; }
-  }
-  const times = execs
-    .map((e) => e.time || e.datetime || '')
-    .filter(Boolean)
-    .sort();
-  const raw = times.length
-    ? (which === 'exit' ? times[times.length - 1] : times[0])
-    : (which === 'exit' ? (t.close_time || t.time || '') : (t.open_time || t.time || ''));
-  const m = String(raw).match(/(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  return Number(m[1]) + Number(m[2]) / 60;
+  return tradeMarketHour(t, which);
 }
 
 /* ── the day, as one picture ────────────────────────────────────────────────
@@ -139,7 +98,7 @@ export function DayCurve({ trades, onPick }) {
           strokeWidth="1.8" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
       </svg>
 
-      {/* one mark per trade, on the curve at its entry time */}
+      {/* one mark per completed trade, booked at its final exit time */}
       {marks.map((m, i) => {
         const leftPct = (geom.X(m.at) / W) * 100;
         const topPct = (geom.Y(m.cum) / H) * 100;

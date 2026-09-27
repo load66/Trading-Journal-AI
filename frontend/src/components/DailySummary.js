@@ -6,6 +6,7 @@ import {
 import { tradesApi, kpisApi, diaryApi, dailySummaryApi, excursionApi } from '../api';
 import { PageHeader, PanelHead } from './ui';
 import { DayCurve, DayMeasures, Coaching, DayTrades } from '../v3/ReviewParts';
+import { tradeMarketHour } from '../tradeMetrics';
 import {
   BarChart, Bar, XAxis, YAxis, ReferenceLine,
   Tooltip, ResponsiveContainer, Cell
@@ -92,7 +93,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
     setSummary(null);
     setCbDismissed(false);
     try {
-      const params = { date_from: d, date_to: d };
+      const params = { date_from: d, date_to: d, closed_only: true };
       if (accountId != null) params.account_id = accountId;
 
       // Enrich missing MFE/MAE/exit-efficiency once, then read the day.
@@ -115,7 +116,14 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
         kpisApi.get(allParams),
       ]);
 
-      const rawTrades = tradesRes.data || [];
+      const rawTrades = [...(tradesRes.data || [])].sort((a, b) => {
+        const ax = tradeMarketHour(a, 'exit');
+        const bx = tradeMarketHour(b, 'exit');
+        if (ax == null && bx == null) return 0;
+        if (ax == null) return 1;
+        if (bx == null) return -1;
+        return ax - bx;
+      });
       setTrades(rawTrades);
       setKpis(kpisRes.data || null);
       allTimeKpisRef.current = allKpisRes.data || null;

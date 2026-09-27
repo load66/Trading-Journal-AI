@@ -14,7 +14,10 @@ import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from trade_metrics import execution_datetime
+
 ET = ZoneInfo("America/New_York")
+EXCURSION_ENGINE_VERSION = "2026.09.27.3"
 
 
 def _execs(trade: dict) -> list[dict]:
@@ -28,14 +31,13 @@ def _execs(trade: dict) -> list[dict]:
 
 
 def _exec_dt(e: dict) -> datetime | None:
-    date = str(e.get("date") or "").strip()
-    time = str(e.get("time") or "").strip()
-    if not date or not time:
-        return None
-    try:
-        return datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=ET)
-    except Exception:
-        return None
+    """Canonical execution instant expressed in market (ET) time.
+
+    Schwab/TOS export clocks are Central Time in this journal. Legacy rows may
+    not yet carry timestamp_utc/source_timezone, so trade_metrics applies the
+    configured broker timezone before converting to ET.
+    """
+    return execution_datetime(e, target_timezone="America/New_York")
 
 
 def _weighted_price(rows: list[dict]) -> float | None:
@@ -279,21 +281,36 @@ def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str |
     if direction > 0:
         favorable_price = max(highs)
         adverse_price = min(lows)
-        mfe_pct = max(0.0, (favorable_price - entry_ref) / entry_ref * 100)
-        mae_pct = max(0.0, (entry_ref - adverse_price) / entry_ref * 100)
+        raw_mfe_pct = max(0.0, (favorable_price - entry_ref) / entry_ref * 100)
+        raw_mae_pct = max(0.0, (entry_ref - adverse_price) / entry_ref * 100)
         captured_pct = (exit_ref - entry_ref) / entry_ref * 100
     else:
         favorable_price = min(lows)
         adverse_price = max(highs)
-        mfe_pct = max(0.0, (entry_ref - favorable_price) / entry_ref * 100)
-        mae_pct = max(0.0, (adverse_price - entry_ref) / entry_ref * 100)
+        raw_mfe_pct = max(0.0, (entry_ref - favorable_price) / entry_ref * 100)
+        raw_mae_pct = max(0.0, (adverse_price - entry_ref) / entry_ref * 100)
         captured_pct = (entry_ref - exit_ref) / entry_ref * 100
 
     efficiency = None
     path_max_pnl = None
     path_min_pnl = None
+    mfe_pct = raw_mfe_pct
+    mae_pct = raw_mae_pct
     if actual_instrument_path:
         efficiency, path_max_pnl, path_min_pnl = _execution_path_efficiency(trade, held)
+
+        # For real stock/option paths, report whole-trade economic excursion.
+        # This handles scale-ins/scale-outs without comparing a multi-fill trade
+        # against only its first fill. Dollar path P&L and total entry notional
+        # share the same multiplier, so the percentage is multiplier-invariant.
+        entries = window["entries"]
+        entry_cost = sum(
+            float(e.get("qty") or 0) * float(e.get("price") or 0)
+            for e in entries
+        )
+        if entry_cost > 1e-12:
+            mfe_pct = max(0.0, float(path_max_pnl or 0) / entry_cost * 100)
+            mae_pct = max(0.0, abs(min(0.0, float(path_min_pnl or 0))) / entry_cost * 100)
 
     notes = {
         "stock_1m": "Stock excursion uses Alpaca 1-minute stock bars with actual Schwab fills as entry/exit anchors.",
@@ -318,4 +335,5 @@ def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str |
         "bar_count": len(held),
         "resolution": "1Min",
         "note": note,
+        "engine_version": EXCURSION_ENGINE_VERSION,
     }

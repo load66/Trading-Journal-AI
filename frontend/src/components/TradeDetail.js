@@ -4,6 +4,7 @@ import { tradesApi, libraryApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
+import { executionMarketParts, tradeStats as canonicalTradeStats } from '../tradeMetrics';
 
 const fmt$ = (v) => {
   if (v == null) return '—';
@@ -107,48 +108,30 @@ function parseExecs(trade) {
 }
 
 function computeStats(trade) {
-  const execs = parseExecs(trade);
-  const side = trade.side;
-  const entryFills = execs.filter(e => side === 'LONG' ? e.action === 'BOT' : e.action === 'SOLD');
-  const exitFills  = execs.filter(e => side === 'LONG' ? e.action === 'SOLD' : e.action === 'BOT');
-
-  const avgPrice = (fills) => {
-    const qty = fills.reduce((s, f) => s + (f.qty || 0), 0);
-    if (!qty) return null;
-    return fills.reduce((s, f) => s + (f.qty || 0) * (f.price || 0), 0) / qty;
-  };
-
-  const avgEntry = avgPrice(entryFills);
-  const avgExit  = avgPrice(exitFills);
-  const totalQty = entryFills.reduce((s, f) => s + (f.qty || 0), 0);
-  const instrument = (trade.instrument_type || 'STOCK').toUpperCase();
-  const multiplier = instrument === 'OPTION' ? 100 : 1;
-  const adjustedCost = avgEntry ? avgEntry * totalQty * multiplier : null;
-  const plPercent = trade.pl_pct != null
-    ? Number(trade.pl_pct)
-    : adjustedCost ? (trade.net_pnl / adjustedCost * 100) : null;
-
-  const sortedTimes = [...execs].map(e => e.time).filter(Boolean).sort();
-  const openTime  = sortedTimes[0];
-  const closeTime = sortedTimes[sortedTimes.length - 1];
-
-  let holdMinutes = null;
-  if (openTime && closeTime && exitFills.length > 0) {
-    const [oh, om] = openTime.split(':').map(Number);
-    const [ch, cm] = closeTime.split(':').map(Number);
-    holdMinutes = (ch * 60 + cm) - (oh * 60 + om);
-  }
+  const stats = canonicalTradeStats(trade);
+  const openExecution = stats.entryFills[0] || null;
+  const closeExecution = stats.exitFills[stats.exitFills.length - 1] || null;
+  const openTime = openExecution?.time || null;
+  const closeTime = closeExecution?.time || null;
 
   const fmtHold = (m) => {
-    if (m == null) return '—';
-    if (m < 60) return `${m}m`;
-    return `${Math.floor(m / 60)}h ${m % 60}m`;
+    if (m == null || !Number.isFinite(Number(m))) return '—';
+    const totalSec = Math.max(0, Math.round(Number(m) * 60));
+    if (totalSec < 60) return `${totalSec}s`;
+    if (totalSec < 3600) return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`;
+    const h = Math.floor(totalSec / 3600);
+    const min = Math.floor((totalSec % 3600) / 60);
+    return `${h}h ${min}m`;
   };
 
-  const isClosed = exitFills.length > 0;
-  const isWin = (trade.net_pnl || 0) > 0;
-
-  return { avgEntry, avgExit, totalQty, adjustedCost, plPercent, openTime, closeTime, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
+  return {
+    ...stats,
+    openTime,
+    closeTime,
+    openExecution,
+    closeExecution,
+    fmtHold,
+  };
 }
 
 export function calculateDefaultPlannedRisk(trade) {
@@ -745,6 +728,11 @@ export function formatExecutionTimeET(dateStr, timeStr) {
   return parts ? `${parts.hhmm} ET` : '—';
 }
 
+function formatExecutionObjectET(execution, fallbackDate) {
+  const parts = executionMarketParts(execution, fallbackDate);
+  return parts ? `${parts.hhmm} ET` : '—';
+}
+
 export function executionTimeETMinutes(dateStr, timeStr) {
   const parts = etPartsForExecution(dateStr, timeStr);
   return parts ? parts.hour * 60 + parts.minute : null;
@@ -759,10 +747,11 @@ const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', 
 // ── Main TradeDetail component ────────────────────────────────────────────────
 
 function getDayTradeTime(t, which) {
-  const execs = Array.isArray(t.executions) ? t.executions : [];
-  const times = execs.map(e => e.time).filter(Boolean).sort();
-  const raw = which === 'open' ? times[0] : times[times.length - 1];
-  return raw ? formatExecutionTimeET(t.date, raw) : null;
+  const stats = canonicalTradeStats(t);
+  const execution = which === 'open'
+    ? stats.entryFills[0]
+    : stats.exitFills[stats.exitFills.length - 1];
+  return execution ? formatExecutionObjectET(execution, t.date) : null;
 }
 
 function DaySidebar({ currentTrade, onOpenDetail }) {
@@ -774,7 +763,7 @@ function DaySidebar({ currentTrade, onOpenDetail }) {
       .catch(() => {});
   }, [currentTrade.date, currentTrade.account_id]);
 
-  const dayPnl = dayTrades.reduce((s, t) => s + (t.net_pnl || 0), 0);
+  const dayPnl = dayTrades.filter(t => !t.is_open).reduce((s, t) => s + (t.net_pnl || 0), 0);
 
   return (
     <section className="card panel-flush" aria-label="This session">
@@ -1268,8 +1257,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           <span className="num">{trade.date}</span>
           {' / '}{trade.instrument_type ? trade.instrument_type.charAt(0) + trade.instrument_type.slice(1).toLowerCase() : 'Stock'}
           {' / '}{trade.side === 'LONG' ? 'Long' : trade.side === 'SHORT' ? 'Short' : trade.side}
-          {stats.openTime && <> · Opened <span className="num">{formatExecutionTimeET(trade.date, stats.openTime)}</span></>}
-          {stats.closeTime && stats.isClosed && <> · Closed <span className="num">{formatExecutionTimeET(trade.date, stats.closeTime)}</span></>}
+          {stats.openTime && <> · Opened <span className="num">{formatExecutionObjectET(stats.openExecution, trade.date)}</span></>}
+          {stats.closeTime && stats.isClosed && <> · Closed <span className="num">{formatExecutionObjectET(stats.closeExecution, trade.date)}</span></>}
           {stats.holdMinutes != null && <> · Held <span className="num">{stats.fmtHold(stats.holdMinutes)}</span></>}
         </>}
         actions={tradeNavList.length > 1 ? <>
@@ -1335,8 +1324,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         />
         <KpiCell
           label="Exit efficiency"
-          value={<span className="num">{trade.exit_efficiency != null ? `${Number(trade.exit_efficiency).toFixed(1)}%` : 'n/a'}</span>}
-          tone={trade.exit_efficiency != null ? (Number(trade.exit_efficiency) >= 50 ? 'pos' : 'neg') : undefined}
+          value={<span className="num">{pnl > 0 && trade.exit_efficiency != null ? `${Number(trade.exit_efficiency).toFixed(1)}%` : 'n/a'}</span>}
+          tone={pnl > 0 && trade.exit_efficiency != null ? (Number(trade.exit_efficiency) >= 50 ? 'pos' : 'neg') : undefined}
         />
       </KpiStrip>
 
@@ -1429,8 +1418,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 <StatRow label="Adjusted Cost" value={stats.adjustedCost ? fmt$(stats.adjustedCost) : '—'} />
                 <StatRow label="Average Entry" value={stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : '—'} />
                 <StatRow label="Average Exit" value={stats.avgExit ? `$${stats.avgExit.toFixed(2)}` : '—'} />
-                <StatRow label="Entry Time" value={stats.openTime ? formatExecutionTimeET(trade.date, stats.openTime) : '—'} />
-                <StatRow label="Exit Time" value={(stats.isClosed && stats.closeTime) ? formatExecutionTimeET(trade.date, stats.closeTime) : '—'} />
+                <StatRow label="Entry Time" value={stats.openTime ? formatExecutionObjectET(stats.openExecution, trade.date) : '—'} />
+                <StatRow label="Exit Time" value={(stats.isClosed && stats.closeTime) ? formatExecutionObjectET(stats.closeExecution, trade.date) : '—'} />
                 <StatRow label="Hold Time" value={stats.fmtHold(stats.holdMinutes)} />
 
                 {editingStats ? (
@@ -1516,20 +1505,19 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         and how much of the favourable move you actually kept. */}
                     <StatRow
                       label="Max Favourable (MFE)"
-                      value={trade.mfe_pct == null ? null : `+${Number(trade.mfe_pct).toFixed(2)}%`}
+                      value={trade.excursion_stale || trade.mfe_pct == null ? null : `+${Number(trade.mfe_pct).toFixed(2)}%`}
                       valueColor="var(--result-pos)"
                     />
                     <StatRow
                       label="Max Adverse (MAE)"
-                      value={trade.mae_pct == null ? null : `${Number(trade.mae_pct).toFixed(2)}%`}
+                      value={trade.excursion_stale || trade.mae_pct == null ? null : `-${Math.abs(Number(trade.mae_pct)).toFixed(2)}%`}
                       valueColor="var(--result-neg)"
                     />
                     <StatRow
                       label="Exit Efficiency"
-                      value={trade.exit_efficiency == null ? null : `${Number(trade.exit_efficiency).toFixed(1)}%`}
-                      valueColor={trade.exit_efficiency == null ? undefined
-                        : trade.exit_efficiency < 0 ? 'var(--result-neg)'
-                          : trade.exit_efficiency >= 50 ? 'var(--result-pos)' : 'var(--caution)'}
+                      value={pnl <= 0 || trade.exit_efficiency == null ? null : `${Number(trade.exit_efficiency).toFixed(1)}%`}
+                      valueColor={pnl <= 0 || trade.exit_efficiency == null ? undefined
+                        : trade.exit_efficiency >= 50 ? 'var(--result-pos)' : 'var(--caution)'}
                     />
                     <StatRow label="Emotional State" value={analysis.emotional_state} />
                   </>

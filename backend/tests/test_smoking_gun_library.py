@@ -149,14 +149,15 @@ def _initialized_conn(tmp_path):
 
 
 def _saved_payload(fingerprint="fp-1", title="September Smoking Gun"):
+    from smoking_gun_library import ANALYTICS_ENGINE_VERSION, BEHAVIOR_VERSION
     return {
         "account_id": 1,
         "title": title,
         "date_from": "2026-09-01",
         "date_to": "2026-09-30",
         "report_version": "1",
-        "analytics_engine_version": "2026.09.26.1",
-        "behavior_version": "2026.09.26.1",
+        "analytics_engine_version": ANALYTICS_ENGINE_VERSION,
+        "behavior_version": BEHAVIOR_VERSION,
         "analysis_provider": "openai",
         "analysis_model": "gpt-test",
         "trade_count": 2,
@@ -371,14 +372,15 @@ def _seed_api_source(main):
 
 
 def _api_payload(fingerprint):
+    from smoking_gun_library import ANALYTICS_ENGINE_VERSION, BEHAVIOR_VERSION
     return {
         "account_id": 1,
         "title": "September Smoking Gun",
         "date_from": "2026-09-01",
         "date_to": "2026-09-30",
         "report_version": "1",
-        "analytics_engine_version": "2026.09.26.1",
-        "behavior_version": "2026.09.26.1",
+        "analytics_engine_version": ANALYTICS_ENGINE_VERSION,
+        "behavior_version": BEHAVIOR_VERSION,
         "analysis_provider": "openai",
         "analysis_model": "gpt-test",
         "data_fingerprint": fingerprint,

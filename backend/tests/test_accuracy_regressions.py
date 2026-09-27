@@ -408,14 +408,15 @@ def test_time_of_day_kpis_group_by_first_entry(monkeypatch, tmp_path):
 
     rows = main._time_of_day_kpis(trades)
 
-    assert [r["start_minute"] for r in rows] == [510, 540]
-    assert rows[0]["label"] == "8:30 AM–9:00 AM"
+    # Legacy Schwab/TOS clocks are Central; analytics normalize them to ET.
+    assert [r["start_minute"] for r in rows] == [570, 600]
+    assert rows[0]["label"] == "9:30 AM–10:00 AM"
     assert rows[0]["count"] == 2
     assert rows[0]["net_pnl"] == 50.0
     assert rows[0]["win_rate"] == 50.0
     assert rows[0]["expectancy"] == 25.0
     assert rows[0]["avg_pl_pct"] == 5.0
-    assert rows[1]["label"] == "9:00 AM–9:30 AM"
+    assert rows[1]["label"] == "10:00 AM–10:30 AM"
     assert rows[1]["count"] == 1
     assert rows[1]["net_pnl"] == 60.0
 
@@ -710,6 +711,12 @@ def test_excursion_kpis_expose_medians_to_detect_outlier_skew(monkeypatch, tmp_p
                     mfe, mae, 70.0, "option_premium_1m",
                 ),
             )
+        conn.execute(
+            """UPDATE trades
+               SET excursion_version=?, excursion_calculated_at=?
+               WHERE account_id=?""",
+            (main.EXCURSION_ENGINE_VERSION, "2026-09-27T12:00:00Z", account_id),
+        )
         conn.commit()
 
         result = main._excursion_kpis(conn, account_id=account_id)
@@ -757,6 +764,12 @@ def test_excursion_kpis_expose_winner_loser_actionable_separation(monkeypatch, t
                     mfe, mae, 70.0 if pnl > 0 else None, "option_premium_1m",
                 ),
             )
+        conn.execute(
+            """UPDATE trades
+               SET excursion_version=?, excursion_calculated_at=?
+               WHERE account_id=?""",
+            (main.EXCURSION_ENGINE_VERSION, "2026-09-27T12:00:00Z", account_id),
+        )
         conn.commit()
 
         result = main._excursion_kpis(conn, account_id=account_id)
@@ -798,6 +811,12 @@ def test_excursion_confidence_requires_multiple_days(monkeypatch, tmp_path):
                     10.0, 3.0, 70.0, "option_premium_1m",
                 ),
             )
+        conn.execute(
+            """UPDATE trades
+               SET excursion_version=?, excursion_calculated_at=?
+               WHERE account_id=?""",
+            (main.EXCURSION_ENGINE_VERSION, "2026-09-27T12:00:00Z", account_id),
+        )
         conn.commit()
 
         one_day = main._excursion_kpis(conn, account_id=account_id)
@@ -823,6 +842,18 @@ def test_excursion_confidence_requires_multiple_days(monkeypatch, tmp_path):
                         10.0, 3.0, 70.0, "option_premium_1m",
                     ),
                 )
+        conn.execute(
+            """UPDATE trades
+               SET excursion_version=?, excursion_calculated_at=?
+               WHERE account_id=? AND date IN (?, ?)""",
+            (
+                main.EXCURSION_ENGINE_VERSION,
+                "2026-09-27T12:00:00Z",
+                account_id,
+                "2026-09-23",
+                "2026-09-24",
+            ),
+        )
         conn.commit()
 
         multi_day = main._excursion_kpis(conn, account_id=account_id)
@@ -1000,3 +1031,151 @@ def test_manual_trade_tags_reject_duplicates_and_unknown_types(monkeypatch, tmp_
         assert unknown.value.status_code == 400
     finally:
         conn.close()
+
+
+def test_wmt_multifill_pl_percent_reconciles_to_schwab_fills(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    trade = {
+        "side": "LONG",
+        "instrument_type": "OPTION",
+        "ticker": "WMT",
+        "net_pnl": -172.10,
+        "executions": [
+            {"action": "BOT", "qty": 2, "price": 3.35},
+            {"action": "BOT", "qty": 1, "price": 3.27},
+            {"action": "SOLD", "qty": 3, "price": 2.76},
+        ],
+    }
+    assert main._trade_pl_percent(trade) == -17.26
+
+
+def test_manual_option_pnl_uses_contract_multiplier(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    gross, net = main.compute_manual_pnl(
+        "LONG", 2.00, 2.50, 3, 3.00, "OPTION", "SPY"
+    )
+    assert gross == 150.0
+    assert net == 147.0
+
+
+def test_kpis_exclude_partially_open_positions_from_every_core_metric(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Closed Only", "day_trading", "schwab"),
+        )
+        closed = __import__("json").dumps([
+            {"action": "BOT", "qty": 1, "price": 1.0, "time": "08:30:00"},
+            {"action": "SOLD", "qty": 1, "price": 2.0, "time": "08:35:00"},
+        ])
+        partial = __import__("json").dumps([
+            {"action": "BOT", "qty": 2, "price": 1.0, "time": "09:00:00"},
+            {"action": "SOLD", "qty": 1, "price": 2.0, "time": "09:05:00"},
+        ])
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (account_id, "closed", "2026-09-01", "SPY", "OPTION", "LONG",
+             100.0, 100.0, 0.0, closed, "imported"),
+        )
+        conn.execute(
+            """INSERT INTO trades
+               (account_id, trade_group, date, ticker, instrument_type, side,
+                gross_pnl, net_pnl, commissions, executions, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (account_id, "partial", "2026-09-01", "QQQ", "OPTION", "LONG",
+             100.0, 100.0, 0.0, partial, "imported"),
+        )
+        conn.commit()
+
+        result = main.get_kpis(account_id=account_id, date_from=None, date_to=None, conn=conn)
+        assert result["total_trades"] == 1
+        assert result["total_net_pnl"] == 100.0
+        assert result["win_rate"] == 100.0
+        assert result["expectancy"] == 100.0
+        assert result["trading_days"] == 1
+    finally:
+        conn.close()
+
+
+def test_yearly_day_win_rate_uses_net_day_result_not_any_winner(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Yearly", "day_trading", "schwab"),
+        )
+        def add(group, date, pnl, ticker):
+            execs = __import__("json").dumps([
+                {"action": "BOT", "qty": 1, "price": 1.0, "time": "08:30:00"},
+                {"action": "SOLD", "qty": 1, "price": 1.1, "time": "08:35:00"},
+            ])
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (account_id, group, date, ticker, "OPTION", "LONG", pnl, pnl, 0.0, execs, "imported"),
+            )
+        # Sep 1 contains a winner but is a red day overall: +100 - 200 = -100.
+        add("a", "2026-09-01", 100.0, "SPY")
+        add("b", "2026-09-01", -200.0, "QQQ")
+        add("c", "2026-09-02", 50.0, "IWM")
+        conn.commit()
+
+        september = main.get_yearly_kpis(year=2026, account_id=account_id, conn=conn)[8]
+        assert september["trading_days"] == 2
+        assert september["day_win_rate"] == 50.0
+    finally:
+        conn.close()
+
+
+def test_stale_excursion_requires_current_engine_version(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    trade = {
+        "instrument_type": "OPTION",
+        "side": "LONG",
+        "net_pnl": 10.0,
+        "mfe_pct": 20.0,
+        "mae_pct": 5.0,
+        "exit_efficiency": 50.0,
+        "excursion_basis": "option_premium_1m",
+        "excursion_calculated_at": "2026-09-27T12:00:00Z",
+        "excursion_version": "old",
+        "executions": [
+            {"action": "BOT", "qty": 1, "price": 1.0},
+            {"action": "SOLD", "qty": 1, "price": 1.1},
+        ],
+    }
+    assert main._excursion_is_stale(trade) is True
+    trade["excursion_version"] = main.EXCURSION_ENGINE_VERSION
+    assert main._excursion_is_stale(trade) is False
+
+
+def test_losing_trade_with_exit_capture_is_always_stale(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    trade = {
+        "instrument_type": "OPTION",
+        "side": "LONG",
+        "net_pnl": -10.0,
+        "mfe_pct": 2.0,
+        "mae_pct": 10.0,
+        "exit_efficiency": 76.9,
+        "excursion_basis": "option_premium_1m",
+        "excursion_calculated_at": "2026-09-27T12:00:00Z",
+        "excursion_version": main.EXCURSION_ENGINE_VERSION,
+        "executions": [
+            {"action": "BOT", "qty": 1, "price": 1.0},
+            {"action": "SOLD", "qty": 1, "price": 0.9},
+        ],
+    }
+    assert main._excursion_is_stale(trade) is True

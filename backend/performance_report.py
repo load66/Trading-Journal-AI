@@ -7,6 +7,14 @@ from math import inf
 from statistics import mean, median
 
 from behavior_rules import detect_daily_flags
+from trade_metrics import (
+    entry_notional as canonical_entry_notional,
+    execution_datetime,
+    split_entry_exit,
+    trade_entry_exit_datetimes,
+    trade_is_closed,
+    weighted_price,
+)
 
 from smoking_gun_library import (
     ANALYTICS_ENGINE_VERSION,
@@ -59,10 +67,19 @@ def _parse_time(date_str: str, time_str: str):
 
 
 def _load_execs(trade):
+    raw = trade.get("executions") or []
+    if isinstance(raw, list):
+        return raw
     try:
-        return json.loads(trade.get("executions") or "[]")
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
     except Exception:
         return []
+
+
+def _entry_sort_value(row):
+    dt = row.get("entry_dt")
+    return dt.timestamp() if dt is not None else float("inf")
 
 
 def _entry_exit_actions(side):
@@ -71,33 +88,18 @@ def _entry_exit_actions(side):
 
 def enrich_trade(trade):
     t = dict(trade)
-    execs = _load_execs(t)
-    entry_action, exit_action = _entry_exit_actions(t.get("side"))
-    entries = [e for e in execs if e.get("action") == entry_action]
-    exits = [e for e in execs if e.get("action") == exit_action]
-
-    def dt(e):
-        return _parse_time(e.get("date") or t.get("date"), e.get("time"))
-
-    entries = sorted(entries, key=lambda e: dt(e) or datetime.max)
-    exits = sorted(exits, key=lambda e: dt(e) or datetime.max)
-    entry_dt = dt(entries[0]) if entries else None
-    exit_dt = dt(exits[-1]) if exits else None
+    entries, exits = split_entry_exit(t)
+    entry_dt, exit_dt = trade_entry_exit_datetimes(t, target_timezone="America/New_York")
     hold_sec = (exit_dt - entry_dt).total_seconds() if entry_dt and exit_dt else None
     if hold_sec is not None and hold_sec < 0:
         hold_sec = None
 
     entry_qty = sum(float(e.get("qty") or 0) for e in entries)
-    avg_entry = None
-    if entry_qty > 0:
-        avg_entry = sum(float(e.get("qty") or 0) * float(e.get("price") or 0) for e in entries) / entry_qty
-
-    qty_bot = sum(float(e.get("qty") or 0) for e in execs if e.get("action") == "BOT")
-    qty_sold = sum(float(e.get("qty") or 0) for e in execs if e.get("action") == "SOLD")
-    is_open = abs(qty_bot - qty_sold) > 1e-6
+    avg_entry = weighted_price(entries)
+    closed = trade_is_closed(t)
 
     t.update({
-        "execs": execs,
+        "execs": _load_execs(t),
         "entries": entries,
         "exits": exits,
         "entry_dt": entry_dt,
@@ -105,13 +107,15 @@ def enrich_trade(trade):
         "hold_sec": hold_sec,
         "entry_qty": entry_qty,
         "avg_entry": avg_entry,
-        "entry_notional": entry_qty * (avg_entry or 0),
+        "entry_notional": canonical_entry_notional(t),
         "pnl": float(t.get("net_pnl") or 0),
-        "is_open": is_open,
-        "open_quantity": round(abs(qty_bot - qty_sold), 6),
+        "is_open": not closed,
+        "open_quantity": 0.0 if closed else round(abs(
+            sum(float(e.get("qty") or 0) for e in _load_execs(t) if e.get("action") == "BOT")
+            - sum(float(e.get("qty") or 0) for e in _load_execs(t) if e.get("action") == "SOLD")
+        ), 6),
     })
     return t
-
 
 def _bucket_label(value, defs):
     if value is None:
@@ -155,25 +159,39 @@ def _hold_bucket(t):
 
 
 def _size_bucket(t):
-    if t.get("instrument_type") == "OPTION":
+    instrument = str(t.get("instrument_type") or "").upper()
+    if instrument == "OPTION":
         return _bucket_label(t.get("entry_qty"), OPTION_SIZE_BUCKETS)
-    return _bucket_label(t.get("entry_notional"), SHARE_NOTIONAL_BUCKETS)
+    if instrument == "STOCK":
+        return _bucket_label(t.get("entry_notional"), SHARE_NOTIONAL_BUCKETS)
+    return None
 
 
 def _size_family(t):
-    return "OPTION" if t.get("instrument_type") == "OPTION" else "NOTIONAL"
+    instrument = str(t.get("instrument_type") or "").upper()
+    if instrument == "OPTION":
+        return "OPTION"
+    if instrument == "STOCK":
+        return "NOTIONAL"
+    return None
 
 
 def _position_size_value(t):
-    return t.get("entry_qty") if _size_family(t) == "OPTION" else t.get("entry_notional")
+    family = _size_family(t)
+    if family == "OPTION":
+        return t.get("entry_qty")
+    if family == "NOTIONAL":
+        return t.get("entry_notional")
+    return None
 
 
 def _instrument_size_medians(trades):
     grouped = defaultdict(list)
     for t in trades:
         value = _position_size_value(t)
-        if value is not None and value > 0:
-            grouped[_size_family(t)].append(value)
+        family = _size_family(t)
+        if family and value is not None and value > 0:
+            grouped[family].append(value)
     return {family: median(values) for family, values in grouped.items() if values}
 
 
@@ -192,7 +210,7 @@ def _daily_rows(trades):
     running = 0.0
     out = []
     for day in sorted(k for k in by_day if k):
-        rows = sorted(by_day[day], key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(by_day[day], key=_entry_sort_value)
         options = sum(r["pnl"] for r in rows if r.get("instrument_type") == "OPTION")
         shares = sum(r["pnl"] for r in rows if r.get("instrument_type") == "STOCK")
         futures = sum(r["pnl"] for r in rows if r.get("instrument_type") == "FUTURE")
@@ -231,7 +249,7 @@ def _stop_model(trades):
         adjusted_total = 0.0
         breaches = []
         for day, rows in by_day.items():
-            rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+            rows = sorted(rows, key=_entry_sort_value)
             actual = sum(r["pnl"] for r in rows)
             cum = 0.0
             stopped = False
@@ -291,7 +309,7 @@ def _revenge_and_chase(trades):
     revenge = defaultdict(list)
     chase = []
     for _, rows in by_day_ticker.items():
-        rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(rows, key=_entry_sort_value)
         has_loss = False
         reentry_depth = 0
         prev = None
@@ -385,13 +403,13 @@ def _behavior_analysis(trades):
     size_medians = _instrument_size_medians(trades)
     first_sizes, after_loss_sizes, after_loss_rows = [], [], []
     for rows in by_day.values():
-        rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(rows, key=_entry_sort_value)
         first_sizes += [v for v in (_size_multiple(r, size_medians) for r in rows[:3]) if v is not None]
         cum = 0.0
         for r in rows:
             cum += r["pnl"]
             if threshold and cum <= -threshold:
-                after = [x for x in rows if (x.get("entry_dt") or datetime.max) > (r.get("entry_dt") or datetime.max)]
+                after = [x for x in rows if _entry_sort_value(x) > _entry_sort_value(r)]
                 after_loss_rows += after
                 after_loss_sizes += [v for v in (_size_multiple(x, size_medians) for x in after) if v is not None]
                 break
@@ -486,7 +504,7 @@ def by_day_ticker_sorted(trades):
     groups = defaultdict(list)
     for t in trades:
         groups[(t.get("date"), t.get("ticker"))].append(t)
-    return {k: sorted(v, key=lambda r: r.get("entry_dt") or datetime.max) for k, v in groups.items()}
+    return {k: sorted(v, key=_entry_sort_value) for k, v in groups.items()}
 
 
 def _scoreboard(trades, daily):
