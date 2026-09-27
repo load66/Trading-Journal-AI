@@ -221,7 +221,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                 <th>Review</th>
                 <th title="Maximum favorable and adverse excursion while the trade was open.">MFE / MAE</th>
                 <th title="Exit efficiency: share of covered favorable excursion retained at exit.">Exit</th>
-                {sortTh('r_multiple', 'R', 'num')}
+                <th className="num" title="Planned reward-to-risk. Realized R appears below when available.">R:R</th>
                 <th><span className="sr-only">Open trade</span></th>
               </tr>
             </thead>
