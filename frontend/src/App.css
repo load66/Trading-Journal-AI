@@ -314,173 +314,168 @@
 .td-live-chart {
   min-width: 0;
 }
-.td-chart-screenshot-side {
+
+.td-chart-review-workspace {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 14px;
+  padding-top: 12px;
 }
-.td-chart-screenshot-head {
+
+.td-chart-review-toolbar {
+  min-height: 38px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
+  padding: 0 2px 10px;
+  border-bottom: 1px solid var(--divider-soft);
 }
-.td-chart-screenshot-actions {
+
+.td-chart-review-title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+
+.td-chart-review-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
-.td-chart-dropzone {
+
+.td-chart-review-upload {
   position: relative;
-  display: grid;
-  place-items: center;
   overflow: hidden;
-  border: 1px dashed rgba(63, 157, 209, .45);
-  border-radius: var(--radius-md);
-  background:
-    linear-gradient(180deg, rgba(7, 30, 45, .82), rgba(4, 21, 32, .96));
   cursor: pointer;
 }
-.td-chart-dropzone-compact {
-  width: min(100%, 800px);
-  min-height: 240px;
-}
-.td-chart-dropzone:hover {
-  border-color: rgba(58, 181, 239, .75);
-}
-.td-chart-dropzone.has-image {
-  border-style: solid;
-}
-.td-chart-dropzone input,
-.td-chart-review-upload input {
+
+.td-chart-review-upload input,
+.td-chart-review-empty input {
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
   pointer-events: none;
 }
+
+.td-chart-review-remove:hover:not(:disabled) {
+  color: var(--result-neg);
+  border-color: rgba(239, 91, 91, .38);
+}
+
+.td-chart-review-stage {
+  width: 100%;
+  min-height: 430px;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(24, 83, 112, .13), transparent 42%),
+    linear-gradient(180deg, rgba(4, 19, 29, .96), rgba(2, 13, 21, .99));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .018);
+}
+
 .td-chart-preview {
   position: relative;
   display: block;
-  width: min(100%, 800px);
+  width: min(100%, 980px);
   padding: 0;
   overflow: hidden;
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-md);
+  border: 1px solid rgba(74, 129, 158, .42);
+  border-radius: 9px;
   background: #020c13;
   cursor: zoom-in;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .24);
   transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
 }
+
 .td-chart-preview:hover {
   border-color: rgba(58, 181, 239, .72);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, .2);
+  box-shadow: 0 22px 52px rgba(0, 0, 0, .3);
   transform: translateY(-1px);
 }
+
 .td-chart-preview img {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 600px;
+  max-height: 620px;
   object-fit: contain;
   background: #020c13;
   cursor: zoom-in;
 }
-.td-chart-preview > span {
-  position: absolute;
-  right: 7px;
-  bottom: 7px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 7px;
-  border: 1px solid rgba(255,255,255,.12);
-  border-radius: 999px;
-  color: #eaf8ff;
-  background: rgba(3, 20, 31, .82);
-  font-size: 10.5px;
-  font-weight: 650;
-  pointer-events: none;
+
+.td-chart-review-preview {
+  margin: 0 auto;
 }
+
 .td-chart-preview-loading {
-  min-height: 150px;
+  width: min(100%, 980px);
+  min-height: 360px;
   display: grid;
   place-items: center;
   border: 1px solid var(--divider);
-  border-radius: var(--radius-md);
-  background: var(--surface-inset);
+  border-radius: 9px;
+  background: rgba(2, 12, 20, .86);
 }
-.td-chart-screenshot-actions-bottom {
-  justify-content: flex-end;
-}
-.td-chart-dropzone-empty {
-  max-width: 300px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 22px 18px;
+
+.td-chart-review-empty {
+  position: relative;
+  width: min(100%, 980px);
+  min-height: 360px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  border: 1px dashed rgba(69, 168, 218, .48);
+  border-radius: 10px;
   color: var(--text-secondary);
-  text-align: center;
+  background: rgba(5, 25, 38, .54);
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
 }
-.td-chart-dropzone-empty svg {
+
+.td-chart-review-empty:hover {
+  border-color: rgba(69, 190, 239, .82);
+  background: rgba(7, 34, 50, .72);
+  transform: translateY(-1px);
+}
+
+.td-chart-review-empty svg {
   color: var(--accent-line);
 }
-.td-chart-dropzone-empty strong {
+
+.td-chart-review-empty strong {
   color: var(--text-primary);
   font-size: 14px;
+  font-weight: 700;
 }
-.td-chart-dropzone-empty span,
-.td-chart-replace-hint {
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-.td-chart-review-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-top: 10px;
-}
-.td-chart-review-callout {
-  display: flex;
-  gap: 10px;
-  padding: 13px 14px;
-  border: 1px solid rgba(0, 177, 231, .28);
-  border-radius: var(--radius-md);
-  background: rgba(0, 124, 171, .08);
-}
-.td-chart-review-callout svg {
-  flex: 0 0 auto;
-  color: var(--accent-line);
-}
-.td-chart-review-callout strong {
-  color: var(--text-primary);
-  font-size: 13px;
-}
-.td-chart-review-callout p {
-  margin: 4px 0 0;
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-.td-chart-review-checks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-.td-chart-review-checks span {
-  padding: 5px 8px;
-  border: 1px solid var(--divider);
-  border-radius: 999px;
-  color: var(--text-secondary);
-  background: var(--surface-inset);
-  font-size: 11px;
-  font-weight: 650;
-}
-.td-chart-review-upload {
-  position: relative;
-  align-self: flex-start;
-  overflow: hidden;
-  cursor: pointer;
+
+@media (max-width: 720px) {
+  .td-chart-review-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .td-chart-review-stage {
+    min-height: 280px;
+    padding: 10px;
+  }
+
+  .td-chart-preview img {
+    max-height: 420px;
+  }
+
+  .td-chart-review-empty,
+  .td-chart-preview-loading {
+    min-height: 260px;
+  }
 }
 
 .td-image-modal {
