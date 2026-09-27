@@ -32,7 +32,7 @@ jest.mock('./api', () => {
   };
   const ACCOUNTS = [
     { id: 1, name: 'Day Trading', type: 'day_trading', color: '#6366f1', broker: 'Schwab' },
-    { id: 2, name: 'Swing', type: 'swing', color: '#6366f1', broker: 'Schwab' },
+    { id: 2, name: 'Swing', type: 'swing_trading', color: '#6366f1', broker: 'Schwab' },
   ];
   const SMOKING_GUN_REPORTS = [
     {
@@ -316,7 +316,7 @@ test('Brain opens from the header as a dialog and closes on Escape', async () =>
   await waitFor(() => expect(screen.queryByRole('dialog', { name: /Brain/i })).not.toBeInTheDocument());
 });
 
-test('account menu keeps selection, rename and new-account controls', async () => {
+test('account menu keeps selection, account editing and new-account controls', async () => {
   await renderApp();
   fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
   const menu = screen.getByRole('menu', { name: 'Accounts' });
@@ -324,11 +324,39 @@ test('account menu keeps selection, rename and new-account controls', async () =
   expect(within(menu).getByRole('menuitemradio', { name: /Day Trading/ })).toBeInTheDocument();
   expect(within(menu).getByRole('button', { name: /New Account/ })).toBeInTheDocument();
 
-  fireEvent.click(within(menu).getByRole('button', { name: 'Rename Day Trading' }));
-  const input = within(menu).getByRole('textbox', { name: 'New name for Day Trading' });
+  fireEvent.click(within(menu).getByRole('button', { name: 'Edit Day Trading' }));
+  const input = within(menu).getByRole('textbox', { name: 'Account name for Day Trading' });
   fireEvent.change(input, { target: { value: 'Day Trading Main' } });
+  fireEvent.change(within(menu).getByRole('combobox', { name: 'Account type for Day Trading' }), {
+    target: { value: 'mixed_trading' },
+  });
   fireEvent.keyDown(input, { key: 'Enter' });
-  await waitFor(() => expect(accountsApi.update).toHaveBeenCalledWith(1, { name: 'Day Trading Main' }));
+  await waitFor(() => expect(accountsApi.update).toHaveBeenCalledWith(1, {
+    name: 'Day Trading Main',
+    type: 'mixed_trading',
+  }));
+});
+
+test('new accounts can be classified as Mixed Trading', async () => {
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
+  const menu = screen.getByRole('menu', { name: 'Accounts' });
+  fireEvent.click(within(menu).getByRole('button', { name: /New Account/ }));
+
+  fireEvent.change(within(menu).getByRole('textbox', { name: 'Account name' }), {
+    target: { value: 'Brokerage' },
+  });
+  fireEvent.change(within(menu).getByRole('combobox', { name: 'Account type' }), {
+    target: { value: 'mixed_trading' },
+  });
+  fireEvent.click(within(menu).getByRole('button', { name: 'Create' }));
+
+  await waitFor(() => expect(accountsApi.create).toHaveBeenCalledWith({
+    name: 'Brokerage',
+    type: 'mixed_trading',
+    color: '#6366f1',
+    broker: 'Thinkorswim',
+  }));
 });
 
 test('choosing an account updates the shared header state', async () => {
