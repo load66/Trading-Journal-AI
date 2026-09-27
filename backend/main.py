@@ -2167,28 +2167,88 @@ async def get_chart(
 
 
 
-@app.post("/api/excursions/calculate")
-async def calculate_excursions(
-    date: str = Query(...),
-    account_id: int | None = Query(None),
-    force: bool = Query(False),
-    conn: sqlite3.Connection = Depends(get_connection),
-):
-    """Calculate and persist missing MAE/MFE/exit-efficiency for one trading day.
 
-    This is intentionally lazy: Day Review calls it automatically. Once a trade
-    has excursion metrics they are reused by every report, avoiding repeated
-    Alpaca requests.
-    """
-    if not ALPACA_KEY or ALPACA_KEY == "your_alpaca_api_key_here":
-        return {
-            "date": date, "computed": 0, "skipped": 0, "unavailable": True,
-            "message": "Alpaca market data is not configured.",
-        }
+def _occ_option_symbol(trade: dict) -> str | None:
+    """Build the standard OCC option symbol used by Alpaca market data."""
+    ticker = str(trade.get("ticker") or "").upper().replace(" ", "")
+    expiry = str(trade.get("option_expiry") or "")
+    option_type = str(trade.get("option_type") or "").upper()
+    strike = trade.get("option_strike")
+    if not ticker or len(expiry) != 10 or option_type not in {"CALL", "PUT"} or strike is None:
+        return None
+    try:
+        expiry_code = datetime.strptime(expiry, "%Y-%m-%d").strftime("%y%m%d")
+        strike_code = int(round(float(strike) * 1000))
+    except Exception:
+        return None
+    cp = "C" if option_type == "CALL" else "P"
+    return f"{ticker}{expiry_code}{cp}{strike_code:08d}"
 
+
+async def _fetch_alpaca_option_bars(symbols: list[str], date: str) -> dict[str, list[dict]]:
+    """Fetch 1-minute historical bars for OCC option contracts."""
+    if not symbols:
+        return {}
+    url = "https://data.alpaca.markets/v1beta1/options/bars"
+    headers = {
+        "APCA-API-KEY-ID": ALPACA_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_SECRET,
+    }
+    base_params = {
+        "symbols": ",".join(sorted(set(symbols))),
+        "timeframe": "1Min",
+        "start": f"{date}T09:30:00-04:00",
+        "end": f"{date}T16:00:00-04:00",
+        "limit": 10000,
+        "sort": "asc",
+    }
+    by_symbol: dict[str, list[dict]] = {symbol: [] for symbol in symbols}
+    page_token = None
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        while True:
+            params = dict(base_params)
+            if page_token:
+                params["page_token"] = page_token
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json() or {}
+            page_bars = data.get("bars") or {}
+            if not isinstance(page_bars, dict):
+                raise ValueError("Alpaca returned an invalid option-bars payload.")
+            for symbol, bars in page_bars.items():
+                if isinstance(bars, list):
+                    by_symbol.setdefault(symbol, []).extend(bars)
+            page_token = data.get("next_page_token")
+            if not page_token:
+                break
+    return by_symbol
+
+
+def _excursion_is_stale(trade: dict) -> bool:
+    inst = str(trade.get("instrument_type") or "STOCK").upper()
+    expected = {
+        "STOCK": "stock_1m",
+        "OPTION": "option_premium_1m",
+        "FUTURE": "proxy_1m",
+    }.get(inst)
+    return (
+        trade.get("mfe_pct") is None
+        or trade.get("mae_pct") is None
+        or not expected
+        or str(trade.get("excursion_basis") or "") != expected
+    )
+
+
+async def _calculate_excursions_for_date(
+    date: str,
+    account_id: int | None,
+    force: bool,
+    conn,
+) -> dict:
     sql = """
         SELECT id, account_id, trade_group, date, ticker, instrument_type, side,
-               net_pnl, executions, option_type, mfe_pct, mae_pct, exit_efficiency
+               net_pnl, executions, option_type, option_expiry, option_strike,
+               mfe_pct, mae_pct, exit_efficiency, excursion_basis
         FROM trades
         WHERE date = ?
     """
@@ -2196,51 +2256,114 @@ async def calculate_excursions(
     if account_id is not None:
         sql += " AND account_id = ?"
         params.append(account_id)
-    if not force:
-        # A zero-MFE trade legitimately has no exit-efficiency denominator, so
-        # completeness is based on the excursion pair rather than efficiency.
-        sql += " AND (mfe_pct IS NULL OR mae_pct IS NULL)"
     sql += " ORDER BY id"
 
-    rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    all_rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    rows = all_rows if force else [t for t in all_rows if _excursion_is_stale(t)]
     if not rows:
         return {"date": date, "computed": 0, "skipped": 0, "already_complete": True}
 
-    by_ticker = {}
-    for t in rows:
-        by_ticker.setdefault(t["ticker"], []).append(t)
-
     computed = 0
     skipped = []
+    calculated_at = datetime.utcnow().isoformat() + "Z"
+
+    option_rows = [t for t in rows if str(t.get("instrument_type") or "").upper() == "OPTION"]
+    non_option_rows = [t for t in rows if str(t.get("instrument_type") or "").upper() != "OPTION"]
+
+    if option_rows:
+        symbol_by_id = {t["id"]: _occ_option_symbol(t) for t in option_rows}
+        symbols = [symbol for symbol in symbol_by_id.values() if symbol]
+        try:
+            option_bars = await _fetch_alpaca_option_bars(symbols, date)
+        except Exception as exc:
+            option_bars = {}
+            fetch_error = f"Option premium bars unavailable: {exc}"
+        else:
+            fetch_error = None
+
+        for trade in option_rows:
+            symbol = symbol_by_id.get(trade["id"])
+            bars = option_bars.get(symbol, []) if symbol else []
+            if not symbol:
+                skipped.append({
+                    "trade_group": trade["trade_group"],
+                    "ticker": trade["ticker"],
+                    "reason": "Option contract metadata is incomplete.",
+                })
+                continue
+            if not bars:
+                skipped.append({
+                    "trade_group": trade["trade_group"],
+                    "ticker": trade["ticker"],
+                    "reason": fetch_error or f"No option-premium bars returned for {symbol}.",
+                })
+                continue
+            metric = calculate_trade_excursion(
+                trade, bars, bar_basis="option_premium_1m"
+            )
+            if not metric.get("available"):
+                skipped.append({
+                    "trade_group": trade["trade_group"],
+                    "ticker": trade["ticker"],
+                    "reason": metric.get("reason") or "Insufficient option-premium data.",
+                })
+                continue
+            conn.execute(
+                """UPDATE trades
+                   SET mfe_pct=?, mae_pct=?, exit_efficiency=?,
+                       excursion_basis=?, excursion_calculated_at=?
+                   WHERE id=?""",
+                (
+                    metric["mfe_pct"],
+                    metric["mae_pct"],
+                    metric["exit_efficiency"],
+                    metric["basis"],
+                    calculated_at,
+                    trade["id"],
+                ),
+            )
+            computed += 1
+
+    by_ticker: dict[str, list[dict]] = {}
+    for trade in non_option_rows:
+        by_ticker.setdefault(trade["ticker"], []).append(trade)
+
     for ticker, ticker_trades in by_ticker.items():
         chart = await get_chart(ticker, date, "1Min", 1)
         bars = chart.get("bars") or []
         if not bars:
             warning = chart.get("warning") or "No Alpaca bars returned."
-            for t in ticker_trades:
+            for trade in ticker_trades:
                 skipped.append({
-                    "trade_group": t["trade_group"],
+                    "trade_group": trade["trade_group"],
                     "ticker": ticker,
                     "reason": warning,
                 })
             continue
 
-        for t in ticker_trades:
-            metric = calculate_trade_excursion(t, bars)
+        for trade in ticker_trades:
+            inst = str(trade.get("instrument_type") or "STOCK").upper()
+            basis = "stock_1m" if inst == "STOCK" else "proxy_1m"
+            metric = calculate_trade_excursion(trade, bars, bar_basis=basis)
             if not metric.get("available"):
                 skipped.append({
-                    "trade_group": t["trade_group"],
+                    "trade_group": trade["trade_group"],
                     "ticker": ticker,
                     "reason": metric.get("reason") or "Insufficient market data.",
                 })
                 continue
             conn.execute(
-                "UPDATE trades SET mfe_pct=?, mae_pct=?, exit_efficiency=? WHERE id=?",
+                """UPDATE trades
+                   SET mfe_pct=?, mae_pct=?, exit_efficiency=?,
+                       excursion_basis=?, excursion_calculated_at=?
+                   WHERE id=?""",
                 (
                     metric["mfe_pct"],
                     metric["mae_pct"],
                     metric["exit_efficiency"],
-                    t["id"],
+                    metric["basis"],
+                    calculated_at,
+                    trade["id"],
                 ),
             )
             computed += 1
@@ -2259,9 +2382,69 @@ async def calculate_excursions(
         "computed": computed,
         "skipped": len(skipped),
         "details": skipped[:25],
-        "method": "Alpaca 1-minute market path",
-        "option_basis": "underlying directional move",
-        "stock_basis": "actual fill price",
+        "method": "Alpaca 1-minute market path with broker-fill anchors",
+        "option_basis": "actual option premium",
+        "stock_basis": "actual stock price",
+        "future_basis": "configured ETF proxy",
+    }
+
+
+@app.post("/api/excursions/calculate")
+async def calculate_excursions(
+    date: str = Query(...),
+    account_id: int | None = Query(None),
+    force: bool = Query(False),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Calculate and persist excursion metrics for one trading day."""
+    if not ALPACA_KEY or ALPACA_KEY == "your_alpaca_api_key_here":
+        return {
+            "date": date, "computed": 0, "skipped": 0, "unavailable": True,
+            "message": "Alpaca market data is not configured.",
+        }
+    return await _calculate_excursions_for_date(date, account_id, force, conn)
+
+
+@app.post("/api/excursions/calculate-range")
+async def calculate_excursions_range(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    account_id: int | None = Query(None),
+    force: bool = Query(False),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Backfill excursion metrics for the selected management window."""
+    try:
+        start = datetime.strptime(date_from, "%Y-%m-%d").date()
+        end = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Dates must use YYYY-MM-DD.")
+    if end < start:
+        raise HTTPException(status_code=400, detail="date_to must be on or after date_from.")
+    if (end - start).days > 90:
+        raise HTTPException(status_code=400, detail="Excursion backfill is limited to 90 calendar days.")
+
+    sql = "SELECT DISTINCT date FROM trades WHERE date >= ? AND date <= ?"
+    params = [date_from, date_to]
+    if account_id is not None:
+        sql += " AND account_id = ?"
+        params.append(account_id)
+    sql += " ORDER BY date"
+    dates = [r["date"] for r in conn.execute(sql, params).fetchall()]
+
+    results = []
+    for trade_date in dates:
+        results.append(
+            await _calculate_excursions_for_date(trade_date, account_id, force, conn)
+        )
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "days_checked": len(dates),
+        "computed": sum(int(r.get("computed") or 0) for r in results),
+        "skipped": sum(int(r.get("skipped") or 0) for r in results),
+        "results": results,
     }
 
 
