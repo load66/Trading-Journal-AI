@@ -134,6 +134,14 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const rawMae = data.avg_mae == null ? null : Number(data.avg_mae);
   const medianMfe = data.median_mfe == null ? null : Number(data.median_mfe);
   const medianMae = data.median_mae == null ? null : Number(data.median_mae);
+  const winnerMedianMfe = data.winner_median_mfe == null ? null : Number(data.winner_median_mfe);
+  const loserMedianMfe = data.loser_median_mfe == null ? null : Number(data.loser_median_mfe);
+  const winnerMedianMae = data.winner_median_mae == null ? null : Number(data.winner_median_mae);
+  const loserMedianMae = data.loser_median_mae == null ? null : Number(data.loser_median_mae);
+  const winnerMaeLe20Pct = data.winner_mae_le_20_pct == null ? null : Number(data.winner_mae_le_20_pct);
+  const loserMfeLe5Pct = data.loser_mfe_le_5_pct == null ? null : Number(data.loser_mfe_le_5_pct);
+  const loserMfeLe10Pct = data.loser_mfe_le_10_pct == null ? null : Number(data.loser_mfe_le_10_pct);
+  const loserMaeGe25Pct = data.loser_mae_ge_25_pct == null ? null : Number(data.loser_mae_ge_25_pct);
   const excursionN = Number(data.excursion_n || 0);
   const managementCoverage = Number(data.management_coverage_pct || 0);
   const excursionConfidence = String(data.excursion_confidence || 'LOW').toUpperCase();
@@ -158,6 +166,13 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       || (!avgRiskPositive && !avgRiskLeak) !== (!medianRiskPositive && !medianRiskLeak));
   const riskLeak = riskUsable && avgRiskLeak && (medianMfe == null || medianMae == null || medianRiskLeak);
   const riskPositive = riskUsable && avgRiskPositive && (medianMfe == null || medianMae == null || medianRiskPositive);
+  const earlyFailurePattern = riskUsable
+    && loserMedianMae != null
+    && winnerMedianMae != null
+    && loserMfeLe5Pct != null
+    && loserMedianMae >= winnerMedianMae * 1.5
+    && loserMfeLe5Pct >= 50;
+  const winnersBeyond20Pct = winnerMaeLe20Pct == null ? null : Math.max(0, 100 - winnerMaeLe20Pct);
   const rangeCopy = range === '7D'
     ? 'last 7 days'
     : range === '90D'
@@ -206,13 +221,15 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
     ? 'MFE/MAE diagnosis is withheld until actual-instrument path coverage is sufficient.'
     : excursionConfidence === 'DEVELOPING'
       ? 'MFE/MAE is a developing signal based only on currently covered trades.'
-      : riskMixed
-        ? 'Mean and median excursion disagree, so no firm risk-direction diagnosis is issued.'
-        : riskLeak
-          ? 'Both average and median adverse excursion exceed favorable excursion on covered trades.'
-          : riskPositive
-            ? 'Both average and median favorable excursion exceed adverse excursion on covered trades.'
-            : 'Favorable and adverse excursion are too close for a firm directional diagnosis.';
+      : earlyFailurePattern
+        ? 'Main improvement: tighten entry quality and invalidate failed trades sooner.'
+        : riskMixed
+          ? 'Mean and median excursion disagree, so no firm risk-direction diagnosis is issued.'
+          : riskLeak
+            ? 'Both average and median adverse excursion exceed favorable excursion on covered trades.'
+            : riskPositive
+              ? 'Both average and median favorable excursion exceed adverse excursion on covered trades.'
+              : 'Favorable and adverse excursion are too close for a firm directional diagnosis.';
 
   const bottomCopy = (() => {
     const csvSentence = holdReliable
@@ -235,6 +252,15 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       return csvSentence + ' Profit capture is ' + capture.toFixed(0) + '% on ' + captureN + ' covered winners, below your ' + captureGoal.toFixed(0) + '% goal. That is the strongest excursion-based management leak in this window.';
     }
 
+    if (riskUsable && excursionConfidence === 'RELIABLE' && earlyFailurePattern) {
+      const loserHeat = loserMedianMae.toFixed(1);
+      const winnerHeat = winnerMedianMae.toFixed(1);
+      const weakLosers = loserMfeLe5Pct.toFixed(0);
+      const winnerRoom = winnersBeyond20Pct == null ? null : winnersBeyond20Pct.toFixed(0);
+      return csvSentence + ' The clearest improvement candidate is entry quality / early invalidation: losers reach a median -' + loserHeat + '% MAE versus -' + winnerHeat + '% for winners, and ' + weakLosers + '% of losers never achieve +5% MFE.'
+        + (winnerRoom == null ? '' : ' Do not use a blanket -20% stop: ' + winnerRoom + '% of winners also exceeded -20% MAE, so the rule should be setup-specific.');
+    }
+
     if (riskUsable && excursionConfidence === 'RELIABLE' && riskMixed) {
       return csvSentence + ' Excursion averages and medians disagree, so outliers are affecting the risk picture and no firm MFE/MAE diagnosis is promoted.';
     }
@@ -252,7 +278,11 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
 
   const captureEvidence = captureN + '/' + captureWinnerTotal + ' winning trades · ' + captureCoverage.toFixed(0) + '% coverage · ' + captureConfidence;
   const riskEvidence = excursionN + '/' + totalTrades + ' trades · ' + managementCoverage.toFixed(0) + '% coverage · ' + excursionConfidence
-    + (medianMfe != null && medianMae != null ? ' · medians +' + medianMfe.toFixed(2) + '% / -' + medianMae.toFixed(2) + '%' : '');
+    + (winnerMedianMae != null && loserMedianMae != null
+      ? ' · winner/loser median MAE -' + winnerMedianMae.toFixed(1) + '% / -' + loserMedianMae.toFixed(1) + '%'
+      : medianMfe != null && medianMae != null
+        ? ' · medians +' + medianMfe.toFixed(2) + '% / -' + medianMae.toFixed(2) + '%'
+        : '');
   const holdEvidence = holdN + '/' + totalTrades + ' trades · ' + holdCoverage.toFixed(0) + '% broker timestamp coverage';
   const bottomTone = holdLeak
     ? 'bad'
@@ -408,8 +438,17 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <div className="v3-ref-evidence-line">{riskEvidence}</div>
 
           <div className="v3-ref-risk-notes">
-            <p className={!riskUsable || riskMixed || (!riskLeak && !riskPositive) ? 'neutral' : riskLeak ? 'bad' : 'good'}><span>{riskUsable && riskPositive && !riskMixed ? '✓' : '!'}</span> {riskSummary}</p>
-            <p className="good"><span>✓</span> Realized P&amp;L and fills remain broker-authoritative.</p>
+            <p className={!riskUsable ? 'neutral' : earlyFailurePattern ? 'bad' : riskMixed || (!riskLeak && !riskPositive) ? 'neutral' : riskLeak ? 'bad' : 'good'}>
+              <span>{riskUsable && riskPositive && !riskMixed && !earlyFailurePattern ? '✓' : '!'}</span> {riskSummary}
+            </p>
+            {earlyFailurePattern ? (
+              <>
+                <p className="neutral"><span>→</span> Loser median heat is -{loserMedianMae.toFixed(1)}% vs. -{winnerMedianMae.toFixed(1)}% for winners; {loserMfeLe5Pct.toFixed(0)}% of losers never reach +5% MFE.</p>
+                <p className="caution"><span>→</span> Test a setup-specific early-failure rule when a trade cannot make +5% favorable progress and adverse excursion starts expanding. {winnersBeyond20Pct != null ? winnersBeyond20Pct.toFixed(0) + '% of winners exceeded -20% MAE, so avoid a blanket -20% stop.' : 'Avoid using one universal stop across every setup.'}</p>
+              </>
+            ) : (
+              <p className="neutral"><span>→</span> {riskMixed ? 'Use winner-vs-loser excursion separation to find the next actionable entry or stop improvement.' : 'Keep monitoring winner-vs-loser excursion separation before changing stop rules.'}</p>
+            )}
           </div>
         </article>
       </div>
