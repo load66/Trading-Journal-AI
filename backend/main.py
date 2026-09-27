@@ -43,6 +43,7 @@ from excursion_analysis import calculate_trade_excursion, EXCURSION_ENGINE_VERSI
 from library import router as library_router, init_library_tables, apply_aliases, library_names, TAG_TYPES as LIBRARY_TAG_TYPES
 from smoking_gun_routes import router as smoking_gun_router
 from le_analysis import build_le_levels, build_le_review
+from smoking_gun_library import ANALYTICS_ENGINE_VERSION
 from trade_metrics import (
     trade_is_closed,
     trade_pl_percent as canonical_trade_pl_percent,
@@ -3509,7 +3510,9 @@ def get_weekly_summary(
         ).fetchone()
         if cached and cached[0]:
             try:
-                return json.loads(cached[0])
+                cached_payload = json.loads(cached[0])
+                if cached_payload.get("analytics_engine_version") == ANALYTICS_ENGINE_VERSION:
+                    return cached_payload
             except Exception:
                 pass
 
@@ -3550,6 +3553,7 @@ def get_weekly_summary(
     result["week_label"] = week_label
     result["week_from"] = week_from
     result["week_to"] = week_to
+    result["analytics_engine_version"] = ANALYTICS_ENGINE_VERSION
 
     if account_id is not None:
         try:
@@ -3591,7 +3595,10 @@ def get_daily_summary(
                 # evidence badges. Older cached summaries are regenerated so
                 # the UI never mixes the previous free-form lists with the new
                 # evidence model.
-                if int(content.get('evidence_version') or 0) >= 3:
+                if (
+                    int(content.get('evidence_version') or 0) >= 4
+                    and content.get('analytics_engine_version') == ANALYTICS_ENGINE_VERSION
+                ):
                     content['date'] = date
                     content['cached'] = True
                     content['generated_at'] = row['generated_at']
