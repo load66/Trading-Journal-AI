@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, storageApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, reportsApi, edgeReportApi, dailySummaryApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, storageApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, reportsApi, edgeReportApi, dailySummaryApi, tradeManagementAnalysisApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -189,6 +189,16 @@ jest.mock('./api', () => {
     calendarApi: withDefault({ get: fn(() => ok({ days: [] })) }),
     brainApi: withDefault({}),
     dailySummaryApi: withDefault({ get: fn(() => ok({ trades: [] })) }),
+    tradeManagementAnalysisApi: withDefault({
+      get: fn(() => ok({
+        range: '30D',
+        headline: 'No dominant management leak is confirmed.',
+        diagnosis: 'The verified management evidence does not identify one dominant leak.',
+        next_focus: 'Keep monitoring the strongest evidence-backed separator.',
+        evidence_locked: true,
+        ai_provider: 'groq',
+      })),
+    }),
     syncApi: withDefault({}),
     goalsApi: withDefault({ get: fn(() => ok({ win_rate: 65 })), put: fn(() => ok({ win_rate: 65 })) }),
     leRiskPlanApi: withDefault({
@@ -1352,6 +1362,77 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
   fireEvent.click(screen.getByRole('button', { name: /Open report/i }));
   const smokingTab = await screen.findByRole('tab', { name: 'Smoking Gun' });
   expect(smokingTab).toHaveAttribute('aria-selected', 'true');
+});
+
+
+test('Dashboard generates an evidence-locked Trade Management AI review on demand', async () => {
+  kpisApi.get.mockResolvedValue({
+    data: {
+      total_net_pnl: 1200,
+      total_trades: 47,
+      winning_trades: 27,
+      losing_trades: 20,
+      trading_days: 5,
+      exit_efficiency: 65,
+      capture_n: 27,
+      capture_winner_total: 27,
+      capture_coverage_pct: 100,
+      capture_confidence: 'RELIABLE',
+      avg_mfe: 24.29,
+      avg_mae: 12.56,
+      median_mfe: 15,
+      median_mae: 8,
+      excursion_n: 47,
+      management_coverage_pct: 100,
+      excursion_confidence: 'RELIABLE',
+      daily_pnl: [{ date: '2026-09-25', net_pnl: 300, cumulative: 1200 }],
+    },
+  });
+  edgeReportApi.get.mockResolvedValue({
+    data: {
+      total_trades: 47,
+      hold_time: {
+        winners_avg_min: 22.5,
+        losers_avg_min: 8.8,
+        winners_median_min: 14,
+        losers_median_min: 8.5,
+        winner_count: 27,
+        loser_count: 19,
+        sample_count: 46,
+        coverage_pct: 97.9,
+        overnight_excluded_count: 1,
+        overnight_excluded: [{ ticker: 'U', hold_minutes: 1220, net_pnl: -96.06 }],
+      },
+    },
+  });
+  tradeManagementAnalysisApi.get.mockResolvedValue({
+    data: {
+      range: '30D',
+      headline: 'Early invalidation is the clearest improvement candidate.',
+      diagnosis: 'Same-session holding behavior is healthy; adverse excursion is the stronger improvement signal.',
+      next_focus: 'Review failed trades that cannot make favorable progress.',
+      evidence_locked: true,
+      ai_provider: 'groq',
+    },
+  });
+
+  await renderApp();
+
+  const button = await screen.findByRole('button', { name: /Generate AI Analysis/i });
+  fireEvent.click(button);
+
+  await waitFor(() => expect(tradeManagementAnalysisApi.get).toHaveBeenCalled());
+  expect(tradeManagementAnalysisApi.get.mock.calls[0][0]).toEqual(
+    expect.objectContaining({ range: '30D' })
+  );
+  expect(await screen.findByText('Early invalidation is the clearest improvement candidate.')).toBeVisible();
+  expect(screen.getByText(/Same-session holding behavior is healthy/i)).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: /Re-run/i }));
+  await waitFor(() => expect(tradeManagementAnalysisApi.get).toHaveBeenCalledTimes(2));
+  expect(tradeManagementAnalysisApi.get.mock.calls[1][0]).toEqual(
+    expect.objectContaining({ range: '30D', force: true })
+  );
 });
 
 
