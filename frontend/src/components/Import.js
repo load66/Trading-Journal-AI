@@ -242,7 +242,7 @@ export default function Import({ accounts, accountId }) {
 
   return (
     <div>
-      <PageHeader title="Import" subtitle="Bring in your broker executions, or have Claude read a trading diary." />
+      <PageHeader title="Import" subtitle="Bring in your broker executions, or have AI analyze a trading diary." />
 
       <div className="grid-2">
 
@@ -467,14 +467,14 @@ export default function Import({ accounts, accountId }) {
             disabled={analyzing || !diaryFile || !diaryAccountId || !diaryDate}
           >
             {analyzing
-              ? <><span className="spinner" style={{ width: 16, height: 16 }} /> Analyzing with Claude AI...</>
+              ? <><span className="spinner" style={{ width: 16, height: 16 }} /> Analyzing with AI...</>
               : <><Upload size={16} /> Analyze Diary</>
             }
           </button>
 
           {analyzing && (
             <div role="status" style={{ marginTop: 10, fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center' }}>
-              Claude is reading your diary. This takes 10 to 20 seconds...
+              AI is reading your diary and matching it to your trades...
             </div>
           )}
 
@@ -497,7 +497,7 @@ export default function Import({ accounts, accountId }) {
           )}
 
           <div style={{ marginTop: 16, fontSize: 13, color: 'var(--text-secondary)' }}>
-            Claude AI will read your handwritten or typed notes and extract strategy, stops, R-multiples, emotional state, and more.
+            AI will read your handwritten or typed notes and extract strategy, stops, R-multiples, emotional state, and more.
           </div>
         </section>
       </div>
