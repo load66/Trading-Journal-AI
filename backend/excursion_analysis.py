@@ -20,6 +20,41 @@ ET = ZoneInfo("America/New_York")
 EXCURSION_ENGINE_VERSION = "2026.09.27.2"
 
 
+def expected_excursion_basis(trade: dict) -> str | None:
+    return {
+        "STOCK": "stock_1m",
+        "OPTION": "option_premium_1m",
+        "FUTURE": "proxy_1m",
+    }.get(str(trade.get("instrument_type") or "STOCK").upper())
+
+
+def excursion_metrics_are_current(trade: dict) -> bool:
+    expected = expected_excursion_basis(trade)
+    return bool(
+        expected
+        and str(trade.get("excursion_basis") or "") == expected
+        and str(trade.get("excursion_version") or "") == EXCURSION_ENGINE_VERSION
+        and trade.get("mfe_pct") is not None
+        and trade.get("mae_pct") is not None
+    )
+
+
+def sanitize_excursion_metrics(trade: dict) -> dict:
+    """Never expose stale or provenance-less excursion values as verified data."""
+    row = dict(trade)
+    current = excursion_metrics_are_current(row)
+    if not current:
+        row["mfe_pct"] = None
+        row["mae_pct"] = None
+        row["exit_efficiency"] = None
+    elif float(row.get("net_pnl") or 0) <= 0:
+        # Profit capture is undefined for a losing/flat realized trade.
+        row["exit_efficiency"] = None
+    row["excursion_current"] = current
+    row["excursion_engine_version"] = EXCURSION_ENGINE_VERSION
+    return row
+
+
 def _execs(trade: dict) -> list[dict]:
     raw = trade.get("executions") or []
     if isinstance(raw, str):
