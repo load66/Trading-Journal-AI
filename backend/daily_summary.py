@@ -63,6 +63,7 @@ def build_daily_context(conn, date: str, account_id) -> dict:
                t.net_pnl, t.gross_pnl, t.commissions, t.executions,
                t.option_type, t.option_strike, t.option_expiry,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
+               t.excursion_basis, t.excursion_version,
                ta.strategy, ta.r_multiple, ta.stop_loss, ta.target_price,
                ta.risk_per_trade, ta.risk_reward, ta.mistakes,
                ta.emotional_state, ta.entry_reason, ta.exit_reason,
@@ -85,46 +86,44 @@ def build_daily_context(conn, date: str, account_id) -> dict:
             d['executions'] = json.loads(d.get('executions') or '[]')
         except Exception:
             d['executions'] = []
-        trades.append(d)
+        if trade_is_closed(d):
+            trades.append(sanitize_excursion_metrics(d))
 
-    # Day KPIs
-    all_pnl = [t.get('net_pnl') or 0 for t in trades]
-    winners = [p for p in all_pnl if p > 0]
-    losers = [p for p in all_pnl if p < 0]
-    total_trades = len(trades)
+    # Day KPIs use the same closed-trade population as Dashboard and Reports.
+    day_summary = performance_summary(trades)
     winner_effs = [
         float(t.get("exit_efficiency"))
         for t in trades
         if t.get("exit_efficiency") is not None and float(t.get("net_pnl") or 0) > 0
     ]
     day_kpis = {
-        "total_net_pnl": round(sum(all_pnl), 2),
-        "total_trades": total_trades,
-        "winning_trades": len(winners),
-        "losing_trades": len(losers),
-        "win_rate": round(len(winners) / total_trades * 100, 1) if total_trades else 0,
-        "avg_win": round(sum(winners) / len(winners), 2) if winners else 0,
-        "avg_loss": round(sum(losers) / len(losers), 2) if losers else 0,
-        "profit_factor": round(sum(winners) / abs(sum(losers)), 2) if losers else None,
+        "total_net_pnl": day_summary["total_net_pnl"],
+        "total_trades": day_summary["total_trades"],
+        "winning_trades": day_summary["winning_trades"],
+        "losing_trades": day_summary["losing_trades"],
+        "flat_trades": day_summary["flat_trades"],
+        "win_rate": round(day_summary["win_rate"], 1),
+        "avg_win": day_summary["avg_win"],
+        "avg_loss": day_summary["avg_loss"],
+        "profit_factor": day_summary["profit_factor"],
         "exit_efficiency": round(sum(winner_effs) / len(winner_effs), 2) if winner_effs else None,
     }
 
-    # All-time KPIs for context
+    # All-time KPIs for context, again using only completed positions.
     at_params = []
-    at_sql = "SELECT net_pnl, gross_pnl FROM trades WHERE 1=1"
+    at_sql = "SELECT net_pnl, gross_pnl, executions FROM trades WHERE 1=1"
     if account_id is not None:
         at_sql += " AND account_id = ?"
         at_params.append(account_id)
-    at_rows = conn.execute(at_sql, at_params).fetchall()
-    at_all = [dict(r)['net_pnl'] or 0 for r in at_rows]
-    at_wins = [p for p in at_all if p > 0]
-    at_losses = [p for p in at_all if p < 0]
-    at_total = len(at_all)
+    at_rows = [dict(r) for r in conn.execute(at_sql, at_params).fetchall()]
+    at_summary = performance_summary(at_rows)
     alltime_kpis = {
-        "win_rate": round(len(at_wins) / at_total * 100, 1) if at_total else 0,
-        "avg_win": round(sum(at_wins) / len(at_wins), 2) if at_wins else 0,
-        "avg_loss": round(sum(at_losses) / len(at_losses), 2) if at_losses else 0,
-        "profit_factor": round(sum(at_wins) / abs(sum(at_losses)), 2) if at_losses else None,
+        "win_rate": round(at_summary["win_rate"], 1),
+        "avg_win": at_summary["avg_win"],
+        "avg_loss": at_summary["avg_loss"],
+        "profit_factor": at_summary["profit_factor"],
+        "expectancy": at_summary["expectancy"],
+        "total_trades": at_summary["total_trades"],
     }
 
     # Diary entry for the date
