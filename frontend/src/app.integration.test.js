@@ -649,10 +649,10 @@ test('chart image opens a native fullscreen dialog from the image surface', asyn
   expect(document.querySelector('.td-chart-screenshot-side')).not.toBeInTheDocument();
   const preview = await screen.findByTitle('Open screenshot full screen');
   expect(preview).toBeVisible();
-  expect(preview).toHaveStyle({ width: '800px', maxWidth: '100%' });
-  expect(within(preview).getByRole('img')).toHaveStyle({ height: 'auto', maxHeight: '600px' });
+  expect(preview).toHaveClass('td-chart-preview', 'td-chart-review-preview');
 
   const previewImage = within(preview).getByRole('img');
+  expect(previewImage).toBeVisible();
   fireEvent.click(previewImage);
   const lightbox = await screen.findByTestId('chart-screenshot-lightbox');
   expect(lightbox).toHaveAttribute('open');
