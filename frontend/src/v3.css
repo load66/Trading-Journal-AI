@@ -6005,6 +6005,7 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-planning-risk {
   position: relative;
   overflow: hidden;
+  padding: 16px;
   border-color: rgba(30, 177, 235, .42);
   background:
     radial-gradient(110% 78% at 10% -10%, rgba(12, 184, 245, .13), transparent 48%),
