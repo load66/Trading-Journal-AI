@@ -48,6 +48,7 @@ from trade_metrics import (
     trade_is_closed,
     trade_pl_percent as canonical_trade_pl_percent,
     hold_seconds as canonical_hold_seconds,
+    is_overnight_trade,
     entry_market_minutes,
     manual_pnl as canonical_manual_pnl,
     daily_totals as canonical_daily_totals,
@@ -3363,8 +3364,11 @@ def get_edge_report(
 ):
     sql = """
         SELECT t.trade_group, t.ticker, t.side, t.net_pnl, t.date, t.executions,
+               t.option_expiry, t.option_strike, t.option_type,
+               a.type AS account_type,
                ta.r_multiple, ta.risk_per_trade, ta.emotional_state, ta.mistakes
         FROM trades t
+        JOIN accounts a ON a.id = t.account_id
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
         WHERE 1=1
     """
@@ -3442,6 +3446,7 @@ def get_edge_report(
 
     winner_hold: list[float] = []
     loser_hold: list[float] = []
+    overnight_excluded: list[dict] = []
 
     r_bucket_counts: dict[float, int] = {}
     for i in range(-7, 8):
@@ -3492,11 +3497,23 @@ def get_edge_report(
             except Exception:
                 pass
 
-        # Hold time is elapsed broker time from first entry to final exit.
+        # Holding Behavior is a same-session discipline signal for day-trading
+        # accounts. Overnight positions remain in every other metric above and
+        # below; only this winners-vs-losers hold comparison excludes them.
         hold_sec = canonical_hold_seconds(trade)
         if hold_sec is not None:
             hold = hold_sec / 60
-            if pnl > 0:
+            if trade.get("account_type") == "day_trading" and is_overnight_trade(trade):
+                overnight_excluded.append({
+                    "trade_group": trade.get("trade_group"),
+                    "ticker": trade.get("ticker"),
+                    "option_expiry": trade.get("option_expiry"),
+                    "option_strike": trade.get("option_strike"),
+                    "option_type": trade.get("option_type"),
+                    "hold_minutes": round(hold, 1),
+                    "net_pnl": round(float(pnl), 2),
+                })
+            elif pnl > 0:
                 winner_hold.append(hold)
             elif pnl < 0:
                 loser_hold.append(hold)
@@ -3580,6 +3597,8 @@ def get_edge_report(
         "sample_count": hold_n,
         "coverage_pct": round(hold_n / len(trades) * 100, 1) if trades else 0.0,
         "source": "broker_csv_executions",
+        "overnight_excluded_count": len(overnight_excluded),
+        "overnight_excluded": overnight_excluded,
     }
 
     # Canonical expectancy: average realized net P&L per completed trade.

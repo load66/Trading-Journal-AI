@@ -164,6 +164,14 @@ def hold_seconds(trade: dict) -> float | None:
     return seconds if seconds >= 0 else None
 
 
+def is_overnight_trade(trade: dict) -> bool:
+    """Whether first entry and final exit fall on different U.S. market dates."""
+    entry_dt, exit_dt = trade_entry_exit_datetimes(trade, target_timezone=MARKET_TIMEZONE)
+    if not entry_dt or not exit_dt:
+        return False
+    return entry_dt.date() != exit_dt.date()
+
+
 def entry_market_minutes(trade: dict) -> int | None:
     entry_dt, _ = trade_entry_exit_datetimes(trade, target_timezone=MARKET_TIMEZONE)
     if not entry_dt:

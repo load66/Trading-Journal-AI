@@ -9,6 +9,31 @@ import DateRangePicker from './DateRangePicker';
 const fmt$ = (v) =>
   `$${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
+const fmtMinutes = (minutes, compact = false) => {
+  if (minutes == null) return 'n/a';
+  const value = Number(minutes);
+  if (compact) {
+    return `${value.toLocaleString('en-US', { maximumFractionDigits: 1 })} min`;
+  }
+  if (value < 60) {
+    return `${value.toLocaleString('en-US', { maximumFractionDigits: 1 })} min`;
+  }
+  return `${Math.floor(value / 60)}h ${Math.round(value % 60)}m`;
+};
+
+const tradeLabel = (trade) => {
+  if (!trade?.option_expiry || trade?.option_strike == null || !trade?.option_type) {
+    return trade?.ticker || 'Unknown ticker';
+  }
+  const expiry = new Date(`${trade.option_expiry}T00:00:00Z`);
+  const expiryLabel = Number.isNaN(expiry.getTime())
+    ? trade.option_expiry
+    : expiry.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const strike = Number(trade.option_strike).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const optionType = String(trade.option_type).toLowerCase();
+  return `${trade.ticker} ${expiryLabel} $${strike} ${optionType.charAt(0).toUpperCase()}${optionType.slice(1)}`;
+};
+
 function Section({ title, children }) {
   return (
     <div className="card" style={{ padding: '20px 24px 24px' }}>
@@ -126,7 +151,8 @@ export function MistakeFreq({ data }) {
 }
 
 export function HoldTime({ data }) {
-  if (!data || (data.winners_avg_min == null && data.losers_avg_min == null)) {
+  const excluded = data?.overnight_excluded || [];
+  if (!data || (data.winners_avg_min == null && data.losers_avg_min == null && excluded.length === 0)) {
     return <NoData msg="Not enough trade timing data yet." />;
   }
   const bars = [
@@ -134,27 +160,40 @@ export function HoldTime({ data }) {
     { label: 'Losers', value: data.losers_avg_min, fill: 'var(--result-neg)' },
   ].filter(b => b.value != null);
 
-  const fmtMin = (m) => {
-    if (m == null) return 'n/a';
-    if (m < 60) return `${Math.round(m)}m`;
-    return `${Math.floor(m / 60)}h ${Math.round(m % 60)}m`;
-  };
-
   return (
-    <div style={{ display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap', paddingTop: 8 }}>
-      {bars.map(b => (
-        <div key={b.label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flex: '1 1 120px' }}>
-          <div className="num" style={{ fontSize: 30, fontWeight: 600, fontFamily: 'var(--font-display)', color: b.fill, lineHeight: 1 }}>
-            {fmtMin(b.value)}
+    <div>
+      <div style={{ display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap', paddingTop: 8 }}>
+        {bars.map(b => (
+          <div key={b.label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flex: '1 1 120px' }}>
+            <div className="num" style={{ fontSize: 30, fontWeight: 600, fontFamily: 'var(--font-display)', color: b.fill, lineHeight: 1 }}>
+              {fmtMinutes(b.value)}
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Avg hold ({b.label.toLowerCase()})</div>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Avg hold ({b.label.toLowerCase()})</div>
-        </div>
-      ))}
-      {bars.length === 2 && bars[1].value != null && bars[0].value != null && (
-        <div style={{ flex: '1 1 160px', fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-          {bars[1].value > bars[0].value
-            ? `You hold losers ${(bars[1].value / bars[0].value).toFixed(1)}x longer than winners. Consider cutting losses faster.`
-            : `You hold winners ${(bars[0].value / bars[1].value).toFixed(1)}x longer than losers. Good discipline, letting winners run.`}
+        ))}
+        {bars.length === 2 && bars[1].value != null && bars[0].value != null && (
+          <div style={{ flex: '1 1 160px', fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+            {bars[1].value > bars[0].value
+              ? `You hold losers ${(bars[1].value / bars[0].value).toFixed(1)}x longer than winners. Consider cutting losses faster.`
+              : `You hold winners ${(bars[0].value / bars[1].value).toFixed(1)}x longer than losers. Good discipline, letting winners run.`}
+          </div>
+        )}
+      </div>
+      {excluded.length > 0 && (
+        <div role="status" style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--divider-soft)', fontSize: 12, color: 'var(--text-muted)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 5 }}>
+            {excluded.length} overnight {excluded.length === 1 ? 'trade' : 'trades'} excluded
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+            {excluded.map((trade, index) => (
+              <span key={trade.trade_group || `${trade.ticker}-${index}`}>
+                {tradeLabel(trade)} · {fmtMinutes(trade.hold_minutes, true)} ·{' '}
+                <span style={{ color: Number(trade.net_pnl) >= 0 ? 'var(--result-pos)' : 'var(--result-neg)', fontWeight: 600 }}>
+                  {Number(trade.net_pnl) >= 0 ? '+' : '-'}{fmt$(Math.abs(Number(trade.net_pnl)))}
+                </span>
+              </span>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -209,7 +248,7 @@ export default function Edge({ accountId }) {
             <Section title="R-Multiple Distribution">
               <RMultipleDist data={data?.r_multiple_dist} />
             </Section>
-            <Section title="Hold Time, Winners vs. Losers">
+            <Section title="Holding Behavior">
               <HoldTime data={data?.hold_time} />
             </Section>
           </div>
