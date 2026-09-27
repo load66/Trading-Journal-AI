@@ -3107,6 +3107,7 @@ def get_edge_report(
         value = ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2
         return round(value, 1)
 
+    hold_n = len(winner_hold) + len(loser_hold)
     hold_time = {
         "winners_avg_min": round(sum(winner_hold) / len(winner_hold), 1) if winner_hold else None,
         "losers_avg_min": round(sum(loser_hold) / len(loser_hold), 1) if loser_hold else None,
@@ -3114,7 +3115,9 @@ def get_edge_report(
         "losers_median_min": median_minutes(loser_hold),
         "winner_count": len(winner_hold),
         "loser_count": len(loser_hold),
-        "sample_count": len(winner_hold) + len(loser_hold),
+        "sample_count": hold_n,
+        "coverage_pct": round(hold_n / len(trades) * 100, 1) if trades else 0.0,
+        "source": "broker_csv_executions",
     }
 
     # Expectancy for edge report
