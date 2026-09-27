@@ -276,7 +276,9 @@ function EvidenceBadge({ level }) {
     ? 'verified'
     : normalized === 'RECORDED'
       ? 'recorded'
-      : 'insufficient';
+      : normalized === 'ANALYZED'
+        ? 'analyzed'
+        : 'insufficient';
   return <span className={`v3-evidence ${cls}`}>{normalized}</span>;
 }
 
