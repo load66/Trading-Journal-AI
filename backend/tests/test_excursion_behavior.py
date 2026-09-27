@@ -36,7 +36,7 @@ def test_stock_excursion_uses_actual_fill_prices():
         {"t": "2026-09-25T13:31:00Z", "o": 102, "h": 110, "l": 98, "c": 108},
         {"t": "2026-09-25T13:32:00Z", "o": 108, "h": 109, "l": 103, "c": 104},
     ]
-    result = calculate_trade_excursion(trade, bars)
+    result = calculate_trade_excursion(trade, bars, bar_basis="stock_1m")
     assert result["available"] is True
     assert result["basis"] == "stock_1m"
     assert result["mfe_pct"] == 10.0
@@ -95,6 +95,33 @@ def test_option_excursion_rejects_underlying_path_as_profit_capture():
     assert result["available"] is False
     assert "option premium" in result["reason"].lower()
 
+
+
+def test_profitable_option_efficiency_is_bounded_by_actual_premium_path():
+    d = "2026-09-25"
+    trade = {
+        "trade_group": "winner",
+        "date": d,
+        "ticker": "TEM",
+        "instrument_type": "OPTION",
+        "option_type": "CALL",
+        "side": "LONG",
+        "net_pnl": 8.97,
+        "executions": [
+            fill(d, "09:30:10", "BOT", 1, 1.00),
+            fill(d, "09:32:20", "SOLD", 1, 1.05),
+        ],
+    }
+    bars = [
+        {"t": "2026-09-25T13:30:00Z", "o": 1.00, "h": 1.01, "l": 0.98, "c": 1.00},
+        {"t": "2026-09-25T13:31:00Z", "o": 1.00, "h": 1.02, "l": 0.99, "c": 1.01},
+        {"t": "2026-09-25T13:32:00Z", "o": 1.01, "h": 1.03, "l": 1.00, "c": 1.02},
+    ]
+    result = calculate_trade_excursion(trade, bars, bar_basis="option_premium_1m")
+    assert result["available"] is True
+    assert result["mfe_pct"] == 5.0
+    assert result["exit_efficiency"] == 100.0
+    assert 0.0 <= result["exit_efficiency"] <= 100.0
 
 def test_behavior_rules_are_execution_based_not_psychological():
     d = "2026-09-25"
@@ -162,7 +189,7 @@ def test_stock_excursion_does_not_look_ahead_to_later_scale_in():
         {"t": "2026-09-25T13:31:00Z", "o": 90, "h": 92, "l": 79, "c": 80},
         {"t": "2026-09-25T13:32:00Z", "o": 88, "h": 91, "l": 87, "c": 90},
     ]
-    result = calculate_trade_excursion(trade, bars)
+    result = calculate_trade_excursion(trade, bars, bar_basis="stock_1m")
     assert result["entry_reference"] == 100
     assert result["mfe_pct"] == 5.0
     assert result["mae_pct"] == 21.0
