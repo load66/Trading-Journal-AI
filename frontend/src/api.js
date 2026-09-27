@@ -102,6 +102,10 @@ export const dailySummaryApi = {
   get: (params) => api.get('/api/daily-summary', { params }),
 };
 
+export const tradeManagementAnalysisApi = {
+  get: (params) => api.get('/api/trade-management-analysis', { params }),
+};
+
 export const goalsApi = {
   get: (params) => api.get('/api/goals', { params }),
   put: (data) => api.put('/api/goals', data),
