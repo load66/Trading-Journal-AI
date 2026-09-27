@@ -74,7 +74,7 @@ function ExcursionCell({ trade }) {
       <span className="pos">{hasMfe ? `+${Math.abs(mfe).toFixed(1)}` : '—'}</span>
       <span className="trade-excursion-sep">/</span>
       <span className="neg">{hasMae ? `-${Math.abs(mae).toFixed(1)}` : '—'}</span>
-      <small>% MFE / MAE</small>
+      <small>% best / worst</small>
     </div>
   );
 }
@@ -250,11 +250,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
         </div>
       </td>
 
-      <td className="trade-result-cell">
-        <div className={`num ${pnlTone} trade-result-pnl`}>{signed$(pnl)}</div>
-        <PLPercent trade={trade} />
-      </td>
-
       <td className="trade-strategy-cell" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
         <SetupEditor trade={trade} />
       </td>
@@ -286,6 +281,10 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
       <td className="trade-excursion-col"><ExcursionCell trade={trade} /></td>
       <td className="trade-exit-col"><ExitQuality trade={trade} /></td>
 
+      <td className="trade-result-cell">
+        <div className={`num ${pnlTone} trade-result-pnl`}>{signed$(pnl)}</div>
+        <PLPercent trade={trade} />
+      </td>
 
       <td className="trade-open-cell">
         <span className="text-muted">

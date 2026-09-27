@@ -216,11 +216,11 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
               <tr>
                 {sortTh('datetime', 'Date / Time')}
                 {sortTh('ticker', 'Trade')}
-                {sortTh('net_pnl', 'Result', 'num')}
-                <th>Setup</th>
-                <th className="num" title="Planned reward-to-risk with realized R underneath when available.">Plan</th>
-                <th title="Maximum favorable and adverse excursion while the trade was open.">Path</th>
-                <th title="Exit efficiency: share of covered favorable excursion retained at exit.">Exit</th>
+                <th title="The setup or strategy used for this trade.">Setup / Strategy</th>
+                <th className="num" title="Planned reward-to-risk. Realized R appears underneath when available.">Planned R:R</th>
+                <th title="Best move in your favor versus worst move against you while the trade was open.">Best / Worst Move</th>
+                <th title="How much of the favorable move you kept when you exited.">Exit Capture</th>
+                {sortTh('net_pnl', 'Profit / Loss', 'num')}
                 <th><span className="sr-only">Open trade</span></th>
               </tr>
             </thead>
