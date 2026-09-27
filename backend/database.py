@@ -176,6 +176,13 @@ MIGRATIONS = (
     Migration('012_trades_excursion_basis', 'trades', 'excursion_basis', 'ALTER TABLE trades ADD COLUMN excursion_basis TEXT'),
     Migration('013_trades_excursion_calculated_at', 'trades', 'excursion_calculated_at', 'ALTER TABLE trades ADD COLUMN excursion_calculated_at TEXT'),
     Migration('014_trade_analysis_chart_screenshot_path', 'trade_analysis', 'chart_screenshot_path', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_path TEXT'),
+    Migration('015_trade_analysis_chart_screenshot_provider', 'trade_analysis', 'chart_screenshot_provider', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_provider TEXT'),
+    Migration('016_trade_analysis_chart_screenshot_bytes', 'trade_analysis', 'chart_screenshot_bytes', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_bytes INTEGER'),
+    Migration('017_trade_analysis_chart_screenshot_width', 'trade_analysis', 'chart_screenshot_width', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_width INTEGER'),
+    Migration('018_trade_analysis_chart_screenshot_height', 'trade_analysis', 'chart_screenshot_height', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_height INTEGER'),
+    Migration('019_trade_analysis_chart_screenshot_content_type', 'trade_analysis', 'chart_screenshot_content_type', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_content_type TEXT'),
+    Migration('020_trade_analysis_chart_screenshot_sha256', 'trade_analysis', 'chart_screenshot_sha256', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_sha256 TEXT'),
+    Migration('021_trade_analysis_chart_screenshot_uploaded_at', 'trade_analysis', 'chart_screenshot_uploaded_at', 'ALTER TABLE trade_analysis ADD COLUMN chart_screenshot_uploaded_at TEXT'),
 )
 
 
@@ -234,7 +241,15 @@ SCHEMA_STATEMENTS = (
         ai_feedback TEXT,
         match_confidence TEXT CHECK(match_confidence IN ('high','medium','low','ambiguous','unmatched','manual')),
         match_notes TEXT,
-        diary_entry_id INTEGER REFERENCES diary_entries(id)
+        diary_entry_id INTEGER REFERENCES diary_entries(id),
+        chart_screenshot_path TEXT,
+        chart_screenshot_provider TEXT,
+        chart_screenshot_bytes INTEGER,
+        chart_screenshot_width INTEGER,
+        chart_screenshot_height INTEGER,
+        chart_screenshot_content_type TEXT,
+        chart_screenshot_sha256 TEXT,
+        chart_screenshot_uploaded_at TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS trade_tags (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
