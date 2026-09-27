@@ -1358,15 +1358,14 @@ def delete_trade_tag(tag_id: int, conn: sqlite3.Connection = Depends(get_connect
 def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict:
     """Aggregate trade-management excursion metrics with explicit coverage.
 
-    Profit capture is only computed when the excursion path is the actual
-    traded instrument (stock bars or option-premium bars). Proxy/underlying
-    paths are useful context, but they are not a valid profit-capture
-    denominator.
+    Only actual-instrument paths are allowed to drive management diagnosis:
+    stocks use stock bars and options use their own contract-premium bars.
+    Futures proxy excursions remain useful chart context but are excluded from
+    Profit Capture / Risk During Trade diagnosis.
     """
     sql = (
-        "SELECT date, instrument_type, net_pnl, mfe_pct, mae_pct, "
-        "exit_efficiency, excursion_basis FROM trades "
-        "WHERE net_pnl IS NOT NULL AND net_pnl <> 0"
+        "SELECT instrument_type, net_pnl, mfe_pct, mae_pct, exit_efficiency, "
+        "excursion_basis, date FROM trades WHERE net_pnl IS NOT NULL"
     )
     params = []
     if account_id is not None:
@@ -1375,23 +1374,28 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         sql += " AND date >= ?"; params.append(date_from)
     if date_to:
         sql += " AND date <= ?"; params.append(date_to)
-    rows = conn.execute(sql, params).fetchall()
-    if not rows:
-        return {}
+    all_rows = conn.execute(sql, params).fetchall()
+    if not all_rows:
+        return {
+            "excursion_n": 0,
+            "management_coverage_pct": 0.0,
+            "capture_n": 0,
+            "capture_coverage_pct": 0.0,
+            "excursion_confidence": "LOW",
+            "capture_confidence": "LOW",
+        }
 
-    excursion_rows = [r for r in rows if r["mfe_pct"] is not None and r["mae_pct"] is not None]
-    winners_all = [r for r in rows if r["net_pnl"] > 0]
-    losses_all = [r for r in rows if r["net_pnl"] < 0]
-    excursion_wins = [r for r in excursion_rows if r["net_pnl"] > 0]
-    excursion_losses = [r for r in excursion_rows if r["net_pnl"] < 0]
-
-    valid_capture_bases = {"stock_1m", "option_premium_1m"}
-    capture_rows = [
-        r for r in winners_all
-        if r["exit_efficiency"] is not None
-        and 0 <= float(r["exit_efficiency"]) <= 100
-        and str(r["excursion_basis"] or "") in valid_capture_bases
+    valid_bases = {"stock_1m", "option_premium_1m"}
+    rows = [
+        r for r in all_rows
+        if r["excursion_basis"] in valid_bases
+        and r["mfe_pct"] is not None
+        and r["mae_pct"] is not None
     ]
+    wins_all = [r for r in all_rows if (r["net_pnl"] or 0) > 0]
+    wins = [r for r in rows if (r["net_pnl"] or 0) > 0]
+    losses = [r for r in rows if (r["net_pnl"] or 0) < 0]
+    capture_rows = [r for r in wins if r["exit_efficiency"] is not None]
 
     def avg(vals):
         vals = [float(v) for v in vals if v is not None]
@@ -1404,62 +1408,48 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
         n = len(vals)
         return round(vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2, 2)
 
-    total_n = len(rows)
-    excursion_n = len(excursion_rows)
-    winner_n = len(winners_all)
-    capture_n = len(capture_rows)
-    total_days = len({r["date"] for r in rows if r["date"]})
-    excursion_days = len({r["date"] for r in excursion_rows if r["date"]})
-    capture_days = len({r["date"] for r in capture_rows if r["date"]})
-    excursion_coverage = round(excursion_n / total_n * 100, 1) if total_n else 0
-    capture_coverage = round(capture_n / winner_n * 100, 1) if winner_n else 0
-
-    def confidence(n, coverage, days, *, reliable_n, developing_n):
-        if n >= reliable_n and coverage >= 70 and days >= 3:
+    def confidence(n, coverage):
+        if n >= 15 and coverage >= 60:
             return "RELIABLE"
-        if n >= developing_n and coverage >= 40 and days >= 2:
+        if n >= 5 and coverage >= 30:
             return "DEVELOPING"
         return "LOW"
 
-    basis_counts = {}
-    for r in excursion_rows:
-        basis = str(r["excursion_basis"] or "legacy_or_unknown")
-        basis_counts[basis] = basis_counts.get(basis, 0) + 1
+    total_n = len(all_rows)
+    excursion_n = len(rows)
+    capture_n = len(capture_rows)
+    management_coverage = round(excursion_n / total_n * 100, 1) if total_n else 0.0
+    capture_coverage = round(capture_n / len(wins_all) * 100, 1) if wins_all else 0.0
+    excursion_dates = sorted({r["date"] for r in rows if r["date"]})
 
     return {
         "exit_efficiency": avg([r["exit_efficiency"] for r in capture_rows]),
         "exit_efficiency_median": med([r["exit_efficiency"] for r in capture_rows]),
-        "avg_mfe": avg([r["mfe_pct"] for r in excursion_rows]),
-        "avg_mae": avg([r["mae_pct"] for r in excursion_rows]),
-        "avg_mae_win": avg([r["mae_pct"] for r in excursion_wins]),
-        "avg_mae_loss": avg([r["mae_pct"] for r in excursion_losses]),
+        "avg_mfe": avg([r["mfe_pct"] for r in rows]),
+        "avg_mae": avg([r["mae_pct"] for r in rows]),
+        "avg_mae_win": avg([r["mae_pct"] for r in wins]),
+        "avg_mae_loss": avg([r["mae_pct"] for r in losses]),
         "excursion_n": excursion_n,
-        "excursion_total_n": total_n,
-        "excursion_coverage_pct": excursion_coverage,
-        "excursion_days": excursion_days,
-        "excursion_total_days": total_days,
-        "excursion_confidence": confidence(
-            excursion_n, excursion_coverage, excursion_days,
-            reliable_n=15, developing_n=8,
-        ),
+        "excursion_total_trades": total_n,
+        "management_coverage_pct": management_coverage,
         "capture_n": capture_n,
-        "capture_total_winners": winner_n,
+        "capture_winner_total": len(wins_all),
         "capture_coverage_pct": capture_coverage,
-        "capture_days": capture_days,
-        "capture_confidence": confidence(
-            capture_n, capture_coverage, capture_days,
-            reliable_n=10, developing_n=5,
-        ),
-        "excursion_stock_n": sum(1 for r in excursion_rows if r["instrument_type"] == "STOCK"),
-        "excursion_option_n": sum(1 for r in excursion_rows if r["instrument_type"] == "OPTION"),
-        "excursion_future_n": sum(1 for r in excursion_rows if r["instrument_type"] == "FUTURE"),
-        "excursion_basis_counts": basis_counts,
+        "excursion_confidence": confidence(excursion_n, management_coverage),
+        "capture_confidence": confidence(capture_n, capture_coverage),
+        "excursion_days": len(excursion_dates),
+        "excursion_first_date": excursion_dates[0] if excursion_dates else None,
+        "excursion_last_date": excursion_dates[-1] if excursion_dates else None,
+        "excursion_stock_n": sum(1 for r in rows if r["instrument_type"] == "STOCK"),
+        "excursion_option_n": sum(1 for r in rows if r["instrument_type"] == "OPTION"),
+        "excursion_future_n": 0,
         "excursion_note": (
-            "Stocks use actual fill prices with Alpaca 1-minute stock bars. "
-            "Options use actual Schwab option fills with Alpaca OCC option-premium bars. "
-            "Futures may use an ETF proxy and are excluded from profit-capture scoring."
+            "Trade-management excursion uses actual instrument paths only: "
+            "stocks use stock bars and options use their own option-premium bars. "
+            "Coverage and confidence are reported explicitly."
         ),
     }
+
 
 def _net_profit_factor(trades):
     """Profit factor on realized after-commission P&L.
