@@ -121,10 +121,15 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const loserHold = hold.losers_avg_min == null ? null : Number(hold.losers_avg_min);
   const winnerMedian = hold.winners_median_min == null ? null : Number(hold.winners_median_min);
   const loserMedian = hold.losers_median_min == null ? null : Number(hold.losers_median_min);
-  const holdN = Number(hold.sample_count || 0);
+  const winnerHoldN = Number(hold.winner_count || 0);
+  const loserHoldN = Number(hold.loser_count || 0);
+  const holdN = Number(hold.sample_count || (winnerHoldN + loserHoldN));
   const holdCoverage = Number(hold.coverage_pct ?? (totalTrades ? holdN / totalTrades * 100 : 0));
   const holdRatio = winnerHold > 0 && loserHold != null ? loserHold / winnerHold : null;
-  const holdReliable = holdN >= 5 && winnerHold != null && loserHold != null;
+  const avgHoldLeak = winnerHold != null && loserHold != null && loserHold > winnerHold * 1.10;
+  const medianHoldLeak = winnerMedian != null && loserMedian != null && loserMedian > winnerMedian * 1.10;
+  const holdReliable = winnerHoldN >= 5 && loserHoldN >= 5 && winnerHold != null && loserHold != null;
+  const holdMixed = holdReliable && winnerMedian != null && loserMedian != null && avgHoldLeak !== medianHoldLeak;
 
   const rawMfe = data.avg_mfe == null ? null : Number(data.avg_mfe);
   const rawMae = data.avg_mae == null ? null : Number(data.avg_mae);
@@ -142,7 +147,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const favorablePct = favorableMove == null ? 0 : Math.max(8, Math.min(100, (favorableMove / moveMax) * 100));
   const adversePct = adverseMove == null ? 0 : Math.max(8, Math.min(100, (adverseMove / moveMax) * 100));
 
-  const holdLeak = holdReliable && holdRatio > 1.05;
+  const holdLeak = holdReliable && avgHoldLeak && (winnerMedian == null || loserMedian == null || medianHoldLeak);
   const riskLeak = riskUsable && adverseMove > favorableMove;
   const rangeCopy = range === '7D'
     ? 'last 7 days'
@@ -173,10 +178,12 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
         : 'Covered winning trades are giving back too much of the favorable move before exit.';
 
   const holdSummary = !holdReliable
-    ? 'More broker-timestamped closed trades are needed to compare holding behavior.'
-    : holdLeak
-      ? 'Broker executions show losers are held longer than winners on average.'
-      : 'Broker executions do not show losers being held longer than winners on average.';
+    ? 'More broker-timestamped winners and losers are needed before comparing holding behavior.'
+    : holdMixed
+      ? 'Average and median hold times point in different directions, so no strong holding-time leak is diagnosed.'
+      : holdLeak
+        ? 'Broker executions show losers are held longer than winners in both average and median behavior.'
+        : 'Broker executions do not show a consistent loser-holding leak in this window.';
 
   const captureSplitSummary = !captureUsable
     ? 'Capture vs. giveback is withheld until actual-instrument path coverage is sufficient.'
@@ -200,7 +207,11 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       : 'Broker CSV executions do not yet provide enough hold-time evidence for a firm comparison.';
 
     if (holdLeak) {
-      return csvSentence + ' The clearest verified management issue is holding losing trades longer. Excursion-based capture/risk should only be added to the diagnosis when its coverage is sufficient.';
+      return csvSentence + ' The clearest broker-verified management issue is holding losing trades longer, and the median confirms the same pattern. Excursion-based capture/risk stays secondary.';
+    }
+
+    if (holdMixed) {
+      return csvSentence + ' Average and median hold times disagree, so the broker CSV does not support a firm hold-time diagnosis. Supplemental market-path coverage is ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
     }
 
     if (!captureUsable && !riskUsable) {
@@ -319,8 +330,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             {winnerMedian != null && loserMedian != null ? ' · medians ' + winnerMedian.toFixed(1) + ' / ' + loserMedian.toFixed(1) + ' min' : ''}
           </div>
 
-          <div className={'v3-ref-message ' + (!holdReliable ? 'caution' : holdLeak ? 'bad' : 'good')}>
-            <span className="v3-ref-message-icon">{holdReliable && !holdLeak ? '✓' : '!'}</span>
+          <div className={'v3-ref-message ' + (!holdReliable || holdMixed ? 'caution' : holdLeak ? 'bad' : 'good')}>
+            <span className="v3-ref-message-icon">{holdReliable && !holdLeak && !holdMixed ? '✓' : '!'}</span>
             <p><b>{holdSummary}</b>{holdLeak ? ' Consider a faster invalidation rule for losing trades.' : ''}</p>
           </div>
         </article>
@@ -390,8 +401,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <span className="v3-ref-bulb"><Lightbulb size={24} /></span>
           <div>
             <h3>Bottom line</h3>
-            <p>Analysis based on your {rangeCopy}</p>
-            <span>{totalTrades} closed trades · excursion coverage {excursionN}/{totalTrades}</span>
+            <p>Broker CSV first · {rangeCopy}</p>
+            <span>{totalTrades} closed trades · market-path coverage {excursionN}/{totalTrades}</span>
           </div>
         </div>
         <div className="v3-ref-bottom-copy">
