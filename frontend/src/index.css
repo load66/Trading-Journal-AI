@@ -1332,13 +1332,12 @@ button.month-card:active { transform: translateY(1px); }
 .trade-view-table th:nth-child(1) { width: 96px; }
 .trade-view-table th:nth-child(2) { width: 108px; }
 .trade-view-table th:nth-child(3) { width: 104px; text-align: right; }
-.trade-view-table th:nth-child(4) { width: 334px; }
+.trade-view-table th:nth-child(4) { width: 392px; }
 .trade-view-table th:nth-child(5) { width: 104px; text-align: right; }
 .trade-view-table th:nth-child(6) { width: 108px; }
 .trade-view-table th:nth-child(7) { width: 126px; text-align: right; }
 .trade-view-table th:nth-child(8) { width: 92px; text-align: right; }
-.trade-view-table th:nth-child(9) { width: 58px; text-align: center; }
-.trade-view-table th:nth-child(10) { width: 32px; }
+.trade-view-table th:nth-child(9) { width: 32px; }
 
 .trade-view-row td {
   height: 66px;
@@ -1447,26 +1446,6 @@ button.month-card:active { transform: translateY(1px); }
   flex: 0 0 auto;
   font-size: 10px;
 }
-.trade-review-cell,
-.trade-review-head {
-  text-align: center;
-}
-.trade-review-cell {
-  line-height: 0;
-}
-.trade-review-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  min-width: 8px;
-  min-height: 8px;
-  overflow: visible;
-  vertical-align: middle;
-}
-.trade-review-dot.complete { color: var(--result-pos); fill: currentColor; }
-.trade-review-dot.partial { color: var(--caution); fill: currentColor; }
-.trade-review-dot.empty { color: var(--text-tertiary); fill: currentColor; }
-
 .trade-process-status {
   display: inline-flex;
   align-items: center;
