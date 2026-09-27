@@ -371,7 +371,7 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
               {realizedR > 0 ? '+' : ''}{realizedR.toFixed(2)}R realized
             </small>
           ) : usesMaxPremiumBaseline ? (
-            <small className="text-muted" title="Full premium is max loss, not an option-stop risk plan.">R pending</small>
+            <small className="trade-r-pending" title="Full premium is max loss, not an option-stop risk plan.">R pending</small>
           ) : null}
         </div>
       </td>

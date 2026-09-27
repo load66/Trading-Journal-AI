@@ -1329,10 +1329,10 @@ button.month-card:active { transform: translateY(1px); }
 .trade-view-table td {
   padding: 11px 10px;
 }
-.trade-view-table th:nth-child(1) { width: 108px; }
-.trade-view-table th:nth-child(2) { width: 126px; }
-.trade-view-table th:nth-child(3) { width: 120px; text-align: right; }
-.trade-view-table th:nth-child(4) { width: 268px; }
+.trade-view-table th:nth-child(1) { width: 96px; }
+.trade-view-table th:nth-child(2) { width: 108px; }
+.trade-view-table th:nth-child(3) { width: 104px; text-align: right; }
+.trade-view-table th:nth-child(4) { width: 334px; }
 .trade-view-table th:nth-child(5) { width: 104px; text-align: right; }
 .trade-view-table th:nth-child(6) { width: 108px; }
 .trade-view-table th:nth-child(7) { width: 126px; text-align: right; }
@@ -1445,13 +1445,26 @@ button.month-card:active { transform: translateY(1px); }
 .trade-review-head {
   text-align: center;
 }
+.trade-review-cell {
+  line-height: 0;
+}
 .trade-review-dot {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+  display: inline-block !important;
+  flex: 0 0 8px;
+  width: 8px !important;
+  min-width: 8px;
+  max-width: 8px;
+  height: 8px !important;
+  min-height: 8px;
+  max-height: 8px;
+  padding: 0 !important;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  box-sizing: border-box;
   vertical-align: middle;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+  line-height: 0;
+  font-size: 0;
 }
 .trade-review-dot.complete { color: var(--result-pos); background: var(--result-pos); }
 .trade-review-dot.partial { color: var(--caution); background: var(--caution); }
@@ -1532,6 +1545,13 @@ button.month-card:active { transform: translateY(1px); }
   font-weight: 650;
   white-space: nowrap;
 }
+.trade-r-pending {
+  color: var(--text-tertiary);
+  font-size: 8.5px !important;
+  font-weight: 550 !important;
+  letter-spacing: .01em;
+  opacity: .72;
+}
 .trade-r-missing {
   display: inline-block;
   color: var(--text-tertiary);
@@ -1553,6 +1573,9 @@ button.month-card:active { transform: translateY(1px); }
   .trade-view-table {
     min-width: 1050px;
   }
-  .trade-view-table th:nth-child(4) { width: 235px; }
+  .trade-view-table th:nth-child(1) { width: 92px; }
+  .trade-view-table th:nth-child(2) { width: 104px; }
+  .trade-view-table th:nth-child(3) { width: 100px; }
+  .trade-view-table th:nth-child(4) { width: 300px; }
   .trade-view-table th:nth-child(6) { width: 100px; }
 }
