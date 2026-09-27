@@ -1,0 +1,77 @@
+/* Live responsive rules for the Trade View chart screenshot.
+   This file is imported by TradeDetail.js so the rules are part of the
+   production bundle. Keep desktop behavior unchanged; phones use a true
+   contain viewport so portrait screenshots do not become page-length images. */
+
+.td-chart-review-upload input,
+.td-chart-review-empty input {
+  position: absolute !important;
+  inline-size: 1px !important;
+  block-size: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 720px) {
+  .td-chart-review-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .td-chart-review-actions {
+    width: 100%;
+  }
+
+  .td-chart-review-stage {
+    width: 100%;
+    min-height: 0;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  .td-chart-preview.td-chart-review-preview {
+    width: 100%;
+    min-width: 0;
+    height: clamp(320px, 52svh, 460px);
+    max-height: 52dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: #020c13;
+  }
+
+  .td-chart-preview.td-chart-review-preview > img {
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    margin: auto !important;
+    object-fit: contain !important;
+    object-position: center center !important;
+  }
+
+  .td-image-modal-stage {
+    padding: max(54px, env(safe-area-inset-top)) 8px max(12px, env(safe-area-inset-bottom)) !important;
+    touch-action: pan-x pan-y pinch-zoom;
+    overscroll-behavior: contain;
+  }
+
+  .td-image-modal-stage > img {
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - max(74px, env(safe-area-inset-top)) - max(18px, env(safe-area-inset-bottom))) !important;
+    margin: auto !important;
+    object-fit: contain !important;
+  }
+}
