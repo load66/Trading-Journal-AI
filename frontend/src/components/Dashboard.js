@@ -158,14 +158,14 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       params.date_to = latestTradeDate;
     }
 
-    const backfill = params.date_from && params.date_to
-      ? excursionApi.calculateRange(params).catch(() => null)
-      : Promise.resolve(null);
-
-    backfill.then(() => Promise.all([
+    const loadManagement = () => Promise.all([
       kpisApi.get(params).then(r => r.data),
       edgeReportApi.get(params).then(r => r.data),
-    ])).then(([nextKpis, nextEdge]) => {
+    ]);
+
+    // Broker-derived metrics render immediately. Market-path backfill is
+    // supplemental and refreshes MFE/MAE/capture when it finishes.
+    loadManagement().then(([nextKpis, nextEdge]) => {
       if (!current()) return;
       setManagementKpis(nextKpis);
       setManagementEdge(nextEdge);
@@ -174,6 +174,20 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       setManagementKpis(null);
       setManagementEdge(null);
     });
+
+    if (params.date_from && params.date_to) {
+      excursionApi.calculateRange(params)
+        .then(() => loadManagement())
+        .then(([nextKpis, nextEdge]) => {
+          if (!current()) return;
+          setManagementKpis(nextKpis);
+          setManagementEdge(nextEdge);
+        })
+        .catch(() => {
+          // CSV-first management metrics remain valid even if supplemental
+          // market-path data is unavailable.
+        });
+    }
   }, [accountId, managementRange, recentTrades, kpis, reloadKey]);
 
   useEffect(() => {
