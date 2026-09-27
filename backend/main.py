@@ -38,6 +38,11 @@ from ai_analysis import (
     performance_ai_is_configured,
 )
 from daily_summary import build_daily_context, daily_context_signature, generate_daily_summary
+from trade_management_ai import (
+    build_management_evidence,
+    management_context_signature,
+    generate_trade_management_analysis,
+)
 from performance_report import build_performance_report
 from excursion_analysis import calculate_trade_excursion, EXCURSION_ENGINE_VERSION
 from library import router as library_router, init_library_tables, apply_aliases, library_names, TAG_TYPES as LIBRARY_TAG_TYPES
@@ -3622,6 +3627,161 @@ def get_edge_report(
             "hold_time": hold_n,
         },
     }
+
+
+# ── Trade Management AI ───────────────────────────────────────────────────────
+
+@app.get("/api/trade-management-analysis")
+def get_trade_management_analysis(
+    account_id: int | None = Query(None),
+    range_key: str = Query("30D", alias="range"),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    force: bool = Query(False),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    normalized_range = str(range_key or "30D").upper()
+    if normalized_range not in {"7D", "30D", "90D", "ALL"}:
+        raise HTTPException(status_code=400, detail="range must be one of 7D, 30D, 90D, or ALL")
+
+    # Reuse the exact deterministic endpoints that power the four Trade
+    # Management cards. AI never recalculates these values; it only interprets
+    # the verified server-side evidence.
+    kpis = get_kpis(
+        account_id=account_id,
+        date_from=date_from,
+        date_to=date_to,
+        conn=conn,
+    )
+    edge = get_edge_report(
+        account_id=account_id,
+        date_from=date_from,
+        date_to=date_to,
+        conn=conn,
+    )
+    goals = get_goals(account_id=account_id, conn=conn)
+
+    account_type = "mixed"
+    if account_id is not None:
+        account_row = conn.execute(
+            "SELECT type FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+        if not account_row:
+            raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+        account_type = account_row["type"]
+
+    evidence = build_management_evidence(
+        range_key=normalized_range,
+        date_from=date_from,
+        date_to=date_to,
+        account_type=account_type,
+        kpis=kpis,
+        edge=edge,
+        goals=goals,
+    )
+
+    if not evidence["total_trades"]:
+        return {
+            "range": normalized_range,
+            "date_from": date_from,
+            "date_to": date_to,
+            "cached": False,
+            "no_trades": True,
+            "evidence": evidence,
+            "headline": "No completed trades are available for this management window.",
+            "diagnosis": "There is no trade-management sample to analyze yet.",
+        }
+
+    input_signature = management_context_signature(evidence)
+    cache_key = f"trade_management_ai_{normalized_range.lower()}"
+
+    if not force:
+        if account_id is None:
+            row = conn.execute(
+                """SELECT ai_content, generated_at
+                   FROM daily_summaries
+                   WHERE summary_date = ? AND account_id IS NULL
+                   ORDER BY id DESC LIMIT 1""",
+                (cache_key,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT ai_content, generated_at
+                   FROM daily_summaries
+                   WHERE summary_date = ? AND account_id = ?""",
+                (cache_key, account_id),
+            ).fetchone()
+
+        if row:
+            try:
+                cached = json.loads(row["ai_content"])
+                if (
+                    cached.get("analytics_engine_version") == ANALYTICS_ENGINE_VERSION
+                    and int(cached.get("evidence_version") or 0) >= 1
+                    and cached.get("input_signature") == input_signature
+                ):
+                    cached["cached"] = True
+                    cached["generated_at"] = row["generated_at"]
+                    cached["evidence"] = evidence
+                    return cached
+            except Exception:
+                pass
+
+    if not performance_ai_is_configured():
+        return {
+            "range": normalized_range,
+            "date_from": date_from,
+            "date_to": date_to,
+            "cached": False,
+            "unavailable": True,
+            "evidence": evidence,
+            "headline": "AI management review is unavailable.",
+            "diagnosis": (
+                "The deterministic Trade Management cards remain the source of truth. "
+                "Configure GROQ_API_KEY or the Anthropic fallback to generate the coaching layer."
+            ),
+        }
+
+    try:
+        analysis = generate_trade_management_analysis(evidence)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    analysis["range"] = normalized_range
+    analysis["date_from"] = date_from
+    analysis["date_to"] = date_to
+    analysis["input_signature"] = input_signature
+    analysis["evidence"] = evidence
+
+    payload = json.dumps(analysis)
+    if account_id is None:
+        # SQLite/Postgres uniqueness semantics around NULL differ. Keep one
+        # all-accounts cache row explicitly rather than relying on NULL UNIQUE.
+        conn.execute(
+            "DELETE FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
+            (cache_key,),
+        )
+        conn.execute(
+            """INSERT INTO daily_summaries
+               (summary_date, account_id, ai_content, generated_at)
+               VALUES (?, NULL, ?, CURRENT_TIMESTAMP)""",
+            (cache_key, payload),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO daily_summaries
+               (summary_date, account_id, ai_content, generated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(summary_date, account_id) DO UPDATE SET
+                   ai_content = excluded.ai_content,
+                   generated_at = CURRENT_TIMESTAMP""",
+            (cache_key, account_id, payload),
+        )
+    conn.commit()
+
+    analysis["cached"] = False
+    return analysis
 
 
 # ── AI Insights ────────────────────────────────────────────────────────────────

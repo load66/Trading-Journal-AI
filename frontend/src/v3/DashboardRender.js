@@ -1,7 +1,7 @@
 /* The V3 Today page. Presentation only: every value, handler and piece of
    state is passed in from Dashboard.js, so no behaviour lives here. */
 import { useState, useEffect } from 'react';
-import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, AlertTriangle, BarChart3 } from 'lucide-react';
+import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, AlertTriangle, BarChart3, Sparkles, RotateCcw } from 'lucide-react';
 import { calendarApi } from '../api';
 import LERiskPlanner from './LERiskPlanner';
 import {
@@ -101,7 +101,7 @@ const absMoney = (value) => {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-function TradeManagement({ kpis, edge, range, onRangeChange, goals, error }) {
+export function TradeManagement({ kpis, edge, range, onRangeChange, goals, error, ai, aiLoading, aiError, onAiGenerate }) {
   const data = kpis || {};
   const hold = edge?.hold_time || {};
   const totalTrades = Number(data.total_trades || edge?.total_trades || 0);
@@ -469,15 +469,47 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals, error }) {
       <div className="v3-ref-bottom-line">
         <div className="v3-ref-bottom-label">
           <span className="v3-ref-bulb"><Lightbulb size={24} /></span>
-          <div>
+          <div className="v3-management-ai-control">
             <h3>Bottom line</h3>
-            <p>Analysis window · {rangeCopy}</p>
-            <span>{totalTrades} closed trades · market-path coverage {excursionN}/{totalTrades}</span>
+            {ai?.diagnosis && !ai?.unavailable && !ai?.no_trades ? (
+              <div className="v3-management-ai-meta">
+                <span>AI management review · {range}</span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm v3-management-ai-rerun"
+                  onClick={() => onAiGenerate?.(true)}
+                  disabled={aiLoading}
+                >
+                  <RotateCcw size={12} className={aiLoading ? 'spin' : ''} aria-hidden="true" />
+                  {aiLoading ? 'Re-running…' : 'Re-run'}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm v3-management-ai-button"
+                onClick={() => onAiGenerate?.(false)}
+                disabled={aiLoading || totalTrades === 0 || Boolean(error)}
+              >
+                <Sparkles size={13} aria-hidden="true" />
+                {aiLoading ? 'Analyzing…' : 'Generate AI Analysis'}
+              </button>
+            )}
+            <span>{rangeCopy} · {totalTrades} closed trades · market-path coverage {excursionN}/{totalTrades}</span>
+            {aiError && <span className="v3-management-ai-error" role="status">{aiError}</span>}
           </div>
         </div>
         <div className="v3-ref-bottom-copy">
           <span className={'v3-ref-bottom-check ' + bottomTone}>{bottomTone === 'good' ? '✓' : '!'}</span>
-          <p>{bottomCopy}</p>
+          {ai?.diagnosis && !ai?.unavailable && !ai?.no_trades ? (
+            <div className="v3-management-ai-copy">
+              <strong>{ai.headline || 'AI management review'}</strong>
+              <p>{ai.diagnosis}</p>
+              {ai.next_focus && <span>Next focus · {ai.next_focus}</span>}
+            </div>
+          ) : (
+            <p>{bottomCopy}</p>
+          )}
         </div>
       </div>
     </div>
@@ -627,6 +659,7 @@ export default function DashboardRender(p) {
     accountId, onDayClick,
     goals,
     managementRange, onManagementRangeChange, managementKpis, managementEdge, managementError,
+    managementAi, managementAiLoading, managementAiError, onManagementAiGenerate,
     latestSmokingGun, onViewSmokingGun,
   } = p;
 
@@ -820,6 +853,10 @@ export default function DashboardRender(p) {
               onRangeChange={onManagementRangeChange}
               goals={goals}
               error={managementError}
+              ai={managementAi}
+              aiLoading={managementAiLoading}
+              aiError={managementAiError}
+              onAiGenerate={onManagementAiGenerate}
             />
           </section>
 

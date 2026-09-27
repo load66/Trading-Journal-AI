@@ -6305,3 +6305,76 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   font-size: 11px;
   line-height: 1.45;
 }
+
+
+/* ---------- Trade Management AI review ---------- */
+.v3-management-ai-control {
+  min-width: 0;
+}
+.v3-management-ai-button,
+.v3-management-ai-rerun {
+  margin-top: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.v3-management-ai-meta {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.v3-management-ai-meta > span {
+  margin: 0;
+  color: #8fb9d8;
+  font-weight: 800;
+  letter-spacing: .02em;
+}
+.v3-management-ai-rerun {
+  margin-top: 0;
+}
+.v3-management-ai-error {
+  display: block;
+  margin-top: 5px !important;
+  color: #ffb14a !important;
+  font-weight: 700;
+}
+.v3-management-ai-copy {
+  min-width: 0;
+}
+.v3-management-ai-copy > strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #f0fbff;
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 850;
+}
+.v3-management-ai-copy > p {
+  margin: 0;
+}
+.v3-management-ai-copy > span {
+  display: block;
+  margin-top: 5px;
+  color: #8eb4cc;
+  font-size: 10.5px;
+  line-height: 1.4;
+  font-weight: 700;
+}
+.v3-management-ai-rerun .spin {
+  animation: v3-ai-spin .8s linear infinite;
+}
+@keyframes v3-ai-spin {
+  to { transform: rotate(360deg); }
+}
+@media (max-width: 760px) {
+  .v3-management-ai-button {
+    width: 100%;
+  }
+  .v3-management-ai-copy > strong {
+    font-size: 12px;
+  }
+}
