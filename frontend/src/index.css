@@ -1527,6 +1527,20 @@ button.month-card:active { transform: translateY(1px); }
   text-transform: uppercase;
   letter-spacing: .04em;
 }
+.trade-r-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+.trade-r-action:hover,
+.trade-r-action:focus-visible {
+  color: var(--accent-line);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .trade-open-cell {
   text-align: right;
 }
