@@ -104,35 +104,64 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const data = kpis || {};
   const hold = edge?.hold_time || {};
   const capture = data.exit_efficiency == null ? null : Number(data.exit_efficiency);
-  const captureBar = capture == null ? 0 : Math.max(0, Math.min(100, capture));
   const captureGoal = Number(goals?.exit_efficiency ?? 60);
-  const leftOnTable = capture == null ? null : Math.max(0, 100 - Math.min(100, capture));
-  const leftBar = capture == null ? 0 : Math.max(0, 100 - captureBar);
+  const totalTrades = Number(data.total_trades || 0);
+  const totalWinners = Number(data.capture_winner_total ?? data.winning_trades ?? 0);
+  const captureN = Number(data.capture_n || 0);
+  const captureCoverage = Number(data.capture_coverage_pct || 0);
+  const captureDays = Number(data.capture_days || 0);
+  const captureConfidence = String(data.capture_confidence || 'LOW').toUpperCase();
+  const excursionN = Number(data.excursion_n || 0);
+  const excursionTotalN = Number(data.excursion_total_trades ?? totalTrades);
+  const excursionCoverage = Number(data.management_coverage_pct || 0);
+  const excursionDays = Number(data.excursion_days || 0);
+  const excursionConfidence = String(data.excursion_confidence || 'LOW').toUpperCase();
+
+  const captureUsable = capture != null && captureN > 0;
+  const captureActionable = captureUsable && captureConfidence === 'RELIABLE';
+  const captureBar = captureUsable ? Math.max(0, Math.min(100, capture)) : 0;
+  const leftOnTable = captureUsable ? Math.max(0, 100 - captureBar) : null;
+  const leftBar = leftOnTable == null ? 0 : leftOnTable;
 
   const winnerHold = hold.winners_avg_min == null ? null : Number(hold.winners_avg_min);
   const loserHold = hold.losers_avg_min == null ? null : Number(hold.losers_avg_min);
-  const holdRatio = winnerHold > 0 && loserHold != null ? loserHold / winnerHold : null;
+  const winnerMedian = hold.winners_median_min == null ? null : Number(hold.winners_median_min);
+  const loserMedian = hold.losers_median_min == null ? null : Number(hold.losers_median_min);
+  const winnerHoldN = Number(hold.winner_count || 0);
+  const loserHoldN = Number(hold.loser_count || 0);
+  const holdSampleN = Number(hold.sample_count || (winnerHoldN + loserHoldN));
+  const holdEnough = winnerHold != null && loserHold != null && winnerHoldN >= 5 && loserHoldN >= 5;
+  const avgHoldLeak = holdEnough && loserHold > winnerHold * 1.10;
+  const medianHoldLeak = holdEnough && winnerMedian != null && loserMedian != null
+    ? loserMedian > winnerMedian * 1.10
+    : avgHoldLeak;
+  const holdLeak = holdEnough && avgHoldLeak && medianHoldLeak;
+  const holdMixed = holdEnough && avgHoldLeak !== medianHoldLeak;
 
   const mfe = data.avg_mfe == null ? null : Number(data.avg_mfe);
   const mae = data.avg_mae == null ? null : Number(data.avg_mae);
-  const excursionN = Number(data.excursion_n || 0);
+  const favorableMove = mfe == null ? null : Math.abs(mfe);
+  const adverseMove = mae == null ? null : Math.abs(mae);
+  const riskUsable = favorableMove != null && adverseMove != null && excursionN > 0;
+  const riskActionable = riskUsable && excursionConfidence === 'RELIABLE';
+  const riskLeak = riskActionable && adverseMove > favorableMove;
   const holdMax = Math.max(winnerHold || 0, loserHold || 0, 1);
   const winnerHoldPct = winnerHold == null ? 0 : Math.max(8, Math.min(100, (winnerHold / holdMax) * 100));
   const loserHoldPct = loserHold == null ? 0 : Math.max(8, Math.min(100, (loserHold / holdMax) * 100));
-  const favorableMove = mfe == null ? null : Math.abs(mfe);
-  const adverseMove = mae == null ? null : Math.abs(mae);
   const moveMax = Math.max(favorableMove || 0, adverseMove || 0, 1);
   const favorablePct = favorableMove == null ? 0 : Math.max(8, Math.min(100, (favorableMove / moveMax) * 100));
   const adversePct = adverseMove == null ? 0 : Math.max(8, Math.min(100, (adverseMove / moveMax) * 100));
 
-  const captureState = capture == null
+  const captureState = !captureUsable
     ? { tone: 'neutral', label: 'NEED DATA' }
-    : capture >= captureGoal
-      ? { tone: 'good', label: 'ABOVE GOAL' }
-      : { tone: capture < 0 ? 'bad' : 'caution', label: 'BELOW GOAL' };
+    : captureConfidence === 'LOW'
+      ? { tone: 'neutral', label: 'LOW COVERAGE' }
+      : captureConfidence === 'DEVELOPING'
+        ? { tone: 'caution', label: 'DEVELOPING' }
+        : capture >= captureGoal
+          ? { tone: 'good', label: 'ABOVE GOAL' }
+          : { tone: 'caution', label: 'BELOW GOAL' };
 
-  const holdLeak = holdRatio != null && holdRatio > 1.05;
-  const riskLeak = favorableMove != null && adverseMove != null && adverseMove > favorableMove;
   const rangeCopy = range === '7D'
     ? 'last 7 days'
     : range === '90D'
@@ -140,7 +169,6 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
       : range === 'ALL'
         ? 'all available trades'
         : 'last 30 days';
-
   const HelpDot = ({ label }) => (
     <span className="v3-ref-help" title={label} aria-label={label}>?</span>
   );
