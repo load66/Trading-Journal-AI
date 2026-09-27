@@ -1519,26 +1519,27 @@ button.month-card:active { transform: translateY(1px); }
   font-size: 13px;
   font-weight: 750;
 }
+.trade-r-status {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+.trade-r-planned {
+  color: var(--accent-line);
+}
+.trade-r-status small {
+  font-size: 9.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
 .trade-r-missing {
   display: inline-block;
-  color: var(--caution);
+  color: var(--text-tertiary);
   font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .04em;
-}
-.trade-r-action {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-  font: inherit;
-}
-.trade-r-action:hover,
-.trade-r-action:focus-visible {
-  color: var(--accent-line);
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 
 .trade-open-cell {
