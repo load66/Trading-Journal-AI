@@ -1754,8 +1754,9 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         aria-label="TradingView screenshot"
         data-testid="chart-screenshot-lightbox"
         onClose={restoreChartScreenshotScroll}
-        onCancel={() => {
-          // Escape closes native modal dialogs automatically.
+        onCancel={(event) => {
+          event.preventDefault();
+          closeChartScreenshot();
         }}
         onClick={(event) => {
           if (event.target === event.currentTarget) closeChartScreenshot();
