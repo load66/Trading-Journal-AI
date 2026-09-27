@@ -267,7 +267,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
             <div style={{ padding: '18px 0 12px' }}>
               <PanelHead
                 title="Trade by trade"
-                sub="MFE/MAE is automatic from Alpaca 1-minute data. Options use the underlying ticker; stocks use actual fill prices. Hover a grade for its evidence."
+                sub="MFE/MAE uses Alpaca 1-minute market paths. Options use the actual OCC contract premium; stocks use stock bars, with broker fills as execution anchors. Missing provider coverage stays blank. Hover a grade for its evidence."
               />
             </div>
             <DayTrades

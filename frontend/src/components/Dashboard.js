@@ -79,6 +79,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   const [managementRange, setManagementRange] = useState('30D');
   const [managementKpis, setManagementKpis] = useState(null);
   const [managementEdge, setManagementEdge] = useState(null);
+  const [managementError, setManagementError] = useState('');
   const [latestSmokingGun, setLatestSmokingGun] = useState(null);
   // Bumped after a write so every panel refetches; also drives Retry.
   const [reloadKey, setReloadKey] = useState(0);
@@ -164,26 +165,35 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
     ].join('|');
     managementActiveKey.current = requestKey;
 
+    setManagementError('');
+
     const loadManagement = () => Promise.all([
-      kpisApi.get(params).then(r => r.data),
-      edgeReportApi.get(params).then(r => r.data),
+      kpisApi.get(params)
+        .then(r => ({ ok: true, data: r.data }))
+        .catch(() => ({ ok: false, data: null })),
+      edgeReportApi.get(params)
+        .then(r => ({ ok: true, data: r.data }))
+        .catch(() => ({ ok: false, data: null })),
     ]);
 
-    const applyIfActive = ([nextKpis, nextEdge]) => {
+    const applyIfActive = ([kpiResult, edgeResult]) => {
       if (managementActiveKey.current !== requestKey) return;
-      setManagementKpis(nextKpis);
-      setManagementEdge(nextEdge);
+      setManagementKpis(kpiResult.data);
+      setManagementEdge(edgeResult.data);
+      if (!kpiResult.ok && !edgeResult.ok) {
+        setManagementError('Selected-window performance and timing metrics are unavailable.');
+      } else if (!kpiResult.ok) {
+        setManagementError('Selected-window performance metrics are unavailable.');
+      } else if (!edgeResult.ok) {
+        setManagementError('Selected-window timing metrics are unavailable.');
+      } else {
+        setManagementError('');
+      }
     };
 
-    // Broker-derived metrics render immediately. Market-path backfill is
-    // supplemental and refreshes MFE/MAE/capture when it finishes.
-    loadManagement()
-      .then(applyIfActive)
-      .catch(() => {
-        if (managementActiveKey.current !== requestKey) return;
-        setManagementKpis(null);
-        setManagementEdge(null);
-      });
+    // Load broker-derived and timing metrics independently. One failed endpoint
+    // must never make a selected 7D/30D/90D window silently fall back to all-time.
+    loadManagement().then(applyIfActive);
 
     if (params.date_from && params.date_to) {
       const backfillKey = requestKey;
@@ -271,6 +281,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
           onManagementRangeChange={setManagementRange}
           managementKpis={managementKpis}
           managementEdge={managementEdge}
+          managementError={managementError}
           latestSmokingGun={latestSmokingGun}
           onViewSmokingGun={onViewSmokingGun}
           showGoals={showGoals}

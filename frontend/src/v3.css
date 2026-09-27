@@ -6293,3 +6293,15 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     right: 12px;
   }
 }
+
+
+.v3-management-data-warning {
+  margin: 10px 0 12px;
+  padding: 9px 11px;
+  border: 1px solid rgba(245, 166, 35, .34);
+  border-radius: 8px;
+  background: rgba(245, 166, 35, .07);
+  color: rgba(239, 205, 149, .94);
+  font-size: 11px;
+  line-height: 1.45;
+}

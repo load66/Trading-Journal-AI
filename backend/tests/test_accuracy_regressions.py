@@ -87,6 +87,51 @@ def test_report_hold_seconds_helper_is_bound_to_canonical_metric(monkeypatch, tm
     assert main.canonical_hold_seconds(trade) == 330
 
 
+def test_daily_summary_cache_query_is_postgres_safe_for_nullable_account(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+
+    class Cursor:
+        def fetchone(self):
+            return None
+
+    class Conn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((sql, tuple(params)))
+            assert "? IS NULL" not in sql
+            return Cursor()
+
+    conn = Conn()
+    monkeypatch.setattr(
+        main,
+        "build_daily_context",
+        lambda *_args, **_kwargs: {"trades": []},
+    )
+
+    result = main.get_daily_summary(
+        date="2026-09-25",
+        account_id=None,
+        force=False,
+        conn=conn,
+    )
+    assert result["no_trades"] is True
+    assert "account_id IS NULL" in conn.calls[0][0]
+    assert conn.calls[0][1] == ("2026-09-25",)
+
+    conn = Conn()
+    result = main.get_daily_summary(
+        date="2026-09-25",
+        account_id=4,
+        force=False,
+        conn=conn,
+    )
+    assert result["no_trades"] is True
+    assert "account_id = ?" in conn.calls[0][0]
+    assert conn.calls[0][1] == ("2026-09-25", 4)
+
+
 def test_primary_profit_factor_uses_net_pnl(monkeypatch, tmp_path):
     main = fresh_main(monkeypatch, tmp_path)
 

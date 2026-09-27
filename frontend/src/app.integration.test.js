@@ -347,6 +347,18 @@ test('Add Trade opens a modal dialog that closes on Escape', async () => {
   await waitFor(() => expect(screen.queryByRole('dialog', { name: /Add Trade/ })).not.toBeInTheDocument());
 });
 
+test('Reports surfaces API failures instead of mislabeling them as an empty range', async () => {
+  reportsApi.get.mockRejectedValue(new Error('reports unavailable'));
+  edgeReportApi.get.mockResolvedValue({ data: { total_trades: 191 } });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Reports' }));
+
+  expect(await screen.findByText('Report analytics could not be loaded.')).toBeVisible();
+  expect(screen.queryByText('No trades in range')).not.toBeInTheDocument();
+  expect(screen.getByText(/Available sections are shown only from data that loaded successfully/i)).toBeVisible();
+});
+
 test('Reports surfaces setup context, coverage, custom emotion, and saved-risk R data', async () => {
   const bucket = (label, pnl = 50) => ({
     key: label,
@@ -1143,6 +1155,36 @@ test('Dashboard primary KPI strip uses goal-based trader metrics from the refere
     'goal 50%',
     'goal +$50.00',
   ]));
+});
+
+test('Dashboard never substitutes all-time KPIs when a selected management window fails', async () => {
+  kpisApi.get.mockImplementation((params = {}) => {
+    if (params.date_from) return Promise.reject(new Error('window kpis unavailable'));
+    return Promise.resolve({
+      data: {
+        total_net_pnl: 4340.34,
+        total_trades: 191,
+        winning_trades: 101,
+        losing_trades: 90,
+        win_rate: 52.9,
+        exit_efficiency: 66.7,
+        capture_n: 100,
+        capture_winner_total: 101,
+        capture_coverage_pct: 99,
+        capture_confidence: 'RELIABLE',
+        daily_pnl: [{ date: '2026-09-25', net_pnl: 538.04, cumulative: 4340.34 }],
+        trading_days: 28,
+      },
+    });
+  });
+  await renderApp();
+
+  expect(await screen.findByText(/Selected-window performance metrics are unavailable/i)).toBeVisible();
+  expect(screen.getByText(/No other date range is being substituted/i)).toBeVisible();
+
+  const management = screen.getByRole('heading', { name: /Trade management/i }).closest('.v3-ref-management');
+  expect(management).toBeTruthy();
+  expect(within(management).queryByText('66.7%')).not.toBeInTheDocument();
 });
 
 test('Dashboard prioritizes trade management and the latest saved Smoking Gun report', async () => {
