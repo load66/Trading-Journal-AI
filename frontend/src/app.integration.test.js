@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, storageApi, kpisApi, goalsApi, smokingGunLibraryApi, excursionApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -213,6 +213,36 @@ jest.mock('./api', () => {
       remove: fn(() => ok({ affected: 1, reassigned_to: null })),
       update: fn(() => ok({ name: 'VWAP Cross', trades: 10 })),
       create: fn(() => ok({ name: 'New' })),
+    }),
+    storageApi: withDefault({
+      health: fn(() => ok({
+        enabled: true,
+        provider: 'Cloudflare R2',
+        mode: 'r2',
+        bucket: 'trading-journal-screenshots',
+        status: 'healthy',
+        checked_at: '2026-09-27T09:00:00Z',
+        cached: false,
+        object_count: 1000,
+        stored_bytes: 512000000,
+        stored_gb: 0.512,
+        average_object_bytes: 512000,
+        latest_object_at: '2026-09-27T08:55:00Z',
+        standard_free_tier_applicable: true,
+        free_storage_bytes: 10000000000,
+        free_storage_gb_month: 10,
+        storage_used_percent: 5.12,
+        remaining_free_bytes: 9488000000,
+        estimated_500kb_screenshots_remaining: 18531,
+        projected_storage_cost_usd_if_held_month: 0,
+        projected_cost_note: 'Snapshot estimate only.',
+        class_a_free_operations: 1000000,
+        class_b_free_operations: 10000000,
+        operation_usage_available: false,
+        operation_usage_reason: 'Cloudflare analytics token not configured.',
+        health_scan_class_a_operations: 1,
+        pricing_url: 'https://developers.cloudflare.com/r2/pricing/',
+      })),
     }),
   };
 });
@@ -860,7 +890,7 @@ test('Settings has Strategies, Sources and Tags sections, and Tags leaves out st
   fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
   const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
   expect(within(tablist).getAllByRole('tab').map(t => t.textContent.replace(/\d+/g, '').trim()))
-    .toEqual(['Strategies', 'Sources', 'Tags']);
+    .toEqual(['Strategies', 'Sources', 'Tags', 'Storage']);
   expect(await screen.findByText('VWAP Cross')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit VWAP Cross' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Delete VWAP Cross' })).toBeInTheDocument();
@@ -870,6 +900,24 @@ test('Settings has Strategies, Sources and Tags sections, and Tags leaves out st
   expect(screen.getByRole('region', { name: 'Execution tags' })).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: /Strategy tags/ })).not.toBeInTheDocument();
   expect(screen.queryByRole('region', { name: /Source tags/ })).not.toBeInTheDocument();
+});
+
+test('Settings Storage shows R2 free-tier health and refreshes on demand', async () => {
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
+  const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Storage' }));
+
+  expect(await screen.findByRole('heading', { name: 'Cloudflare R2 storage' })).toBeVisible();
+  expect(screen.getByText('Healthy')).toBeVisible();
+  expect(screen.getByText('5.12%')).toBeVisible();
+  expect(screen.getByText('18,531')).toBeVisible();
+  expect(screen.getByText(/No storage charge projected/)).toBeVisible();
+  expect(screen.getByText(/1,000,000/)).toBeVisible();
+  expect(screen.getByText(/10,000,000/)).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(storageApi.health).toHaveBeenLastCalledWith(true));
 });
 
 test('Settings merges one strategy into another', async () => {
