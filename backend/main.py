@@ -1125,20 +1125,27 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
     trade_time = data.time or datetime.now().strftime("%H:%M:%S")
     trade_group = f"{data.date}_{data.ticker}_{data.instrument_type}_{trade_time.replace(':', '')}"
 
+    entry_commission = data.commissions / 2 if data.exit_price is not None else data.commissions
     execution = {
+        'date': data.date,
         'time': trade_time,
         'action': 'BOT' if data.side.upper() == 'LONG' else 'SOLD',
         'qty': data.quantity,
         'price': data.entry_price,
-        'commission': data.commissions / 2,
+        'commission': entry_commission,
+        'source_timezone': 'America/Chicago',
+        'source_broker': 'manual',
     }
-    if data.exit_price:
+    if data.exit_price is not None:
         execution2 = {
+            'date': data.date,
             'time': trade_time,
             'action': 'SOLD' if data.side.upper() == 'LONG' else 'BOT',
             'qty': data.quantity,
             'price': data.exit_price,
             'commission': data.commissions / 2,
+            'source_timezone': 'America/Chicago',
+            'source_broker': 'manual',
         }
         executions = json.dumps([execution, execution2])
     else:
