@@ -484,8 +484,8 @@ function LatestSmokingGunSummary({ report, onOpen }) {
       <>
         <div className="v3-sec-head">
           <div>
-            <h2 className="v3-h v3-icon-title"><FileText size={18} /> Latest Smoking Gun report summary</h2>
-            <p className="v3-h-sub">Diagnosis and mechanical actions only — dashboard statistics stay above.</p>
+            <h2 className="v3-h v3-icon-title"><FileText size={18} /> Smoking Gun — Latest Audit</h2>
+            <p className="v3-h-sub">Your clearest leak, protected edge, and next-session rules.</p>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onOpen}>Open reports</button>
         </div>
@@ -552,14 +552,14 @@ function LatestSmokingGunSummary({ report, onOpen }) {
     <>
       <div className="v3-sec-head v3-smoking-summary-head">
         <div>
-          <h2 className="v3-h v3-icon-title"><FileText size={18} /> Latest Smoking Gun report summary</h2>
-          <p className="v3-h-sub">Diagnosis and mechanical action plan from your latest saved audit.</p>
+          <h2 className="v3-h v3-icon-title"><FileText size={18} /> Smoking Gun — Latest Audit</h2>
+          <p className="v3-h-sub">Your clearest leak, protected edge, and next-session rules.</p>
         </div>
         <div className="v3-smoking-head-actions">
           <span className={'v3-evidence ' + (report.is_stale ? 'insufficient' : 'verified')}>
             {report.is_stale ? 'SOURCE CHANGED' : 'CURRENT'}
           </span>
-          <button type="button" className="btn btn-primary btn-sm" onClick={onOpen}>View full report →</button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={onOpen}>Open report →</button>
         </div>
       </div>
 
@@ -569,7 +569,7 @@ function LatestSmokingGunSummary({ report, onOpen }) {
             <AlertTriangle size={17} />
             <div>
               <span className="v3-lab">Diagnosis</span>
-              <strong>What is actually costing or protecting performance</strong>
+              <strong>What is costing or protecting performance</strong>
             </div>
           </div>
 
@@ -588,7 +588,7 @@ function LatestSmokingGunSummary({ report, onOpen }) {
             <Target size={17} />
             <div>
               <span className="v3-lab">Mechanical action plan</span>
-              <strong>Rules to execute on the next trading session</strong>
+              <strong>Rules for the next trading session</strong>
             </div>
           </div>
 
