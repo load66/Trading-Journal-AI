@@ -573,7 +573,7 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
   expect(screen.getByRole('button', { name: 'Delete execution 1' })).toBeInTheDocument();
 });
 
-test('Chart Review replaces What If and uploads a TradingView screenshot', async () => {
+test('Chart Review is the single professional screenshot workspace', async () => {
   tradesApi.getAnalysis.mockResolvedValue({ data: { analysis: {}, tags: [] } });
 
   await renderApp();
@@ -586,13 +586,15 @@ test('Chart Review replaces What If and uploads a TradingView screenshot', async
   expect(within(tablist).queryByRole('tab', { name: 'What If' })).not.toBeInTheDocument();
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Chart Review' }));
 
-  expect(await screen.findByText(/Review the setup visually/i)).toBeVisible();
-  expect(screen.getByText('10m default')).toBeVisible();
-  expect(screen.getByText('8 EMA')).toBeVisible();
-  expect(screen.getByText('PDH / PDL solid')).toBeVisible();
-  expect(screen.getByText('PMH / PML dashed')).toBeVisible();
+  expect(await screen.findByText('TradingView Screenshot')).toBeVisible();
+  expect(screen.queryByText(/Review the setup visually/i)).not.toBeInTheDocument();
+  expect(screen.queryByText('10m default')).not.toBeInTheDocument();
+  expect(screen.queryByText(/Paste with Ctrl\+V or upload/i)).not.toBeInTheDocument();
+  expect(document.querySelector('.td-chart-screenshot-side')).not.toBeInTheDocument();
 
-  const input = document.querySelector('.td-chart-review-upload input[type="file"]');
+  const workspace = document.querySelector('.td-chart-review-workspace');
+  expect(workspace).toBeInTheDocument();
+  const input = workspace.querySelector('.td-chart-review-empty input[type="file"]');
   const file = new File(['chart'], 'qqq-review.webp', { type: 'image/webp' });
   fireEvent.change(input, { target: { files: [file] } });
 
@@ -600,7 +602,6 @@ test('Chart Review replaces What If and uploads a TradingView screenshot', async
   const [group, formData] = tradesApi.uploadChartScreenshot.mock.calls.at(-1);
   expect(group).toBeTruthy();
   expect(formData.get('file').name).toBe('qqq-review.webp');
-  expect(screen.getByText(/Paste with Ctrl\+V or upload/i)).toBeVisible();
 });
 
 test('trade screenshot can be pasted from clipboard without saving a local file', async () => {
@@ -644,7 +645,11 @@ test('chart image opens a native fullscreen dialog from the image surface', asyn
   fireEvent.click(row);
 
   await waitFor(() => expect(tradesApi.getChartScreenshot).toHaveBeenCalled());
-  expect(await screen.findByText('Chart screenshot')).toBeVisible();
+  const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Chart Review' }));
+  expect(await screen.findByText('TradingView Screenshot')).toBeVisible();
+  expect(screen.getByRole('button', { name: /Remove/i })).toBeVisible();
+  expect(document.querySelector('.td-chart-screenshot-side')).not.toBeInTheDocument();
   const preview = await screen.findByTitle('Open screenshot full screen');
   expect(preview).toBeVisible();
   expect(preview).toHaveStyle({ width: '800px', maxWidth: '100%' });
