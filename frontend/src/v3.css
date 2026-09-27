@@ -4133,6 +4133,43 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.trade-copy-safe-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--result-pos) 32%, var(--divider));
+  background: color-mix(in srgb, var(--result-pos) 6%, var(--surface-page));
+}
+.trade-copy-safe-box > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--result-pos);
+}
+.trade-copy-safe-box > div {
+  min-width: 0;
+}
+.trade-copy-safe-box strong,
+.trade-copy-safe-box span {
+  display: block;
+}
+.trade-copy-safe-box strong {
+  color: var(--text-primary);
+  font-size: 11px;
+}
+.trade-copy-safe-box span {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.trade-copy-never {
+  padding: 0 2px;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  line-height: 1.45;
+}
 .trade-copy-parts {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
