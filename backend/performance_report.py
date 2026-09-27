@@ -67,10 +67,19 @@ def _parse_time(date_str: str, time_str: str):
 
 
 def _load_execs(trade):
+    raw = trade.get("executions") or []
+    if isinstance(raw, list):
+        return raw
     try:
-        return json.loads(trade.get("executions") or "[]")
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
     except Exception:
         return []
+
+
+def _entry_sort_value(row):
+    dt = row.get("entry_dt")
+    return dt.timestamp() if dt is not None else float("inf")
 
 
 def _entry_exit_actions(side):
@@ -201,7 +210,7 @@ def _daily_rows(trades):
     running = 0.0
     out = []
     for day in sorted(k for k in by_day if k):
-        rows = sorted(by_day[day], key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(by_day[day], key=_entry_sort_value)
         options = sum(r["pnl"] for r in rows if r.get("instrument_type") == "OPTION")
         shares = sum(r["pnl"] for r in rows if r.get("instrument_type") == "STOCK")
         futures = sum(r["pnl"] for r in rows if r.get("instrument_type") == "FUTURE")
@@ -240,7 +249,7 @@ def _stop_model(trades):
         adjusted_total = 0.0
         breaches = []
         for day, rows in by_day.items():
-            rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+            rows = sorted(rows, key=_entry_sort_value)
             actual = sum(r["pnl"] for r in rows)
             cum = 0.0
             stopped = False
@@ -300,7 +309,7 @@ def _revenge_and_chase(trades):
     revenge = defaultdict(list)
     chase = []
     for _, rows in by_day_ticker.items():
-        rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(rows, key=_entry_sort_value)
         has_loss = False
         reentry_depth = 0
         prev = None
@@ -394,13 +403,13 @@ def _behavior_analysis(trades):
     size_medians = _instrument_size_medians(trades)
     first_sizes, after_loss_sizes, after_loss_rows = [], [], []
     for rows in by_day.values():
-        rows = sorted(rows, key=lambda r: r.get("entry_dt") or datetime.max)
+        rows = sorted(rows, key=_entry_sort_value)
         first_sizes += [v for v in (_size_multiple(r, size_medians) for r in rows[:3]) if v is not None]
         cum = 0.0
         for r in rows:
             cum += r["pnl"]
             if threshold and cum <= -threshold:
-                after = [x for x in rows if (x.get("entry_dt") or datetime.max) > (r.get("entry_dt") or datetime.max)]
+                after = [x for x in rows if _entry_sort_value(x) > _entry_sort_value(r)]
                 after_loss_rows += after
                 after_loss_sizes += [v for v in (_size_multiple(x, size_medians) for x in after) if v is not None]
                 break
@@ -495,7 +504,7 @@ def by_day_ticker_sorted(trades):
     groups = defaultdict(list)
     for t in trades:
         groups[(t.get("date"), t.get("ticker"))].append(t)
-    return {k: sorted(v, key=lambda r: r.get("entry_dt") or datetime.max) for k, v in groups.items()}
+    return {k: sorted(v, key=_entry_sort_value) for k, v in groups.items()}
 
 
 def _scoreboard(trades, daily):
