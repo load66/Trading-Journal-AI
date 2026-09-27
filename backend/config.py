@@ -38,6 +38,11 @@ class Settings:
     upload_dir: str = 'uploads'
     supabase_secret_key: str = ''
     supabase_storage_bucket: str = 'diary'
+    chart_storage_mode: str = 'existing'
+    r2_bucket: str = ''
+    r2_endpoint_url: str = ''
+    r2_access_key_id: str = ''
+    r2_secret_access_key: str = ''
     max_diary_upload_bytes: int = 10 * 1024 * 1024
     max_csv_upload_bytes: int = 20 * 1024 * 1024
 
@@ -48,6 +53,7 @@ class Settings:
         auth_mode = env.get('AUTH_MODE', 'disabled').strip().lower()
         database_mode = env.get('DATABASE_MODE', 'sqlite').strip().lower()
         storage_mode = env.get('STORAGE_MODE', 'local').strip().lower()
+        chart_storage_mode = env.get('CHART_STORAGE_MODE', 'existing').strip().lower()
 
         if app_env not in {'development', 'test', 'production'}:
             raise ConfigError('APP_ENV must be development, test, or production')
@@ -57,6 +63,8 @@ class Settings:
             raise ConfigError('DATABASE_MODE must be sqlite or postgres')
         if storage_mode not in {'local', 'supabase'}:
             raise ConfigError('STORAGE_MODE must be local or supabase')
+        if chart_storage_mode not in {'existing', 'r2'}:
+            raise ConfigError('CHART_STORAGE_MODE must be existing or r2')
 
         database_url = env.get('DATABASE_URL', '').strip()
         if database_mode == 'postgres' and not database_url:
@@ -69,6 +77,23 @@ class Settings:
                 raise ConfigError('SUPABASE_URL is required when AUTH_MODE=supabase')
             if not allowed_user_id:
                 raise ConfigError('ALLOWED_USER_ID is required when AUTH_MODE=supabase')
+
+        r2_bucket = env.get('R2_BUCKET', '').strip()
+        r2_endpoint_url = env.get('R2_ENDPOINT_URL', '').strip().rstrip('/')
+        r2_access_key_id = env.get('R2_ACCESS_KEY_ID', '').strip()
+        r2_secret_access_key = env.get('R2_SECRET_ACCESS_KEY', '').strip()
+        if chart_storage_mode == 'r2':
+            required_r2 = {
+                'R2_BUCKET': r2_bucket,
+                'R2_ENDPOINT_URL': r2_endpoint_url,
+                'R2_ACCESS_KEY_ID': r2_access_key_id,
+                'R2_SECRET_ACCESS_KEY': r2_secret_access_key,
+            }
+            missing = [name for name, value in required_r2.items() if not value]
+            if missing:
+                raise ConfigError(
+                    'Missing R2 configuration when CHART_STORAGE_MODE=r2: ' + ', '.join(missing)
+                )
 
         return cls(
             app_env=app_env,
@@ -84,6 +109,11 @@ class Settings:
             upload_dir=env.get('UPLOAD_DIR', 'uploads').strip() or 'uploads',
             supabase_secret_key=(env.get('SUPABASE_SECRET_KEY', '') or env.get('SUPABASE_SERVICE_ROLE_KEY', '')).strip(),
             supabase_storage_bucket=env.get('SUPABASE_STORAGE_BUCKET', 'diary').strip() or 'diary',
+            chart_storage_mode=chart_storage_mode,
+            r2_bucket=r2_bucket,
+            r2_endpoint_url=r2_endpoint_url,
+            r2_access_key_id=r2_access_key_id,
+            r2_secret_access_key=r2_secret_access_key,
             max_diary_upload_bytes=_positive_int(
                 env.get('MAX_DIARY_UPLOAD_BYTES', str(10 * 1024 * 1024)),
                 'MAX_DIARY_UPLOAD_BYTES',

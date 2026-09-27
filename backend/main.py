@@ -23,7 +23,7 @@ import httpx
 from database import (init_db, get_db, row_to_dict, insert_and_get_id,
                       year_filter_clause, is_integrity_error)
 from auth import AuthError, authorize_header, auth_required, validate_auth_config
-from storage import DiaryStorage
+from storage import DiaryStorage, ChartStorage
 from csv_parser import parse_broker_csv, detect_broker, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 SETTINGS = Settings.from_env()
 UPLOAD_DIR = SETTINGS.upload_dir
 DIARY_STORAGE = DiaryStorage(SETTINGS)
+CHART_STORAGE = ChartStorage(SETTINGS, DIARY_STORAGE)
 
 
 @asynccontextmanager
@@ -1222,7 +1223,7 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
 
     if screenshot_path:
         try:
-            DIARY_STORAGE.delete(screenshot_path)
+            CHART_STORAGE.delete(screenshot_path)
         except Exception:
             logger.warning("Could not remove trade screenshot %s", screenshot_path, exc_info=True)
     conn.commit()
@@ -1300,7 +1301,7 @@ async def upload_trade_chart_screenshot(
 
     object_name = _trade_screenshot_object_name(trade_group, ext)
     content_type = file.content_type or "application/octet-stream"
-    DIARY_STORAGE.save(object_name, raw, content_type)
+    CHART_STORAGE.save(object_name, raw, content_type)
 
     conn.execute(
         "UPDATE trade_analysis SET chart_screenshot_path=? WHERE trade_group=?",
@@ -1310,7 +1311,7 @@ async def upload_trade_chart_screenshot(
 
     if old_path and old_path != object_name:
         try:
-            DIARY_STORAGE.delete(old_path)
+            CHART_STORAGE.delete(old_path)
         except Exception:
             logger.warning("Could not remove replaced trade screenshot %s", old_path, exc_info=True)
 
@@ -1329,7 +1330,7 @@ def get_trade_chart_screenshot(
     path = row["chart_screenshot_path"] if row else None
     if not path:
         raise HTTPException(status_code=404, detail="No chart screenshot saved for this trade.")
-    data, content_type = DIARY_STORAGE.read(path)
+    data, content_type = CHART_STORAGE.read(path)
     return Response(content=data, media_type=content_type)
 
 
@@ -1346,7 +1347,7 @@ def delete_trade_chart_screenshot(
     if not path:
         return {"deleted": False}
 
-    DIARY_STORAGE.delete(path)
+    CHART_STORAGE.delete(path)
     conn.execute(
         "UPDATE trade_analysis SET chart_screenshot_path=NULL WHERE trade_group=?",
         (trade_group,),
