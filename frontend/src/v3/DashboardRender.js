@@ -444,7 +444,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             </p>
             {earlyFailurePattern ? (
               <>
-                <p className="neutral"><span>→</span> Loser median heat is -{loserMedianMae.toFixed(1)}% vs. -{winnerMedianMae.toFixed(1)}% for winners; {loserMfeLe5Pct.toFixed(0)}% of losers never reach +5% MFE.</p>
+                <p className="neutral"><span>→</span> Typical winner: +{winnerMedianMfe.toFixed(1)}% MFE / -{winnerMedianMae.toFixed(1)}% MAE. Typical loser: +{loserMedianMfe.toFixed(1)}% MFE / -{loserMedianMae.toFixed(1)}% MAE.</p>
+                <p className="neutral"><span>→</span> {loserMfeLe5Pct.toFixed(0)}% of losers never reach +5% MFE, {loserMfeLe10Pct.toFixed(0)}% never reach +10%, and {loserMaeGe25Pct.toFixed(0)}% reach at least -25% MAE.</p>
                 <p className="caution"><span>→</span> Test a setup-specific early-failure rule when a trade cannot make +5% favorable progress and adverse excursion starts expanding. {winnersBeyond20Pct != null ? winnersBeyond20Pct.toFixed(0) + '% of winners exceeded -20% MAE, so avoid a blanket -20% stop.' : 'Avoid using one universal stop across every setup.'}</p>
               </>
             ) : (
