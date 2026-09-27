@@ -185,6 +185,10 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
     <span className="v3-ref-help" title={label} aria-label={label}>?</span>
   );
 
+  const oneDecimal = (value) => (
+    Math.round((Number(value) + Number.EPSILON) * 10) / 10
+  ).toFixed(1);
+
   const captureState = !captureUsable
     ? { tone: 'neutral', label: captureN ? 'LOW COVERAGE' : 'NEED DATA' }
     : captureConfidence === 'DEVELOPING'
@@ -253,8 +257,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
     }
 
     if (riskUsable && excursionConfidence === 'RELIABLE' && earlyFailurePattern) {
-      const loserHeat = loserMedianMae.toFixed(1);
-      const winnerHeat = winnerMedianMae.toFixed(1);
+      const loserHeat = oneDecimal(loserMedianMae);
+      const winnerHeat = oneDecimal(winnerMedianMae);
       const weakLosers = loserMfeLe5Pct.toFixed(0);
       const winnerRoom = winnersBeyond20Pct == null ? null : winnersBeyond20Pct.toFixed(0);
       return csvSentence + ' The clearest improvement candidate is entry quality / early invalidation: losers reach a median -' + loserHeat + '% MAE versus -' + winnerHeat + '% for winners, and ' + weakLosers + '% of losers never achieve +5% MFE.'
@@ -444,7 +448,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             </p>
             {earlyFailurePattern ? (
               <>
-                <p className="neutral"><span>→</span> Typical winner: +{winnerMedianMfe.toFixed(1)}% MFE / -{winnerMedianMae.toFixed(1)}% MAE. Typical loser: +{loserMedianMfe.toFixed(1)}% MFE / -{loserMedianMae.toFixed(1)}% MAE.</p>
+                <p className="neutral"><span>→</span> Typical winner: +{oneDecimal(winnerMedianMfe)}% MFE / -{oneDecimal(winnerMedianMae)}% MAE. Typical loser: +{oneDecimal(loserMedianMfe)}% MFE / -{oneDecimal(loserMedianMae)}% MAE.</p>
                 <p className="neutral"><span>→</span> {loserMfeLe5Pct.toFixed(0)}% of losers never reach +5% MFE, {loserMfeLe10Pct.toFixed(0)}% never reach +10%, and {loserMaeGe25Pct.toFixed(0)}% reach at least -25% MAE.</p>
                 <p className="caution"><span>→</span> Test a setup-specific early-failure rule when a trade cannot make +5% favorable progress and adverse excursion starts expanding. {winnersBeyond20Pct != null ? winnersBeyond20Pct.toFixed(0) + '% of winners exceeded -20% MAE, so avoid a blanket -20% stop.' : 'Avoid using one universal stop across every setup.'}</p>
               </>
