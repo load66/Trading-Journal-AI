@@ -237,7 +237,7 @@ export default function LERiskPlanner({ accountId }) {
           <span className="le-risk-icon"><Calculator size={16} /></span>
           <div>
             <h3 id="le-risk-title">LE Daily Risk Plan</h3>
-            <p>Enter capital once · your LE risk limits update instantly.</p>
+            <p>Set capital. Know your limits. Trade the plan.</p>
           </div>
         </div>
         <span className={`le-risk-save ${saveState}`} aria-live="polite">
@@ -256,7 +256,7 @@ export default function LERiskPlanner({ accountId }) {
       </div>
 
       <label className="le-risk-capital">
-        <span>Current trading capital</span>
+        <span>Trading capital</span>
         <div className="le-risk-money-input">
           <b>$</b>
           <input
@@ -273,22 +273,22 @@ export default function LERiskPlanner({ accountId }) {
 
       <div className="le-risk-rule-grid" aria-label="LE capital limits">
         <div>
-          <span>Premium exposure</span>
+          <span>Premium cap</span>
           <strong>{calc.hasCapital ? `${money(calc.exposureLow)}–${money(calc.exposureHigh)}` : '20–30%'}</strong>
           <small>20–30% of capital</small>
         </div>
         <div>
-          <span>Max actual loss</span>
+          <span>Max loss</span>
           <strong className="neg">{calc.hasCapital ? money(calc.maxLoss) : '5%'}</strong>
-          <small>hard loss cap</small>
+          <small>5% hard cap</small>
         </div>
         <div>
-          <span>Min first target</span>
+          <span>Min target</span>
           <strong className="pos">{calc.hasCapital ? money(calc.minTarget) : '10%'}</strong>
-          <small>≥ 10% of capital</small>
+          <small>10% minimum</small>
         </div>
         <div>
-          <span>Minimum R:R</span>
+          <span>Min R:R</span>
           <strong>2:1</strong>
           <small>reward ≥ 2× risk</small>
         </div>
