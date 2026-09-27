@@ -1206,15 +1206,52 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
                'instrument_type', 'option_expiry', 'option_strike', 'option_type'}
     updates = {k: v for k, v in data.items() if k in allowed}
 
+    executions = canonical_parse_executions(trade)
+    protected_math = {"gross_pnl", "net_pnl", "commissions"} & set(updates)
+    if executions and protected_math:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "P&L and commissions are derived from broker executions. "
+                "Edit the executions instead of overriding calculated totals."
+            ),
+        )
+
     if trade.get('source') == 'imported':
         updates['source'] = 'edited'
 
     if updates:
+        old_date = trade.get("date")
+        new_date = updates.get("date", old_date)
+        invalidate_excursion = bool(
+            set(updates)
+            & {
+                "ticker", "side", "gross_pnl", "net_pnl", "commissions", "date",
+                "instrument_type", "option_expiry", "option_strike", "option_type",
+            }
+        )
+        if invalidate_excursion:
+            updates.update({
+                "mfe_pct": None,
+                "mae_pct": None,
+                "exit_efficiency": None,
+                "excursion_basis": None,
+                "excursion_calculated_at": None,
+                "excursion_version": None,
+            })
+
         set_clause = ', '.join(f"{k}=?" for k in updates)
         conn.execute(
             f"UPDATE trades SET {set_clause} WHERE id=?",
             list(updates.values()) + [trade_id]
         )
+
+        for stale_date in {old_date, new_date}:
+            if stale_date:
+                conn.execute(
+                    "DELETE FROM daily_summaries WHERE summary_date=? AND account_id=?",
+                    (stale_date, trade.get("account_id")),
+                )
         conn.commit()
 
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
@@ -1572,6 +1609,11 @@ def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.
             list(updates.values()) + [trade_group]
         )
 
+    # Day Review caches include risk/process fields from trade_analysis.
+    conn.execute(
+        "DELETE FROM daily_summaries WHERE summary_date=?",
+        (trade["date"],),
+    )
     conn.commit()
     row = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
     return row_to_dict(row) if row else {}
