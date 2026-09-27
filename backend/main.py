@@ -946,7 +946,7 @@ def list_trades(
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     sql = """
-        SELECT t.*, ta.strategy, ta.stop_loss, ta.risk_per_trade, ta.r_multiple,
+        SELECT t.*, ta.strategy, ta.stop_loss, ta.target_price, ta.risk_per_trade, ta.r_multiple,
                ta.match_confidence, ta.emotional_state, ta.idea_source, ta.chart_screenshot_path,
                ta.entry_reason, ta.exit_reason, ta.ai_feedback, ta.mistakes, ta.notes as analysis_notes
         FROM trades t
