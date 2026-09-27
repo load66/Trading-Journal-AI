@@ -153,12 +153,18 @@ function ExitQuality({ trade }) {
   );
 }
 
-export default function TradeRow({ trade, openTime, onOpenDetail, onSetRisk, customSetups = [], onCustomSetupsChanged }) {
+export default function TradeRow({ trade, openTime, onOpenDetail, customSetups = [], onCustomSetupsChanged }) {
   const pnl = trade.net_pnl ?? 0;
   const pnlTone = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
   const side = (trade.side || '').toUpperCase();
   const realizedR = trade.realized_r != null ? Number(trade.realized_r)
     : trade.r_multiple != null ? Number(trade.r_multiple)
+      : null;
+  const stopDistance = Number(trade.stop_loss);
+  const targetDistance = Number(trade.target_price);
+  const plannedRR = Number.isFinite(stopDistance) && stopDistance > 0
+    && Number.isFinite(targetDistance) && targetDistance > 0
+      ? targetDistance / stopDistance
       : null;
 
   const handleOpen = () => { if (onOpenDetail) onOpenDetail(trade); };
@@ -316,24 +322,21 @@ export default function TradeRow({ trade, openTime, onOpenDetail, onSetRisk, cus
       <td className="trade-exit-col"><ExitQuality trade={trade} /></td>
 
       <td className="trade-r-cell">
-        {realizedR != null && Number.isFinite(realizedR) ? (
-          <span className={`num ${realizedR > 0 ? 'pos' : realizedR < 0 ? 'neg' : 'text-muted'}`}>
-            {realizedR > 0 ? '+' : ''}{realizedR.toFixed(2)}R
+        <div
+          className="trade-r-status"
+          title={plannedRR != null
+            ? `Planned R:R from ${stopDistance.toFixed(2)} stop distance and ${targetDistance.toFixed(2)} target distance.`
+            : 'Planned R:R has not been set yet.'}
+        >
+          <span className={`num ${plannedRR != null ? 'trade-r-planned' : 'trade-r-missing'}`}>
+            {plannedRR != null ? `1:${plannedRR.toFixed(2)}` : 'Not Set'}
           </span>
-        ) : (
-          <button
-            type="button"
-            className="trade-r-missing trade-r-action"
-            title="Set stop and target distance to define the trade's planned R:R."
-            onClick={(event) => {
-              event.stopPropagation();
-              if (onSetRisk) onSetRisk(trade);
-              else handleOpen();
-            }}
-          >
-            Set R:R
-          </button>
-        )}
+          {realizedR != null && Number.isFinite(realizedR) && (
+            <small className={realizedR > 0 ? 'pos' : realizedR < 0 ? 'neg' : 'text-muted'}>
+              {realizedR > 0 ? '+' : ''}{realizedR.toFixed(2)}R realized
+            </small>
+          )}
+        </div>
       </td>
 
       <td className="trade-open-cell">
