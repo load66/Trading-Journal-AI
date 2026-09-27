@@ -11,7 +11,7 @@ excursion remains market-context rather than contract-premium excursion.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -100,6 +100,105 @@ def _bar_for_minute(bars: list[dict], dt: datetime) -> dict | None:
         if bd and bd.replace(second=0, microsecond=0) == minute:
             return b
     return None
+
+
+def _execution_path_efficiency(trade: dict, bars: list[dict]) -> tuple[float | None, float, float]:
+    """Capture efficiency from broker executions plus the in-trade market path.
+
+    Broker fills define every cash flow and position-size change. Market bars
+    only mark the quantity that remained open between fills. This supports
+    scale-ins and partial exits without replacing any broker execution.
+
+    To avoid impossible look-ahead inside a one-minute bar, full bar high/low
+    is used only when no execution occurred during that minute. In a minute
+    containing fills, actual fill prices plus the bar close are used.
+    """
+    executions = sorted(
+        [e for e in _execs(trade) if _exec_dt(e)],
+        key=_exec_dt,
+    )
+    if not executions:
+        return None, 0.0, 0.0
+
+    cashflow = 0.0
+    signed_qty = 0.0
+    max_pnl = 0.0
+    min_pnl = 0.0
+    idx = 0
+
+    def mark(price: float | None):
+        nonlocal max_pnl, min_pnl
+        if price is None or price <= 0:
+            return
+        pnl = cashflow + signed_qty * float(price)
+        max_pnl = max(max_pnl, pnl)
+        min_pnl = min(min_pnl, pnl)
+
+    def apply_execution(execution: dict):
+        nonlocal cashflow, signed_qty
+        qty = float(execution.get("qty") or 0)
+        price = float(execution.get("price") or 0)
+        action = str(execution.get("action") or "").upper()
+        if qty <= 0 or price <= 0:
+            return
+        if action == "BOT":
+            cashflow -= qty * price
+            signed_qty += qty
+        elif action == "SOLD":
+            cashflow += qty * price
+            signed_qty -= qty
+        mark(price)
+
+    ordered_bars = sorted(
+        [b for b in bars or [] if _bar_dt(b)],
+        key=_bar_dt,
+    )
+
+    for bar in ordered_bars:
+        bar_start = _bar_dt(bar)
+        bar_end = bar_start + timedelta(minutes=1)
+
+        while idx < len(executions) and _exec_dt(executions[idx]) < bar_start:
+            apply_execution(executions[idx])
+            idx += 1
+
+        minute_execs = []
+        probe = idx
+        while probe < len(executions) and _exec_dt(executions[probe]) < bar_end:
+            minute_execs.append(executions[probe])
+            probe += 1
+
+        if signed_qty != 0 and not minute_execs:
+            high = float(bar.get("h") or 0)
+            low = float(bar.get("l") or 0)
+            if signed_qty > 0:
+                mark(high)
+                mark(low)
+            else:
+                mark(low)
+                mark(high)
+
+        for execution in minute_execs:
+            apply_execution(execution)
+            idx += 1
+
+        if signed_qty != 0 and minute_execs:
+            mark(float(bar.get("c") or 0))
+
+    while idx < len(executions):
+        apply_execution(executions[idx])
+        idx += 1
+
+    realized_pnl = cashflow
+    max_pnl = max(max_pnl, realized_pnl)
+    min_pnl = min(min_pnl, realized_pnl)
+
+    net_pnl = float(trade.get("net_pnl") or 0)
+    efficiency = None
+    if net_pnl > 0 and realized_pnl > 0 and max_pnl > 1e-12:
+        efficiency = max(0.0, min(100.0, realized_pnl / max_pnl * 100))
+
+    return efficiency, max_pnl, min_pnl
 
 
 def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str | None = None) -> dict:
@@ -191,8 +290,10 @@ def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str |
         captured_pct = (entry_ref - exit_ref) / entry_ref * 100
 
     efficiency = None
-    if mfe_pct > 1e-12 and captured_pct >= 0:
-        efficiency = max(0.0, min(100.0, captured_pct / mfe_pct * 100))
+    path_max_pnl = None
+    path_min_pnl = None
+    if actual_instrument_path:
+        efficiency, path_max_pnl, path_min_pnl = _execution_path_efficiency(trade, held)
 
     notes = {
         "stock_1m": "Stock excursion uses Alpaca 1-minute stock bars with actual Schwab fills as entry/exit anchors.",
@@ -207,6 +308,8 @@ def calculate_trade_excursion(trade: dict, bars: list[dict], *, bar_basis: str |
         "mae_pct": round(mae_pct, 4),
         "exit_efficiency": round(efficiency, 2) if efficiency is not None else None,
         "captured_directional_pct": round(captured_pct, 4),
+        "path_max_pnl_per_unit": round(path_max_pnl, 6) if path_max_pnl is not None else None,
+        "path_min_pnl_per_unit": round(path_min_pnl, 6) if path_min_pnl is not None else None,
         "entry_reference": round(entry_ref, 6),
         "exit_reference": round(exit_ref, 6),
         "favorable_price": round(favorable_price, 6),
