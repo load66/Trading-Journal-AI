@@ -90,6 +90,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
   const kpiRun = useRef(0);
   const recentRun = useRef(0);
   const managementRun = useRef(0);
+  const managementBackfillKey = useRef(null);
   const smokingGunRun = useRef(0);
 
   useEffect(() => {
@@ -176,17 +177,27 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
     });
 
     if (params.date_from && params.date_to) {
-      excursionApi.calculateRange(params)
-        .then(() => loadManagement())
-        .then(([nextKpis, nextEdge]) => {
-          if (!current()) return;
-          setManagementKpis(nextKpis);
-          setManagementEdge(nextEdge);
-        })
-        .catch(() => {
-          // CSV-first management metrics remain valid even if supplemental
-          // market-path data is unavailable.
-        });
+      const backfillKey = [
+        accountId == null ? 'all' : accountId,
+        params.date_from,
+        params.date_to,
+        reloadKey,
+      ].join('|');
+
+      if (managementBackfillKey.current !== backfillKey) {
+        managementBackfillKey.current = backfillKey;
+        excursionApi.calculateRange(params)
+          .then(() => loadManagement())
+          .then(([nextKpis, nextEdge]) => {
+            if (!current()) return;
+            setManagementKpis(nextKpis);
+            setManagementEdge(nextEdge);
+          })
+          .catch(() => {
+            // CSV-first management metrics remain valid even if supplemental
+            // market-path data is unavailable.
+          });
+      }
     }
   }, [accountId, managementRange, recentTrades, kpis, reloadKey]);
 
