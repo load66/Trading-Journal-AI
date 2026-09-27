@@ -2461,18 +2461,7 @@ async def _fetch_alpaca_option_bars(symbols: list[str], date: str) -> dict[str, 
 
 
 def _excursion_is_stale(trade: dict) -> bool:
-    inst = str(trade.get("instrument_type") or "STOCK").upper()
-    expected = {
-        "STOCK": "stock_1m",
-        "OPTION": "option_premium_1m",
-        "FUTURE": "proxy_1m",
-    }.get(inst)
-    return (
-        trade.get("mfe_pct") is None
-        or trade.get("mae_pct") is None
-        or not expected
-        or str(trade.get("excursion_basis") or "") != expected
-    )
+    return not excursion_metrics_are_current(trade)
 
 
 async def _calculate_excursions_for_date(
@@ -2484,7 +2473,7 @@ async def _calculate_excursions_for_date(
     sql = """
         SELECT id, account_id, trade_group, date, ticker, instrument_type, side,
                net_pnl, executions, option_type, option_expiry, option_strike,
-               mfe_pct, mae_pct, exit_efficiency, excursion_basis
+               mfe_pct, mae_pct, exit_efficiency, excursion_basis, excursion_version
         FROM trades
         WHERE date = ?
     """
@@ -2495,7 +2484,8 @@ async def _calculate_excursions_for_date(
     sql += " ORDER BY id"
 
     all_rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
-    rows = all_rows if force else [t for t in all_rows if _excursion_is_stale(t)]
+    closed_rows = [t for t in all_rows if trade_is_closed(t)]
+    rows = closed_rows if force else [t for t in closed_rows if _excursion_is_stale(t)]
     if not rows:
         return {"date": date, "computed": 0, "skipped": 0, "already_complete": True}
 
@@ -2547,7 +2537,7 @@ async def _calculate_excursions_for_date(
             conn.execute(
                 """UPDATE trades
                    SET mfe_pct=?, mae_pct=?, exit_efficiency=?,
-                       excursion_basis=?, excursion_calculated_at=?
+                       excursion_basis=?, excursion_calculated_at=?, excursion_version=?
                    WHERE id=?""",
                 (
                     metric["mfe_pct"],
@@ -2555,6 +2545,7 @@ async def _calculate_excursions_for_date(
                     metric["exit_efficiency"],
                     metric["basis"],
                     calculated_at,
+                    EXCURSION_ENGINE_VERSION,
                     trade["id"],
                 ),
             )
@@ -2591,7 +2582,7 @@ async def _calculate_excursions_for_date(
             conn.execute(
                 """UPDATE trades
                    SET mfe_pct=?, mae_pct=?, exit_efficiency=?,
-                       excursion_basis=?, excursion_calculated_at=?
+                       excursion_basis=?, excursion_calculated_at=?, excursion_version=?
                    WHERE id=?""",
                 (
                     metric["mfe_pct"],
@@ -2599,6 +2590,7 @@ async def _calculate_excursions_for_date(
                     metric["exit_efficiency"],
                     metric["basis"],
                     calculated_at,
+                    EXCURSION_ENGINE_VERSION,
                     trade["id"],
                 ),
             )
@@ -2618,10 +2610,11 @@ async def _calculate_excursions_for_date(
         "computed": computed,
         "skipped": len(skipped),
         "details": skipped[:25],
-        "method": "Alpaca 1-minute market path with broker-fill anchors",
+        "method": "Execution-flow net P&L excursion on 1-minute actual-instrument bars",
         "option_basis": "actual option premium",
         "stock_basis": "actual stock price",
-        "future_basis": "configured ETF proxy",
+        "future_basis": "configured ETF proxy (context only)",
+        "engine_version": EXCURSION_ENGINE_VERSION,
     }
 
 
