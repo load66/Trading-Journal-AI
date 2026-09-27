@@ -206,7 +206,7 @@ function JournalApp({ onSignOut }) {
         )}
         {page === 'reports' && <Reports accountId={selectedAccountId} initialTab={reportsInitialTab} />}
         {page === 'help' && <Help />}
-        {page === 'settings' && <Settings />}
+        {page === 'settings' && <Settings accounts={accounts} onAccountsChanged={loadAccounts} />}
       </main>
 
       <Brain accountId={selectedAccountId} open={brainOpen} onOpenChange={setBrainOpen} />
