@@ -3318,13 +3318,14 @@ def get_edge_report(
     if date_to:
         sql += " AND t.date <= ?"
         params.append(date_to)
-    sql += " ORDER BY t.date"
+    sql += " ORDER BY t.date, t.id"
 
-    rows = conn.execute(sql, params).fetchall()
-    trades = canonical_completed_trades([row_to_dict(r) for r in rows])
+    trades = canonical_completed_trades(
+        [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    )
     completed_groups = {str(t.get("trade_group") or "") for t in trades}
 
-    # Mistake frequency from trade_tags, restricted to the same completed cohort.
+    # Mistake frequency uses the exact same completed-trade cohort.
     tag_sql = """
         SELECT tt.trade_group, tt.tag_value
         FROM trade_tags tt
@@ -3350,99 +3351,107 @@ def get_edge_report(
         if value:
             mistake_counts[value] = mistake_counts.get(value, 0) + 1
 
-    # Also mine free-text mistakes field
+    for trade in trades:
+        text_value = str(trade.get("mistakes") or "").strip()
+        if not text_value:
+            continue
+        parts = [
+            p.strip()
+            for p in text_value.replace("\n", ",").replace(";", ",").split(",")
+            if p.strip()
+        ]
+        for part in parts:
+            key = part[:60]
+            mistake_counts[key] = mistake_counts.get(key, 0) + 1
+
+    mistake_freq = sorted(
+        [{"mistake": k, "count": v} for k, v in mistake_counts.items()],
+        key=lambda x: (-x["count"], x["mistake"].lower()),
+    )[:8]
+
+    # Schwab/TOS broker clock is Central Time. Keep outside-RTH trades explicit.
+    BUCKETS = ["Pre-market"]
+    t_min = 8 * 60 + 30
+    while t_min < 15 * 60:
+        h, m = divmod(t_min, 60)
+        BUCKETS.append(f"{h:02d}:{m:02d}")
+        t_min += 30
+    BUCKETS.append("After-hours")
+    bucket_pnl = {b: 0.0 for b in BUCKETS}
+    bucket_counts = {b: 0 for b in BUCKETS}
+
+    DOW_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    DOW_NAMES = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri"}
+    dow_pnl = {d: 0.0 for d in DOW_ORDER}
+    dow_counts = {d: 0 for d in DOW_ORDER}
+
+    winner_hold: list[float] = []
+    loser_hold: list[float] = []
+
+    r_bucket_counts = {round(i * 0.5, 1): 0 for i in range(-7, 8)}
+    EMOTIONS = ["calm", "anxious", "overconfident", "disciplined", "frustrated", "revenge"]
+    emo_data = {
+        e: {"count": 0, "wins": 0, "total_pnl": 0.0, "r_vals": []}
+        for e in EMOTIONS
+    }
+
     for trade in trades:
         pnl = float(trade.get("net_pnl") or 0.0)
-        date_str = trade.get("date", "")
+        date_str = str(trade.get("date") or "")
 
-        # Time-of-day bucket from the first broker entry execution (CT).
         entry_mins = canonical_first_entry_clock_minutes(trade)
         if entry_mins is not None:
             if entry_mins < 8 * 60 + 30:
-                bkey = "Pre-market"
+                bucket = "Pre-market"
             elif entry_mins >= 15 * 60:
-                bkey = "After-hours"
+                bucket = "After-hours"
             else:
                 floor = int((entry_mins - (8 * 60 + 30)) // 30) * 30 + 8 * 60 + 30
                 bh, bm = divmod(floor, 60)
-                bkey = f"{bh:02d}:{bm:02d}"
-            if bkey in bucket_pnl:
-                bucket_pnl[bkey] += pnl
-                bucket_counts[bkey] += 1
+                bucket = f"{bh:02d}:{bm:02d}"
+            bucket_pnl[bucket] += pnl
+            bucket_counts[bucket] += 1
 
-        # Day of week.
-        if date_str:
-            try:
-                d = datetime.strptime(date_str, "%Y-%m-%d")
-                dow = d.weekday()
-                if dow in DOW_NAMES:
-                    day_name = DOW_NAMES[dow]
-                    dow_pnl[day_name] += pnl
-                    dow_counts[day_name] += 1
-            except Exception:
-                pass
+        try:
+            dow = datetime.strptime(date_str, "%Y-%m-%d").weekday()
+        except Exception:
+            dow = None
+        if dow in DOW_NAMES:
+            name = DOW_NAMES[dow]
+            dow_pnl[name] += pnl
+            dow_counts[name] += 1
 
-        # Hold time uses canonical timestamps and therefore handles seconds,
-        # cross-day trades, and DST correctly when broker provenance exists.
         hold_sec = canonical_hold_seconds(trade)
         if hold_sec is not None:
-            hold = hold_sec / 60
+            hold_min = hold_sec / 60.0
             if pnl > 0:
-                winner_hold.append(hold)
+                winner_hold.append(hold_min)
             elif pnl < 0:
-                loser_hold.append(hold)
+                loser_hold.append(hold_min)
 
-        # Canonical R: explicit planned risk wins over any legacy stored value.
-        r = canonical_realized_r(
+        r_value = canonical_realized_r(
             trade,
             risk_per_trade=trade.get("risk_per_trade"),
             stored_r_multiple=trade.get("r_multiple"),
         )
-        if r is not None:
-            r_clipped = max(-3.5, min(3.5, float(r)))
-            bucket_key = round(round(r_clipped * 2) / 2, 1)
-            if bucket_key in r_bucket_counts:
-                r_bucket_counts[bucket_key] += 1
-            else:
-                closest = min(r_bucket_counts.keys(), key=lambda x: abs(x - bucket_key))
-                r_bucket_counts[closest] += 1
+        if r_value is not None:
+            clipped = max(-3.5, min(3.5, float(r_value)))
+            bucket_key = round(round(clipped * 2) / 2, 1)
+            if bucket_key not in r_bucket_counts:
+                bucket_key = min(r_bucket_counts, key=lambda x: abs(x - bucket_key))
+            r_bucket_counts[bucket_key] += 1
 
-        # Emotion outcomes
-        emo = (trade.get("emotional_state") or "").lower().strip()
-        if emo in emo_data:
-            emo_data[emo]["count"] += 1
-            emo_data[emo]["total_pnl"] += pnl
+        emotion = str(trade.get("emotional_state") or "").lower().strip()
+        if emotion in emo_data:
+            row = emo_data[emotion]
+            row["count"] += 1
+            row["total_pnl"] += pnl
             if pnl > 0:
-                emo_data[emo]["wins"] += 1
-            if r is not None:
-                emo_data[emo]["r_vals"].append(float(r))
+                row["wins"] += 1
+            if r_value is not None:
+                row["r_vals"].append(float(r_value))
 
-    time_of_day = [
-        {"bucket": b, "net_pnl": round(bucket_pnl[b], 2), "trade_count": bucket_counts[b]}
-        for b in BUCKETS
-    ]
-    day_of_week = [
-        {"day": day, "net_pnl": round(dow_pnl[day], 2), "trade_count": dow_counts[day]}
-        for day in DOW_ORDER
-    ]
-    r_multiple_dist = [
-        {"bucket": str(k), "count": v}
-        for k, v in sorted(r_bucket_counts.items())
-    ]
-    emotion_outcomes = []
-    for emo in EMOTIONS:
-        d = emo_data[emo]
-        if d["count"] == 0:
-            continue
-        r_vals = d["r_vals"]
-        emotion_outcomes.append({
-            "state": emo,
-            "trade_count": d["count"],
-            "win_rate": round(d["wins"] / d["count"] * 100, 1),
-            "avg_pnl": round(d["total_pnl"] / d["count"], 2),
-            "avg_r": round(sum(r_vals) / len(r_vals), 2) if r_vals else None,
-        })
-    def median_minutes(values):
+    def _median_minutes(values):
         if not values:
             return None
         ordered = sorted(values)
@@ -3450,34 +3459,53 @@ def get_edge_report(
         value = ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2
         return round(value, 1)
 
+    directional_n = sum(1 for t in trades if float(t.get("net_pnl") or 0) != 0)
     hold_n = len(winner_hold) + len(loser_hold)
-    directional_n = sum(1 for trade in trades if float(trade.get("net_pnl") or 0) != 0)
-    hold_time = {
-        "winners_avg_min": round(sum(winner_hold) / len(winner_hold), 1) if winner_hold else None,
-        "losers_avg_min": round(sum(loser_hold) / len(loser_hold), 1) if loser_hold else None,
-        "winners_median_min": median_minutes(winner_hold),
-        "losers_median_min": median_minutes(loser_hold),
-        "winner_count": len(winner_hold),
-        "loser_count": len(loser_hold),
-        "sample_count": hold_n,
-        "coverage_pct": round(hold_n / directional_n * 100, 1) if directional_n else 0.0,
-        "eligible_count": directional_n,
-        "source": "broker_csv_executions",
-    }
-
-    # Expectancy is mean realized net P&L per completed trade.
-    total_er = len(trades)
-    er_expectancy = canonical_expectancy(trades)
 
     return {
-        "time_of_day": time_of_day,
-        "day_of_week": day_of_week,
-        "r_multiple_dist": r_multiple_dist,
-        "emotion_outcomes": emotion_outcomes,
-        "hold_time": hold_time,
+        "time_of_day": [
+            {"bucket": b, "net_pnl": round(bucket_pnl[b], 2), "trade_count": bucket_counts[b]}
+            for b in BUCKETS
+        ],
+        "day_of_week": [
+            {"day": d, "net_pnl": round(dow_pnl[d], 2), "trade_count": dow_counts[d]}
+            for d in DOW_ORDER
+        ],
+        "r_multiple_dist": [
+            {"bucket": str(k), "count": v}
+            for k, v in sorted(r_bucket_counts.items())
+        ],
+        "emotion_outcomes": [
+            {
+                "state": emotion,
+                "trade_count": data["count"],
+                "win_rate": round(data["wins"] / data["count"] * 100, 1),
+                "avg_pnl": round(data["total_pnl"] / data["count"], 2),
+                "avg_r": (
+                    round(sum(data["r_vals"]) / len(data["r_vals"]), 2)
+                    if data["r_vals"] else None
+                ),
+            }
+            for emotion, data in emo_data.items()
+            if data["count"] > 0
+        ],
+        "hold_time": {
+            "winners_avg_min": round(sum(winner_hold) / len(winner_hold), 1) if winner_hold else None,
+            "losers_avg_min": round(sum(loser_hold) / len(loser_hold), 1) if loser_hold else None,
+            "winners_median_min": _median_minutes(winner_hold),
+            "losers_median_min": _median_minutes(loser_hold),
+            "winner_count": len(winner_hold),
+            "loser_count": len(loser_hold),
+            "sample_count": hold_n,
+            "eligible_count": directional_n,
+            "coverage_pct": round(hold_n / directional_n * 100, 1) if directional_n else 0.0,
+            "source": "broker_csv_executions",
+            "timezone": "America/Chicago",
+        },
         "mistake_frequency": mistake_freq,
-        "expectancy": er_expectancy,
-        "total_trades": total_er,
+        "expectancy": canonical_expectancy(trades),
+        "total_trades": len(trades),
+        "source": "completed_broker_trade_ledger",
     }
 
 
