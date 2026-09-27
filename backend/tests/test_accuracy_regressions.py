@@ -711,6 +711,12 @@ def test_excursion_kpis_expose_medians_to_detect_outlier_skew(monkeypatch, tmp_p
                     mfe, mae, 70.0, "option_premium_1m",
                 ),
             )
+        conn.execute(
+            """UPDATE trades
+               SET excursion_version=?, excursion_calculated_at=?
+               WHERE account_id=?""",
+            (main.EXCURSION_ENGINE_VERSION, "2026-09-27T12:00:00Z", account_id),
+        )
         conn.commit()
 
         result = main._excursion_kpis(conn, account_id=account_id)
@@ -758,6 +764,12 @@ def test_excursion_kpis_expose_winner_loser_actionable_separation(monkeypatch, t
                     mfe, mae, 70.0 if pnl > 0 else None, "option_premium_1m",
                 ),
             )
+        conn.execute(
+            """UPDATE trades
+               SET excursion_version=?, excursion_calculated_at=?
+               WHERE account_id=?""",
+            (main.EXCURSION_ENGINE_VERSION, "2026-09-27T12:00:00Z", account_id),
+        )
         conn.commit()
 
         result = main._excursion_kpis(conn, account_id=account_id)
@@ -799,6 +811,12 @@ def test_excursion_confidence_requires_multiple_days(monkeypatch, tmp_path):
                     10.0, 3.0, 70.0, "option_premium_1m",
                 ),
             )
+        conn.execute(
+            """UPDATE trades
+               SET excursion_version=?, excursion_calculated_at=?
+               WHERE account_id=?""",
+            (main.EXCURSION_ENGINE_VERSION, "2026-09-27T12:00:00Z", account_id),
+        )
         conn.commit()
 
         one_day = main._excursion_kpis(conn, account_id=account_id)
