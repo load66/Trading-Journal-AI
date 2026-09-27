@@ -1162,7 +1162,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     && analysis?.r_multiple == null;
   const realizedRValue = analysis?.r_multiple != null
     ? Number(analysis.r_multiple)
-    : plannedRisk && !usesMaxPremiumRiskBaseline && trade.net_pnl != null
+    : plannedRisk && trade.net_pnl != null
       ? Number(trade.net_pnl) / plannedRisk
       : null;
   const realizedR = realizedRValue != null && Number.isFinite(realizedRValue)
@@ -1247,10 +1247,10 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         />
         <KpiCell
           label="Realized R"
-          value={<span className="num">{realizedR || (usesMaxPremiumRiskBaseline ? 'Pending' : 'Set risk')}</span>}
+          value={<span className="num">{realizedR || 'Set risk'}</span>}
           tone={realizedRValue != null ? (realizedRValue >= 0 ? 'pos' : 'neg') : undefined}
           foot={usesMaxPremiumRiskBaseline
-            ? <>Max premium <span className="num">{fmt$(plannedRisk)}</span> · set premium-stop risk</>
+            ? <>Risk basis: max premium <span className="num">{fmt$(plannedRisk)}</span></>
             : plannedRisk
               ? <>Planned risk <span className="num">{fmt$(plannedRisk)}</span></>
               : <>Add planned risk to calculate R</>}
@@ -1438,7 +1438,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     />
                     <StatRow
                       label="Realized R"
-                      value={realizedR || (usesMaxPremiumRiskBaseline ? 'Pending premium-stop risk' : 'Set planned risk to calculate')}
+                      value={realizedR || 'Set planned risk to calculate'}
                       valueColor={realizedRValue == null ? 'var(--text-secondary)' : realizedRValue >= 0 ? 'var(--green)' : 'var(--red)'}
                     />
                     {/* Excursion: how far the trade went your way and against you,

@@ -1341,7 +1341,7 @@ button.month-card:active { transform: translateY(1px); }
 .trade-view-table th:nth-child(10) { width: 32px; }
 
 .trade-view-row td {
-  height: 64px;
+  height: 66px;
 }
 .trade-date-cell .num:first-child {
   color: var(--text-primary);
@@ -1417,10 +1417,14 @@ button.month-card:active { transform: translateY(1px); }
   color: var(--text-primary);
   font-size: 12.5px;
 }
-.trade-setup-badge > span:first-child {
+.trade-setup-badge > span:first-child:not(.trade-strategy-text) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.trade-setup-badge > .trade-strategy-text {
+  min-width: 0;
+  white-space: normal;
 }
 .trade-setup-badge .chip {
   flex: 0 0 auto;
@@ -1428,14 +1432,16 @@ button.month-card:active { transform: translateY(1px); }
   font-size: 10.5px;
 }
 .trade-strategy-text {
-  display: block;
+  display: -webkit-box;
   overflow: hidden;
   color: var(--accent-line);
   font-size: 12.5px;
   font-weight: 600;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .trade-manual-mark {
   flex: 0 0 auto;
@@ -1449,26 +1455,17 @@ button.month-card:active { transform: translateY(1px); }
   line-height: 0;
 }
 .trade-review-dot {
-  display: inline-block !important;
-  flex: 0 0 8px;
-  width: 8px !important;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
   min-width: 8px;
-  max-width: 8px;
-  height: 8px !important;
   min-height: 8px;
-  max-height: 8px;
-  padding: 0 !important;
-  margin: 0;
-  border: 0;
-  border-radius: 999px;
-  box-sizing: border-box;
+  overflow: visible;
   vertical-align: middle;
-  line-height: 0;
-  font-size: 0;
 }
-.trade-review-dot.complete { color: var(--result-pos); background: var(--result-pos); }
-.trade-review-dot.partial { color: var(--caution); background: var(--caution); }
-.trade-review-dot.empty { color: var(--text-tertiary); background: var(--text-tertiary); }
+.trade-review-dot.complete { color: var(--result-pos); fill: currentColor; }
+.trade-review-dot.partial { color: var(--caution); fill: currentColor; }
+.trade-review-dot.empty { color: var(--text-tertiary); fill: currentColor; }
 
 .trade-process-status {
   display: inline-flex;

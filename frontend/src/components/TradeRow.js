@@ -66,7 +66,7 @@ function SetupBadge({ setup, grade, notes, strategy }) {
     const gradeCls = GRADE_CLASS[grade] || 'text-muted';
     return (
       <span className="trade-setup-badge" title={strategy}>
-        <span className="trade-strategy-text">{shortText(strategy, 58)}</span>
+        <span className="trade-strategy-text">{strategy}</span>
         {grade && (
           <span className={`chip ${gradeCls === 'pos' ? 'pos' : gradeCls === 'caution' ? 'caution' : ''}`}>
             {grade}
@@ -118,12 +118,18 @@ function ReviewStatus({ trade }) {
   ].filter(Boolean).join(' • ');
 
   return (
-    <span
+    <svg
       className={`trade-review-dot ${state}`}
       role="img"
       aria-label={detail}
       title={detail}
-    />
+      width="8"
+      height="8"
+      viewBox="0 0 8 8"
+      focusable="false"
+    >
+      <circle cx="4" cy="4" r="4" />
+    </svg>
   );
 }
 
@@ -207,7 +213,7 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
     && Number.isFinite(maxPremiumRisk)
     && Math.abs(riskPerTrade - maxPremiumRisk) < 0.01
     && trade.r_multiple == null;
-  const showRealizedR = realizedR != null && Number.isFinite(realizedR) && !usesMaxPremiumBaseline;
+  const showRealizedR = realizedR != null && Number.isFinite(realizedR);
 
   const handleOpen = () => { if (onOpenDetail) onOpenDetail(trade); };
   const ADD_NEW = '__add_new__';
@@ -366,13 +372,16 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
           <span className={`num ${plannedRR != null ? 'trade-r-planned' : 'trade-r-missing'}`}>
             {plannedRR != null ? `1:${plannedRR.toFixed(2)}` : 'Not Set'}
           </span>
-          {showRealizedR ? (
-            <small className={realizedR > 0 ? 'pos' : realizedR < 0 ? 'neg' : 'text-muted'}>
+          {showRealizedR && (
+            <small
+              className={realizedR > 0 ? 'pos' : realizedR < 0 ? 'neg' : 'text-muted'}
+              title={usesMaxPremiumBaseline
+                ? 'Realized R uses the saved max-premium risk baseline.'
+                : 'Realized R uses the saved planned-risk amount.'}
+            >
               {realizedR > 0 ? '+' : ''}{realizedR.toFixed(2)}R realized
             </small>
-          ) : usesMaxPremiumBaseline ? (
-            <small className="trade-r-pending" title="Full premium is max loss, not an option-stop risk plan.">R pending</small>
-          ) : null}
+          )}
         </div>
       </td>
 
