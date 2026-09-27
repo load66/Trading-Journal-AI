@@ -4,6 +4,13 @@ import re
 import httpx
 
 from behavior_rules import detect_daily_flags, deterministic_strengths, recorded_observations
+from excursion_analysis import EXCURSION_ALGORITHM_VERSION
+from trade_metrics import (
+    completed_trades,
+    net_profit_factor,
+    parse_executions,
+    realized_r,
+)
 
 from ai_analysis import (
     GROQ_API_URL,
@@ -62,7 +69,7 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         SELECT t.id, t.trade_group, t.ticker, t.side, t.instrument_type,
                t.net_pnl, t.gross_pnl, t.commissions, t.executions,
                t.option_type, t.option_strike, t.option_expiry,
-               t.mfe_pct, t.mae_pct, t.exit_efficiency,
+               t.mfe_pct, t.mae_pct, t.exit_efficiency, t.excursion_version,
                ta.strategy, ta.r_multiple, ta.stop_loss, ta.target_price,
                ta.risk_per_trade, ta.risk_reward, ta.mistakes,
                ta.emotional_state, ta.entry_reason, ta.exit_reason,
@@ -81,14 +88,21 @@ def build_daily_context(conn, date: str, account_id) -> dict:
     trades = []
     for row in rows:
         d = dict(row)
-        try:
-            d['executions'] = json.loads(d.get('executions') or '[]')
-        except Exception:
-            d['executions'] = []
+        d["executions"] = parse_executions(d)
+        if d.get("excursion_version") != EXCURSION_ALGORITHM_VERSION:
+            d["mfe_pct"] = None
+            d["mae_pct"] = None
+            d["exit_efficiency"] = None
+        d["r_multiple"] = realized_r(
+            d,
+            risk_per_trade=d.get("risk_per_trade"),
+            stored_r_multiple=d.get("r_multiple"),
+        )
         trades.append(d)
+    trades = completed_trades(trades)
 
-    # Day KPIs
-    all_pnl = [t.get('net_pnl') or 0 for t in trades]
+    # Day KPIs use exactly the completed broker-trade cohort.
+    all_pnl = [float(t.get("net_pnl") or 0) for t in trades]
     winners = [p for p in all_pnl if p > 0]
     losers = [p for p in all_pnl if p < 0]
     total_trades = len(trades)
@@ -102,21 +116,25 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         "total_trades": total_trades,
         "winning_trades": len(winners),
         "losing_trades": len(losers),
+        "breakeven_trades": total_trades - len(winners) - len(losers),
         "win_rate": round(len(winners) / total_trades * 100, 1) if total_trades else 0,
         "avg_win": round(sum(winners) / len(winners), 2) if winners else 0,
         "avg_loss": round(sum(losers) / len(losers), 2) if losers else 0,
-        "profit_factor": round(sum(winners) / abs(sum(losers)), 2) if losers else None,
+        "profit_factor": net_profit_factor(trades),
+        "expectancy": round(sum(all_pnl) / total_trades, 2) if total_trades else 0,
         "exit_efficiency": round(sum(winner_effs) / len(winner_effs), 2) if winner_effs else None,
     }
 
-    # All-time KPIs for context
+    # All-time context uses the same completed-trade definition.
     at_params = []
-    at_sql = "SELECT net_pnl, gross_pnl FROM trades WHERE 1=1"
+    at_sql = "SELECT side, net_pnl, gross_pnl, executions FROM trades WHERE 1=1"
     if account_id is not None:
         at_sql += " AND account_id = ?"
         at_params.append(account_id)
-    at_rows = conn.execute(at_sql, at_params).fetchall()
-    at_all = [dict(r)['net_pnl'] or 0 for r in at_rows]
+    alltime_trades = completed_trades(
+        [dict(row) for row in conn.execute(at_sql, at_params).fetchall()]
+    )
+    at_all = [float(t.get("net_pnl") or 0) for t in alltime_trades]
     at_wins = [p for p in at_all if p > 0]
     at_losses = [p for p in at_all if p < 0]
     at_total = len(at_all)
@@ -124,7 +142,9 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         "win_rate": round(len(at_wins) / at_total * 100, 1) if at_total else 0,
         "avg_win": round(sum(at_wins) / len(at_wins), 2) if at_wins else 0,
         "avg_loss": round(sum(at_losses) / len(at_losses), 2) if at_losses else 0,
-        "profit_factor": round(sum(at_wins) / abs(sum(at_losses)), 2) if at_losses else None,
+        "profit_factor": net_profit_factor(alltime_trades),
+        "expectancy": round(sum(at_all) / at_total, 2) if at_total else 0,
+        "total_trades": at_total,
     }
 
     # Diary entry for the date
@@ -147,13 +167,21 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         except Exception:
             pass
 
-    hist_sql = "SELECT date, COUNT(*) AS c FROM trades WHERE date < ?"
+    hist_sql = "SELECT date, side, net_pnl, executions FROM trades WHERE date < ?"
     hist_params = [date]
     if account_id is not None:
         hist_sql += " AND account_id = ?"
         hist_params.append(account_id)
-    hist_sql += " GROUP BY date ORDER BY date"
-    historical_counts = [int(r["c"]) for r in conn.execute(hist_sql, hist_params).fetchall()]
+    hist_sql += " ORDER BY date"
+    history = completed_trades(
+        [dict(row) for row in conn.execute(hist_sql, hist_params).fetchall()]
+    )
+    counts_by_date = {}
+    for trade in history:
+        trade_date = str(trade.get("date") or "")
+        if trade_date:
+            counts_by_date[trade_date] = counts_by_date.get(trade_date, 0) + 1
+    historical_counts = [counts_by_date[d] for d in sorted(counts_by_date)]
 
     behavior_flags = detect_daily_flags(trades, historical_counts)
     verified_strengths = deterministic_strengths(trades, day_kpis)
@@ -473,7 +501,7 @@ Generate the daily coaching summary JSON."""
     result["patterns"] = [x.get("text") for x in pattern_obs]
 
     result["evidence_locked"] = True
-    result["evidence_version"] = 3
+    result["evidence_version"] = 4
     result["evidence_note"] = (
         "VERIFIED = deterministic calculation/detector. RECORDED = trader/diary input. "
         "INSUFFICIENT DATA = the journal refuses to infer what was not recorded."
