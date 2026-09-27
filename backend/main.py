@@ -2740,7 +2740,7 @@ def get_calendar(
     month: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    sql = "SELECT date, net_pnl FROM trades WHERE 1=1"
+    sql = "SELECT date, net_pnl, side, executions FROM trades WHERE 1=1"
     params = []
 
     if account_id is not None:
@@ -2753,7 +2753,8 @@ def get_calendar(
         sql += " AND date >= ? AND date < ?"
         params.extend([date_from, date_to])
 
-    rows = conn.execute(sql, params).fetchall()
+    rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    rows = [r for r in rows if trade_is_closed(r)]
 
     day_stats: dict[str, dict] = {}
     for row in rows:
@@ -2801,20 +2802,21 @@ def get_yearly_kpis(
     account_id: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    sql = f"SELECT date, net_pnl, gross_pnl FROM trades WHERE {year_filter_clause('date')}"
+    sql = f"SELECT date, net_pnl, gross_pnl, side, executions FROM trades WHERE {year_filter_clause('date')}"
     params = [str(year)]
     if account_id is not None:
         sql += " AND account_id = ?"
         params.append(account_id)
 
-    rows = conn.execute(sql + " ORDER BY date", params).fetchall()
+    rows = [row_to_dict(r) for r in conn.execute(sql + " ORDER BY date", params).fetchall()]
+    rows = [r for r in rows if trade_is_closed(r)]
 
-    # Bucket trades by month
+    # Bucket completed trades by month.
     from collections import defaultdict
     months: dict[int, list] = defaultdict(list)
     for row in rows:
         m = int(row["date"][5:7])
-        months[m].append({"net_pnl": row["net_pnl"] or 0, "gross_pnl": row["gross_pnl"] or 0, "date": row["date"]})
+        months[m].append(row)
 
     result = []
     for m in range(1, 13):
@@ -2834,9 +2836,10 @@ def get_yearly_kpis(
         net_losses      = abs(sum(t["net_pnl"] for t in losers))
         profit_factor  = net_wins / net_losses if net_losses else None
         win_rate       = len(winners) / total * 100 if total else 0
-        trading_days   = len(set(t["date"] for t in trades))
-        positive_days  = len({t["date"] for t in trades if t["net_pnl"] > 0})
-        day_win_rate   = positive_days / trading_days * 100 if trading_days else 0
+        month_daily = canonical_daily_totals(trades)
+        trading_days = len(month_daily)
+        positive_days = sum(1 for pnl in month_daily.values() if pnl > 0)
+        day_win_rate = positive_days / trading_days * 100 if trading_days else 0
 
         result.append({
             "month": m,
@@ -2910,7 +2913,7 @@ def _bucket_stats(rows, key_fn, label_fn=None):
             "trades": n,
             "net_pnl": round(sum(pnls), 2),
             "avg_pnl": round(sum(pnls) / n, 2),
-            "median_pnl": round(pnls[n // 2], 2),
+            "median_pnl": round(pnls[n // 2] if n % 2 else (pnls[n // 2 - 1] + pnls[n // 2]) / 2, 2),
             "win_rate": round(len(wins) / n * 100, 1),
             "wins": len(wins),
             "losses": len(losses),
@@ -3019,11 +3022,12 @@ def get_reports(
         SELECT t.id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
                t.instrument_type, t.executions, t.setup,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
+               t.excursion_basis, t.excursion_version, t.excursion_calculated_at,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.idea_source
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
-        WHERE t.net_pnl IS NOT NULL AND t.net_pnl <> 0
+        WHERE t.net_pnl IS NOT NULL
     """
     params: list = []
     if account_id is not None:
@@ -3038,24 +3042,29 @@ def get_reports(
     sql += " ORDER BY t.date, t.id"
 
     raw = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    raw = [r for r in raw if trade_is_closed(r)]
     if not raw:
         return {"has_data": False}
 
-    # Derive entry time, hold duration and exit count once per trade.
+    # Derive market-time entry, exact elapsed hold, and exit event count once.
     for r in raw:
         try:
             ex = json.loads(r['executions'] or '[]')
         except Exception:
             ex = []
-        ea = 'BOT' if r['side'] == 'LONG' else 'SOLD'
         xa = 'SOLD' if r['side'] == 'LONG' else 'BOT'
-        ent = sorted([e for e in ex if e.get('action') == ea], key=lambda e: e.get('time', ''))
-        xit = sorted([e for e in ex if e.get('action') == xa], key=lambda e: e.get('time', ''))
-        t_in = _mins_of(ent[0].get('time')) if ent else None
-        t_out = _mins_of(xit[-1].get('time')) if xit else None
-        r['entry_min'] = t_in
-        r['hold_min'] = (t_out - t_in) if (t_in is not None and t_out is not None) else None
-        r['n_exits'] = len({e.get('time') for e in xit}) if xit else 0
+        xit = [e for e in ex if e.get('action') == xa]
+        r['entry_min'] = entry_market_minutes(r)
+        hold_sec = canonical_hold_seconds(r)
+        r['hold_min'] = hold_sec / 60 if hold_sec is not None else None
+        r['n_exits'] = len({
+            (e.get('timestamp_utc') or e.get('date'), e.get('time'), e.get('source_ref'))
+            for e in xit
+        }) if xit else 0
+        if _excursion_is_stale(r):
+            r['mfe_pct'] = None
+            r['mae_pct'] = None
+            r['exit_efficiency'] = None
         try:
             r['dow'] = _dt.strptime(r['date'], '%Y-%m-%d').weekday()
         except Exception:
@@ -3121,9 +3130,11 @@ def get_reports(
         if r['net_pnl'] > 0:
             cur = cur + 1 if cur > 0 else 1
             best_win = max(best_win, cur)
-        else:
+        elif r['net_pnl'] < 0:
             cur = cur - 1 if cur < 0 else -1
             worst_loss = min(worst_loss, cur)
+        else:
+            cur = 0
 
     # Tags per trade (strategy and source tags mirror their fields, so they are left out).
     # A trade with several tags counts once under each of them.
@@ -3215,6 +3226,7 @@ def get_edge_report(
 
     rows = conn.execute(sql, params).fetchall()
     trades = [row_to_dict(r) for r in rows]
+    trades = [t for t in trades if trade_is_closed(t)]
 
     # Mistake frequency from trade_tags
     tag_sql = """
@@ -3289,29 +3301,15 @@ def get_edge_report(
         date_str = trade.get("date", "")
         side = (trade.get("side") or "LONG").upper()
 
-        try:
-            execs = json.loads(trade.get("executions") or "[]")
-        except Exception:
-            execs = []
-
-        all_times = sorted([e.get("time", "") for e in execs if e.get("time")])
-        entry_action = "BOT" if side == "LONG" else "SOLD"
-        entry_times = sorted([e.get("time", "") for e in execs if e.get("action") == entry_action and e.get("time")])
-
-        # Time-of-day bucket (entry time)
-        if entry_times:
-            try:
-                parts = entry_times[0].split(":")
-                h, m = int(parts[0]), int(parts[1])
-                entry_mins = h * 60 + m
-                bucket_floor = ((entry_mins - 9 * 60 - 30) // 30) * 30 + 9 * 60 + 30
-                bh, bm = divmod(bucket_floor, 60)
-                bkey = f"{bh:02d}:{bm:02d}"
-                if bkey in bucket_pnl:
-                    bucket_pnl[bkey] += pnl
-                    bucket_counts[bkey] += 1
-            except Exception:
-                pass
+        # Time-of-day bucket uses canonical U.S. market time (ET).
+        entry_mins = entry_market_minutes(trade)
+        if entry_mins is not None:
+            bucket_floor = ((entry_mins - 9 * 60 - 30) // 30) * 30 + 9 * 60 + 30
+            bh, bm = divmod(bucket_floor, 60)
+            bkey = f"{bh:02d}:{bm:02d}"
+            if bkey in bucket_pnl:
+                bucket_pnl[bkey] += pnl
+                bucket_counts[bkey] += 1
 
         # Day of week
         if date_str:
@@ -3325,20 +3323,14 @@ def get_edge_report(
             except Exception:
                 pass
 
-        # Hold time
-        if len(all_times) >= 2:
-            try:
-                def to_mins(t_str: str) -> float:
-                    p = t_str.split(":")
-                    return int(p[0]) * 60 + int(p[1]) + (int(p[2]) / 60 if len(p) == 3 else 0)
-                hold = to_mins(all_times[-1]) - to_mins(all_times[0])
-                if hold >= 0:
-                    if pnl > 0:
-                        winner_hold.append(hold)
-                    elif pnl < 0:
-                        loser_hold.append(hold)
-            except Exception:
-                pass
+        # Hold time is elapsed broker time from first entry to final exit.
+        hold_sec = canonical_hold_seconds(trade)
+        if hold_sec is not None:
+            hold = hold_sec / 60
+            if pnl > 0:
+                winner_hold.append(hold)
+            elif pnl < 0:
+                loser_hold.append(hold)
 
         # R-multiple distribution
         r = trade.get("r_multiple")
@@ -3407,19 +3399,10 @@ def get_edge_report(
         "source": "broker_csv_executions",
     }
 
-    # Expectancy for edge report
-    all_pnl = [t.get("net_pnl") or 0 for t in trades]
-    wins_er = [p for p in all_pnl if p > 0]
-    losses_er = [p for p in all_pnl if p < 0]
+    # Canonical expectancy: average realized net P&L per completed trade.
+    all_pnl = [float(t.get("net_pnl") or 0) for t in trades]
     total_er = len(all_pnl)
-    if total_er > 0 and wins_er and losses_er:
-        er_expectancy = round(
-            (len(wins_er) / total_er) * (sum(wins_er) / len(wins_er))
-            + (len(losses_er) / total_er) * (sum(losses_er) / len(losses_er)),
-            2,
-        )
-    else:
-        er_expectancy = 0.0
+    er_expectancy = round(sum(all_pnl) / total_er, 2) if total_er else 0.0
 
     return {
         "time_of_day": time_of_day,
