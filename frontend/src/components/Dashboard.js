@@ -15,14 +15,12 @@ const fmtLong = (d) => {
 // ── Goals Panel ───────────────────────────────────────────────────────────────
 
 const GOAL_FIELDS = [
-  { key: 'win_rate',         label: 'Trade Win %',     suffix: '%',  step: 1,   min: 0, max: 100 },
-  { key: 'profit_factor',    label: 'Profit Factor',   suffix: '',   step: 0.1, min: 0 },
-  { key: 'day_win_rate',     label: 'Day Win %',       suffix: '%',  step: 1,   min: 0, max: 100 },
-  { key: 'expectancy',       label: 'Expectancy ($)',  prefix: '$',  suffix: '', step: 5, min: 0 },
-  { key: 'avg_win_loss_ratio', label: 'Payoff Ratio', suffix: '',  step: 0.1, min: 0 },
-  { key: 'avg_r', label: 'Avg R / Trade', suffix: 'R', step: 0.05, min: 0 },
-  { key: 'loss_containment', label: 'Loss Containment (max)', suffix: '×', step: 0.1, min: 0.1 },
-  { key: 'exit_efficiency', label: 'Profit Capture', suffix: '%', step: 1, min: 0, max: 100 },
+  { key: 'win_rate', label: 'Trade Win Rate', suffix: '%', step: 1, min: 0, max: 100 },
+  { key: 'day_win_rate', label: 'Day Win Rate', suffix: '%', step: 1, min: 0, max: 100 },
+  { key: 'profit_factor', label: 'Profit Factor', suffix: '', step: 0.1, min: 0 },
+  { key: 'avg_win_loss_ratio', label: 'Win / Loss Size', suffix: '', step: 0.1, min: 0 },
+  { key: 'exit_efficiency', label: 'Exit Efficiency', suffix: '%', step: 1, min: 0, max: 100 },
+  { key: 'expectancy', label: 'Expectancy ($)', prefix: '$', suffix: '', step: 5, min: 0 },
 ];
 
 function GoalsPanel({ draft, onChange, onSave, onCancel, accountLabel, saving, error }) {

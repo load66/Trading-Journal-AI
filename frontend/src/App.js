@@ -30,18 +30,44 @@ import {
   updatePassword,
 } from './auth';
 
+const JOURNAL_NAV_STATE_KEY = 'trading-journal:navigation-state-v1';
+const VALID_PAGES = new Set(['dashboard', 'trades', 'trade-detail', 'calendar', 'import', 'diary', 'day-review', 'reports', 'help', 'settings']);
+
+function readJournalNavState() {
+  try {
+    const raw = sessionStorage.getItem(JOURNAL_NAV_STATE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!VALID_PAGES.has(parsed?.page)) parsed.page = 'dashboard';
+    if (parsed.page === 'trade-detail' && !parsed.selectedTrade) parsed.page = 'trades';
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function writeJournalNavState(state) {
+  try {
+    sessionStorage.setItem(JOURNAL_NAV_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Navigation persistence is a convenience; storage failure must not block the journal.
+  }
+}
+
 function JournalApp({ onSignOut }) {
-  const [page, setPage] = useState('dashboard');
+  const initialNavState = useRef(readJournalNavState()).current;
+  const [page, setPage] = useState(initialNavState.page || 'dashboard');
   const [accounts, setAccounts] = useState([]);
-  const [selectedAccountId, setSelectedAccountId] = useState(null);
+  const [selectedAccountId, setSelectedAccountId] = useState(initialNavState.selectedAccountId ?? null);
   const [showAddTrade, setShowAddTrade] = useState(false);
-  const [tradesFilter, setTradesFilter] = useState({ dateFrom: '', dateTo: '' });
-  const [selectedTrade, setSelectedTrade] = useState(null);
+  const [tradesFilter, setTradesFilter] = useState(initialNavState.tradesFilter || { dateFrom: '', dateTo: '' });
+  const [selectedTrade, setSelectedTrade] = useState(initialNavState.selectedTrade || null);
   const [tradeNavList, setTradeNavList] = useState([]);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [tradeDetailIntent, setTradeDetailIntent] = useState(initialNavState.tradeDetailIntent || null);
+  const [selectedDate, setSelectedDate] = useState(initialNavState.selectedDate || new Date().toISOString().split('T')[0]);
   // Open Day Review on the most recent session, not on today. Today has no
   // trades on a weekend, a holiday, or any day before the market opens.
-  const seededDate = useRef(false);
+  const seededDate = useRef(Boolean(initialNavState.selectedDate));
   useEffect(() => {
     if (seededDate.current) return;
     seededDate.current = true;
@@ -53,7 +79,7 @@ function JournalApp({ onSignOut }) {
       .catch(() => {});
   }, []);
   const [brainOpen, setBrainOpen] = useState(false);
-  const [reportsInitialTab, setReportsInitialTab] = useState('overview');
+  const [reportsInitialTab, setReportsInitialTab] = useState(initialNavState.reportsInitialTab || 'overview');
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -65,6 +91,18 @@ function JournalApp({ onSignOut }) {
   }, []);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
+
+  useEffect(() => {
+    writeJournalNavState({
+      page,
+      selectedAccountId,
+      tradesFilter,
+      selectedTrade,
+      tradeDetailIntent,
+      selectedDate,
+      reportsInitialTab,
+    });
+  }, [page, selectedAccountId, tradesFilter, selectedTrade, tradeDetailIntent, selectedDate, reportsInitialTab]);
 
   const handleTradeAdded = () => {
     setShowAddTrade(false);
@@ -79,14 +117,18 @@ function JournalApp({ onSignOut }) {
 
   const navigate = (p, options = {}) => {
     if (p !== 'trades') setTradesFilter({ dateFrom: '', dateTo: '' });
-    if (p !== 'trade-detail') setSelectedTrade(null);
+    if (p !== 'trade-detail') {
+      setSelectedTrade(null);
+      setTradeDetailIntent(null);
+    }
     if (p === 'reports') setReportsInitialTab(options.tab || 'overview');
     setPage(p);
   };
 
-  const handleOpenDetail = (trade, list = []) => {
+  const handleOpenDetail = (trade, list = [], options = {}) => {
     setSelectedTrade(trade);
     setTradeNavList(list);
+    setTradeDetailIntent(options.intent || null);
     setPage('trade-detail');
   };
 
@@ -125,6 +167,7 @@ function JournalApp({ onSignOut }) {
             initialDateFrom={tradesFilter.dateFrom}
             initialDateTo={tradesFilter.dateTo}
             onOpenDetail={handleOpenDetail}
+            onSetRisk={(trade, list) => handleOpenDetail(trade, list, { intent: 'planned-risk' })}
           />
         )}
         {page === 'trade-detail' && selectedTrade && (
@@ -132,10 +175,11 @@ function JournalApp({ onSignOut }) {
             key={selectedTrade.id}
             trade={selectedTrade}
             tradeNavList={tradeNavList}
-            onBack={() => { setSelectedTrade(null); setPage('trades'); }}
+            onBack={() => { setSelectedTrade(null); setTradeDetailIntent(null); setPage('trades'); }}
             onTradeUpdate={(updated) => setSelectedTrade(updated)}
-            onNavigate={(trade) => setSelectedTrade(trade)}
+            onNavigate={(trade) => { setTradeDetailIntent(null); setSelectedTrade(trade); }}
             onOpenDetail={handleOpenDetail}
+            focusPlannedRisk={tradeDetailIntent === 'planned-risk'}
           />
         )}
         {page === 'calendar' && (

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, Maximize2 } from 'lucide-react';
 import { tradesApi } from '../api';
 import TradingChart from './TradingChart';
@@ -166,17 +166,17 @@ const inputStyle = {
   width: '100%', fontSize: 14, minHeight: 34, padding: '5px 9px', boxSizing: 'border-box',
 };
 
-function EditField({ label, value, onChange, type = 'text', options }) {
+function EditField({ label, value, onChange, type = 'text', options, inputRef, autoFocus = false }) {
   return (
     <label style={{ display: 'block' }}>
       <span className="field-label" style={{ marginBottom: 4 }}>{label}</span>
       {options ? (
-        <select value={value} onChange={e => onChange(e.target.value)} style={inputStyle}>
+        <select ref={inputRef} autoFocus={autoFocus} value={value} onChange={e => onChange(e.target.value)} style={inputStyle}>
           <option value="">—</option>
           {options.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
       ) : (
-        <input type={type} value={value} onChange={e => onChange(e.target.value)} style={inputStyle} />
+        <input ref={inputRef} autoFocus={autoFocus} type={type} value={value} onChange={e => onChange(e.target.value)} style={inputStyle} />
       )}
     </label>
   );
@@ -493,6 +493,7 @@ export function executionTimeETMinutes(dateStr, timeStr) {
 
 
 const TABS = ['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'Chart Review'];
+const TRADE_DETAIL_TAB_KEY = 'trading-journal:trade-detail-tab';
 
 const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', date: '', time: '' };
 
@@ -562,11 +563,26 @@ function DaySidebar({ currentTrade, onOpenDetail }) {
   );
 }
 
-export default function TradeDetail({ trade: initialTrade, tradeNavList = [], onBack, onTradeUpdate, onNavigate, onOpenDetail }) {
+export default function TradeDetail({ trade: initialTrade, tradeNavList = [], onBack, onTradeUpdate, onNavigate, onOpenDetail, focusPlannedRisk = false }) {
   const [trade, setTrade] = useState(initialTrade);
-  const [tab, setTab] = useState('Stats');
+  const [tab, setTab] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(TRADE_DETAIL_TAB_KEY);
+      return TABS.includes(saved) ? saved : 'Stats';
+    } catch {
+      return 'Stats';
+    }
+  });
   const [analysis, setAnalysis] = useState(null);
   const [tags, setTags] = useState([]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(TRADE_DETAIL_TAB_KEY, tab);
+    } catch {
+      // Preserve normal review behavior if browser storage is unavailable.
+    }
+  }, [tab]);
 
   // Executions
   const [showAddExec, setShowAddExec]     = useState(false);
@@ -589,6 +605,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [editingStats, setEditingStats]   = useState(false);
   const [statsForm, setStatsForm]         = useState({});
   const [savingStats, setSavingStats]     = useState(false);
+  const plannedRiskInputRef = useRef(null);
+  const plannedRiskFocusHandled = useRef(false);
 
   // Strategy edit
   const [editingStrategy, setEditingStrategy] = useState(false);
@@ -614,6 +632,29 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       setTags(r.data.tags || []);
     }).catch(() => setAnalysis({}));
   }, [trade.trade_group]);
+
+  useEffect(() => {
+    plannedRiskFocusHandled.current = false;
+  }, [trade.trade_group, focusPlannedRisk]);
+
+  useEffect(() => {
+    if (!focusPlannedRisk || analysis == null || plannedRiskFocusHandled.current) return;
+    plannedRiskFocusHandled.current = true;
+    setTab('Stats');
+    setStatsForm({
+      strategy: analysis?.strategy || '',
+      idea_source: analysis?.idea_source || 'Watchlist',
+      stop_loss: analysis?.stop_loss ?? '',
+      risk_per_trade: analysis?.risk_per_trade ?? '',
+      target_price: analysis?.target_price ?? '',
+      emotional_state: analysis?.emotional_state || '',
+    });
+    setEditingStats(true);
+    window.setTimeout(() => {
+      plannedRiskInputRef.current?.focus();
+      plannedRiskInputRef.current?.select?.();
+    }, 0);
+  }, [focusPlannedRisk, analysis]);
 
   // ── Execution handlers ────────────────────────────────────────────────────
 
@@ -1066,7 +1107,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     </div>
                     <EditField label="Stop Loss ($)" type="number" value={String(statsForm.stop_loss)} onChange={v => setStatsForm(f => ({ ...f, stop_loss: v }))} />
                     <div>
-                      <EditField label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
+                      <EditField inputRef={plannedRiskInputRef} autoFocus={focusPlannedRisk} label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
                       <div className="text-muted" style={{ fontSize: 11.5, marginTop: 4, lineHeight: 1.35 }}>
                         Dollar amount you accepted losing at entry. This unlocks a reliable realized R.
                       </div>

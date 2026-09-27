@@ -25,7 +25,7 @@ function SortIcon({ col, sortCol, sortDir }) {
     : <ChevronDown size={12} aria-hidden="true" />;
 }
 
-export default function Trades({ accountId, initialDateFrom = '', initialDateTo = '', onOpenDetail }) {
+export default function Trades({ accountId, initialDateFrom = '', initialDateTo = '', onOpenDetail, onSetRisk }) {
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -247,6 +247,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                     trade={trade}
                     openTime={getOpenTime(trade)}
                     onOpenDetail={(t) => onOpenDetail(t, paginated)}
+                    onSetRisk={(t) => onSetRisk && onSetRisk(t, paginated)}
                     customSetups={customSetups}
                     onCustomSetupsChanged={reloadCustomSetups}
                   />

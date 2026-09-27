@@ -626,49 +626,106 @@ export default function DashboardRender(p) {
   const k = kpis || {};
   const days = k.daily_pnl || [];
   const net = Number(k.total_net_pnl || 0);
-  const avgR = k.avg_r == null ? null : Number(k.avg_r);
+
+  const goalValue = (key, fallback) => Number(goals?.[key] ?? fallback);
+
+  const pctGoalItem = (label, value, goal, read, amberBelow = false) => {
+    const numeric = Number(value || 0);
+    const target = Number(goal || 0);
+    return {
+      label,
+      value: numeric.toFixed(1) + '%',
+      tone: numeric >= target ? 'pos' : undefined,
+      amber: amberBelow && numeric < target,
+      read,
+      goal: target.toFixed(0) + '%',
+      goalPct: Math.max(5, Math.min(95, target)),
+      fill: Math.max(0, Math.min(1, numeric / 100)),
+      met: numeric >= target,
+    };
+  };
+
+  const scaledGoalItem = (label, value, goal, formatter, read) => {
+    const numeric = Number(value || 0);
+    const target = Number(goal || 0);
+    const scaleMax = Math.max(target * 1.35, Math.abs(numeric) * 1.12, 1);
+    return {
+      label,
+      value: formatter(numeric),
+      tone: numeric >= target ? 'pos' : numeric < 0 ? 'neg' : undefined,
+      read,
+      goal: formatter(target),
+      goalPct: Math.max(8, Math.min(92, target / scaleMax * 100)),
+      fill: Math.max(0, Math.min(1, numeric / scaleMax)),
+      met: numeric >= target,
+    };
+  };
+
+  const tradeWinRate = Number(k.win_rate || 0);
+  const dayWinRate = Number(k.day_win_rate || 0);
+  const avgWin = Math.abs(Number(k.avg_win || 0));
+  const avgLoss = Math.abs(Number(k.avg_loss || 0));
+  const winLossRatio = avgLoss > 0 ? avgWin / avgLoss : null;
+  const exitEfficiency = k.exit_efficiency == null ? null : Number(k.exit_efficiency);
+  const exitReliable = exitEfficiency != null && String(k.capture_confidence || 'LOW').toUpperCase() !== 'LOW';
+
+  const winLossDiagnosis = winLossRatio == null
+    ? 'Needs both winning and losing trades before payoff size can be evaluated.'
+    : tradeWinRate >= 50 && winLossRatio < 1
+      ? <>Your average win is <b>{absMoney(avgWin)}</b>. Your average loss is <b>{absMoney(avgLoss)}</b>. You win more often, but losses are larger than wins.</>
+      : tradeWinRate >= 50 && winLossRatio >= 1
+        ? <>Your average win is <b>{absMoney(avgWin)}</b>. Your average loss is <b>{absMoney(avgLoss)}</b>. Wins are both more frequent and larger than losses.</>
+        : tradeWinRate < 50 && winLossRatio >= 1
+          ? <>Your average win is <b>{absMoney(avgWin)}</b>. Your average loss is <b>{absMoney(avgLoss)}</b>. You win less often, but winning trades are larger.</>
+          : <>Your average win is <b>{absMoney(avgWin)}</b>. Your average loss is <b>{absMoney(avgLoss)}</b>. Both win frequency and payoff size need improvement.</>;
 
   const measures = [
-    {
-      label: 'Average win',
-      value: absMoney(k.avg_win),
-      tone: 'pos',
-      read: 'Average profit on winning trades · ' + (k.winning_trades || 0) + ' wins',
-    },
-    {
-      label: 'Average loss',
-      value: absMoney(k.avg_loss),
-      tone: 'neg',
-      read: 'Average loss on losing trades · ' + (k.losing_trades || 0) + ' losses',
-    },
-    {
-      label: 'Win rate',
-      value: Number(k.win_rate || 0).toFixed(1) + '%',
-      read: (k.winning_trades || 0) + ' wins / ' + (k.total_trades || 0) + ' trades',
-    },
-    {
-      label: 'Profit factor',
-      value: k.profit_factor == null ? '—' : Number(k.profit_factor).toFixed(2),
-      read: k.profit_factor == null ? 'Needs both wins and losses' : 'Above 1.00 means winning P&L outweighs losing P&L',
-    },
-    {
-      label: 'Expectancy',
-      value: money2(k.expectancy || 0),
-      tone: Number(k.expectancy || 0) < 0 ? 'neg' : 'pos',
-      read: 'Typical net result per completed trade',
-    },
-    {
-      label: 'Avg R / trade',
-      value: avgR == null ? 'N/A' : (avgR > 0 ? '+' : '') + avgR.toFixed(2) + 'R',
-      tone: avgR != null && avgR < 0 ? 'neg' : undefined,
-      read: avgR == null ? 'Record planned risk to unlock' : 'Risk-adjusted result from ' + (k.r_sample_count || 0) + ' trades with planned risk',
-    },
-    {
-      label: 'Max drawdown',
-      value: money2(k.max_drawdown || 0),
-      tone: 'neg',
-      read: 'Worst realized decline from a prior equity peak',
-    },
+    pctGoalItem(
+      'Trade win rate',
+      tradeWinRate,
+      goalValue('win_rate', 65),
+      (k.winning_trades || 0).toLocaleString() + ' won, ' + (k.losing_trades || 0).toLocaleString() + ' lost'
+    ),
+    pctGoalItem(
+      'Day win rate',
+      dayWinRate,
+      goalValue('day_win_rate', 75),
+      (k.positive_days || 0).toLocaleString() + ' green days, ' + (k.negative_days || 0).toLocaleString() + ' red'
+    ),
+    scaledGoalItem(
+      'Profit factor',
+      k.profit_factor == null ? 0 : Number(k.profit_factor),
+      goalValue('profit_factor', 1.5),
+      (value) => value.toFixed(2),
+      k.profit_factor == null ? 'Needs both wins and losses' : '$' + Number(k.profit_factor).toFixed(2) + ' won for every $1.00 lost'
+    ),
+    scaledGoalItem(
+      'Win / loss size',
+      winLossRatio == null ? 0 : winLossRatio,
+      goalValue('avg_win_loss_ratio', 1.5),
+      (value) => value.toFixed(2),
+      winLossDiagnosis
+    ),
+    exitReliable
+      ? pctGoalItem(
+          'Exit efficiency',
+          exitEfficiency,
+          goalValue('exit_efficiency', 60),
+          'You capture ' + exitEfficiency.toFixed(0) + '% of the favorable move on covered winning trades.',
+          true
+        )
+      : {
+          label: 'Exit efficiency',
+          value: 'N/A',
+          read: 'More covered winning trades are needed before exit efficiency is reliable.',
+        },
+    scaledGoalItem(
+      'Expectancy',
+      Number(k.expectancy || 0),
+      goalValue('expectancy', 50),
+      (value) => money2(value),
+      'What the next completed trade is worth, on average'
+    ),
   ];
 
   const readout = days.length ? days[days.length - 1] : null;

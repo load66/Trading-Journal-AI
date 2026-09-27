@@ -840,3 +840,41 @@ def test_trade_list_surfaces_option_journal_and_derives_r_only_from_explicit_ris
         assert row["realized_r"] == 2.0589
     finally:
         conn.close()
+
+
+def test_kpis_expose_green_and_red_day_counts(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Day Win Test", "day_trading", "schwab"),
+        )
+        rows = [
+            ("g1", "2026-09-21", 100.0),
+            ("g2", "2026-09-22", 50.0),
+            ("r1", "2026-09-23", -25.0),
+        ]
+        for group, date, pnl in rows:
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, group, date, "SPY", "OPTION", "LONG",
+                    pnl, pnl, 0.0, "[]", "imported",
+                ),
+            )
+        conn.commit()
+
+        result = main.get_kpis(account_id=account_id, date_from=None, date_to=None, conn=conn)
+
+        assert result["trading_days"] == 3
+        assert result["positive_days"] == 2
+        assert result["negative_days"] == 1
+        assert result["day_win_rate"] == 66.7
+    finally:
+        conn.close()

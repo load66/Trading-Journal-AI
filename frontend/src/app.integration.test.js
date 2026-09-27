@@ -221,13 +221,17 @@ beforeAll(() => {
   URL.revokeObjectURL = jest.fn();
 });
 
-beforeEach(() => __restoreMocks());
+beforeEach(() => {
+  __restoreMocks();
+  sessionStorage.clear();
+});
 
 async function renderApp() {
-  render(<App />);
+  const view = render(<App />);
   // Accounts load on mount; waiting for them lets the first render settle.
   await waitFor(() => expect(accountsApi.list).toHaveBeenCalled());
   await act(async () => {});
+  return view;
 }
 
 const nav = () => screen.getByRole('navigation', { name: 'Main' });
@@ -241,6 +245,25 @@ test('header keeps every page, Settings, Import, Add Trade and a labeled Brain e
   expect(within(banner).getByRole('button', { name: /^Import$/ })).toBeVisible();
   expect(within(banner).getByRole('button', { name: /Add Trade/ })).toBeVisible();
   expect(within(banner).getByRole('button', { name: /Brain/ })).toBeVisible();
+});
+
+test('refresh restores the current journal location instead of returning to Dashboard', async () => {
+  const first = await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  expect(within(nav()).getByRole('button', { name: 'Trade View' })).toHaveAttribute('aria-current', 'page');
+
+  await waitFor(() => {
+    const saved = JSON.parse(sessionStorage.getItem('trading-journal:navigation-state-v1'));
+    expect(saved.page).toBe('trades');
+  });
+
+  first.unmount();
+  accountsApi.list.mockClear();
+  const second = render(<App />);
+  await waitFor(() => expect(accountsApi.list).toHaveBeenCalled());
+  expect(within(nav()).getByRole('button', { name: 'Trade View' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByRole('heading', { name: 'Trade View' })).toBeVisible();
+  second.unmount();
 });
 
 test('Brain opens from the header as a dialog and closes on Escape', async () => {
@@ -454,8 +477,24 @@ test('Trade View surfaces option strategy, review status, excursion and missing-
   expect(screen.getByText('+103.7%')).toBeVisible();
   expect(screen.getByText('-72.2%')).toBeVisible();
   expect(screen.getByText('71.8%')).toBeVisible();
-  expect(screen.getByText('Set risk')).toBeVisible();
+  const setRisk = screen.getByRole('button', { name: 'Set risk' });
+  expect(setRisk).toBeVisible();
   expect(screen.queryByText('Not tagged')).not.toBeInTheDocument();
+
+  tradesApi.getAnalysis.mockResolvedValueOnce({
+    data: {
+      analysis: {
+        strategy: 'LE E-Entry — 10m 8 EMA Retest + VWAP Reclaim',
+        risk_per_trade: null,
+      },
+      tags: [],
+    },
+  });
+  fireEvent.click(setRisk);
+
+  const riskInput = await screen.findByLabelText('Planned Risk ($)');
+  expect(riskInput).toBeVisible();
+  await waitFor(() => expect(riskInput).toHaveFocus());
 });
 
 test('Stats planned risk is explicit and is sent with the saved trade analysis', async () => {
@@ -748,6 +787,75 @@ test('Goals save failure is shown and keeps the panel open', async () => {
   expect(screen.getByRole('heading', { name: 'Goals' })).toBeInTheDocument();
 });
 
+
+test('Dashboard primary KPI strip uses goal-based trader metrics from the reference design', async () => {
+  kpisApi.get.mockResolvedValue({
+    data: {
+      total_net_pnl: 4340.34,
+      total_trades: 191,
+      winning_trades: 101,
+      losing_trades: 90,
+      win_rate: 52.9,
+      avg_win: 338,
+      avg_loss: -517,
+      profit_factor: 1.35,
+      trading_days: 173,
+      positive_days: 143,
+      negative_days: 30,
+      day_win_rate: 82.7,
+      expectancy: 56.14,
+      exit_efficiency: 38,
+      capture_confidence: 'RELIABLE',
+      daily_pnl: [],
+    },
+  });
+  goalsApi.get.mockResolvedValue({
+    data: {
+      win_rate: 65,
+      day_win_rate: 75,
+      profit_factor: 1.5,
+      avg_win_loss_ratio: 1.5,
+      exit_efficiency: 50,
+      expectancy: 50,
+    },
+  });
+
+  await renderApp();
+
+  for (const label of [
+    'Trade win rate',
+    'Day win rate',
+    'Profit factor',
+    'Win / loss size',
+    'Exit efficiency',
+    'Expectancy',
+  ]) {
+    expect(await screen.findByText(label)).toBeVisible();
+  }
+
+  expect(screen.getByText('52.9%')).toBeVisible();
+  expect(screen.getByText('82.7%')).toBeVisible();
+  expect(screen.getByText('1.35')).toBeVisible();
+  expect(screen.getByText('0.65')).toBeVisible();
+  expect(screen.getByText('38.0%')).toBeVisible();
+  expect(screen.getByText('+$56.14')).toBeVisible();
+  expect(screen.getByText(/101 won, 90 lost/i)).toBeVisible();
+  expect(screen.getByText(/143 green days, 30 red/i)).toBeVisible();
+  expect(screen.getByText(/average win is/i)).toBeVisible();
+  expect(screen.getByText(/losses are larger than wins/i)).toBeVisible();
+  expect(screen.getByText(/capture 38% of the favorable move/i)).toBeVisible();
+  expect(screen.queryByText('Avg R / trade')).not.toBeInTheDocument();
+  expect(screen.queryByText('Max drawdown')).not.toBeInTheDocument();
+  const goalMarkers = Array.from(document.querySelectorAll('.v3-measures-dashboard .v3-track-goal'))
+    .map(node => node.getAttribute('data-g'));
+  expect(goalMarkers).toEqual(expect.arrayContaining([
+    'goal 65%',
+    'goal 75%',
+    'goal 1.50',
+    'goal 50%',
+    'goal +$50.00',
+  ]));
+});
 
 test('Dashboard prioritizes trade management and the latest saved Smoking Gun report', async () => {
   kpisApi.get.mockResolvedValue({
