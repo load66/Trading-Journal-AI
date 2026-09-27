@@ -258,3 +258,55 @@ def test_day_review_does_not_filter_unanchored_ai_interpretation(monkeypatch):
     assert result["mistakes"] == payload["mistakes"]
     assert result["overall_grade"] == "C+"
     assert result["diagnostic_mode"] == "unfiltered"
+
+def test_day_review_normalizes_only_verbatim_highlights():
+    payload = {
+        "narrative": "QCOM showed patient execution. WMT was averaged down into weakness.",
+        "mental_game": "Discipline faded late in the session.",
+        "highlights": {
+            "good": [
+                "QCOM showed patient execution",
+                "not actually in the prose",
+                "QCOM showed patient execution",
+            ],
+            "bad": [
+                "WMT was averaged down into weakness",
+                "Discipline faded late in the session",
+                "QCOM showed patient execution",
+            ],
+        },
+    }
+
+    assert daily_summary._normalize_highlights(payload) == {
+        "good": ["QCOM showed patient execution"],
+        "bad": [
+            "WMT was averaged down into weakness",
+            "Discipline faded late in the session",
+        ],
+    }
+
+
+def test_day_review_preserves_structured_highlights(monkeypatch):
+    ctx = context()
+    payload = result_payload()
+    payload["narrative"] = (
+        "SPY execution stayed controlled early, but the later re-entry was impulsive."
+    )
+    payload["mental_game"] = "Patience weakened late in the session."
+    payload["highlights"] = {
+        "good": ["SPY execution stayed controlled early"],
+        "bad": [
+            "later re-entry was impulsive",
+            "Patience weakened late in the session",
+        ],
+    }
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(daily_summary, "_groq_daily_summary", lambda *_args, **_kwargs: payload)
+
+    result = daily_summary.generate_daily_summary(ctx)
+
+    assert result["highlights"] == payload["highlights"]
+    assert result["diagnostic_mode"] == "unfiltered"
+
