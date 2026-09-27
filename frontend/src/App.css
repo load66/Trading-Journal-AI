@@ -362,7 +362,7 @@
 }
 
 .td-chart-review-remove:hover:not(:disabled) {
-  color: var(--negative);
+  color: var(--result-neg);
   border-color: rgba(239, 91, 91, .38);
 }
 
