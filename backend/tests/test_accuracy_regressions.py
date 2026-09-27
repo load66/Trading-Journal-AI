@@ -74,6 +74,19 @@ def test_chart_empty_market_response_returns_clear_warning(monkeypatch, tmp_path
     assert "NoneType" not in result["warning"]
 
 
+def test_report_hold_seconds_helper_is_bound_to_canonical_metric(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    trade = {
+        "date": "2026-09-25",
+        "side": "LONG",
+        "executions": [
+            {"action": "BOT", "qty": 1, "price": 1.0, "timestamp_utc": "2026-09-25T14:00:00Z"},
+            {"action": "SOLD", "qty": 1, "price": 1.2, "timestamp_utc": "2026-09-25T14:05:30Z"},
+        ],
+    }
+    assert main.canonical_hold_seconds(trade) == 330
+
+
 def test_primary_profit_factor_uses_net_pnl(monkeypatch, tmp_path):
     main = fresh_main(monkeypatch, tmp_path)
 
