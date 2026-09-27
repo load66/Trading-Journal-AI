@@ -893,13 +893,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [copyCandidates, setCopyCandidates] = useState([]);
   const [copyCandidatesLoading, setCopyCandidatesLoading] = useState(false);
   const [copySourceGroup, setCopySourceGroup] = useState('');
-  const [copyMode, setCopyMode] = useState('merge');
-  const [copyParts, setCopyParts] = useState({
-    review: true,
-    tags: true,
-    strategy: true,
-    setup: true,
-  });
   const [copyBusy, setCopyBusy] = useState(false);
   const [copyError, setCopyError] = useState(null);
   const [copyNotice, setCopyNotice] = useState(null);
@@ -951,7 +944,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     setCopyJournalOpen(false);
     setCopyCandidates([]);
     setCopySourceGroup('');
-    setCopyMode('merge');
     setCopyError(null);
     setCopyNotice(null);
   }, [trade.trade_group]);
@@ -1168,10 +1160,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
   const handleCopyJournal = async () => {
     if (!copySourceGroup) return;
-    if (!Object.values(copyParts).some(Boolean)) {
-      setCopyError('Choose at least one section to copy.');
-      return;
-    }
 
     setCopyBusy(true);
     setCopyError(null);
@@ -1179,11 +1167,11 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     try {
       const response = await tradesApi.copyJournal(trade.trade_group, {
         source_trade_group: copySourceGroup,
-        include_review: copyParts.review,
-        include_tags: copyParts.tags,
-        include_strategy: copyParts.strategy,
-        include_setup: copyParts.setup,
-        mode: copyMode,
+        include_review: true,
+        include_tags: true,
+        include_strategy: true,
+        include_setup: true,
+        mode: 'merge',
       });
       const payload = response.data || {};
       setAnalysis(payload.analysis || {});
@@ -1666,7 +1654,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   </div>
                   <div className="trade-review-toolbar-actions">
                     <button type="button" className="btn btn-ghost btn-sm" onClick={openCopyJournal}>
-                      <Copy size={13} /> Copy similar
+                      <Copy size={13} /> Copy previous journal
                     </button>
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => setTab('LE Review')}>
                       <ShieldCheck size={13} /> LE evidence
@@ -1691,12 +1679,12 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 )}
 
                 {copyJournalOpen && (
-                  <section className="trade-copy-panel" aria-label="Copy journal from a similar trade">
+                  <section className="trade-copy-panel trade-copy-simple" aria-label="Copy a previous journal safely">
                     <div className="trade-copy-head">
                       <div>
-                        <span className="trade-review-eyebrow">Journal accelerator</span>
-                        <h3>Copy from a similar trade</h3>
-                        <p>Matching Strategy and Setup trades are shown first. Trade-specific risk, P&amp;L, executions, chart screenshots, and LE evidence are never copied.</p>
+                        <span className="trade-review-eyebrow">Quick copy</span>
+                        <h3>Copy a previous journal</h3>
+                        <p>Choose a similar trade. We will only fill missing Review, Tags, Strategy, and Setup. Anything already written on this trade stays untouched.</p>
                       </div>
                       <button
                         type="button"
@@ -1711,18 +1699,24 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     </div>
 
                     {copyCandidatesLoading ? (
-                      <div className="trade-copy-loading">Finding similar reviewed trades…</div>
+                      <div className="trade-copy-loading">Finding your best matches…</div>
                     ) : copyCandidates.length ? (
                       <>
                         <label className="trade-copy-source">
-                          <span className="field-label">Copy from</span>
+                          <span className="field-label">Previous trade</span>
                           <select value={copySourceGroup} onChange={event => setCopySourceGroup(event.target.value)}>
-                            {copyCandidates.map(candidate => {
-                              const exact = candidate.copy_match_score >= 3 ? 'Strategy + setup match' : candidate.copy_match_score === 2 ? 'Strategy match' : candidate.copy_match_score === 1 ? 'Setup match' : 'Recent reviewed trade';
-                              const pnl = candidate.net_pnl == null ? '' : ` · ${candidate.net_pnl >= 0 ? '+' : '-'}${Math.abs(Number(candidate.net_pnl)).toFixed(0)}`;
+                            {copyCandidates.map((candidate, index) => {
+                              const match = candidate.copy_match_score >= 3
+                                ? 'Same strategy + setup'
+                                : candidate.copy_match_score === 2
+                                  ? 'Same strategy'
+                                  : candidate.copy_match_score === 1
+                                    ? 'Same setup'
+                                    : 'Recent reviewed trade';
+                              const recommended = index === 0 ? 'Recommended · ' : '';
                               return (
                                 <option value={candidate.trade_group} key={candidate.trade_group}>
-                                  {candidate.date} · {candidate.ticker} · {exact}{pnl}
+                                  {recommended}{candidate.date} · {candidate.ticker} · {match}
                                 </option>
                               );
                             })}
@@ -1730,69 +1724,33 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         </label>
 
                         {selectedCopySource && (
-                          <div className="trade-copy-source-card">
+                          <div className="trade-copy-source-card trade-copy-simple-source">
                             <div>
-                              <strong>{selectedCopySource.ticker}</strong>
-                              <span>{selectedCopySource.date}</span>
+                              <span>Trade</span>
+                              <strong>{selectedCopySource.ticker} · {selectedCopySource.date}</strong>
                             </div>
                             <div>
                               <span>Strategy</span>
-                              <strong>{selectedCopySource.strategy || '—'}</strong>
+                              <strong>{selectedCopySource.strategy || 'Not set'}</strong>
                             </div>
                             <div>
                               <span>Setup</span>
-                              <strong>{selectedCopySource.setup || '—'}</strong>
+                              <strong>{selectedCopySource.setup || 'Not set'}</strong>
                             </div>
                           </div>
                         )}
 
-                        <div className="trade-copy-parts" role="group" aria-label="Journal sections to copy">
-                          {[
-                            ['review', 'Review', 'Journal note + Entry / Exit / Mistake'],
-                            ['tags', 'Tags', 'Setup, execution, mistake, emotion, outcome tags'],
-                            ['strategy', 'Strategy', 'Reusable strategy label only'],
-                            ['setup', 'Playbook setup', 'The trade setup name, not setup evidence'],
-                          ].map(([key, label, detail]) => (
-                            <label className={`trade-copy-part ${copyParts[key] ? 'active' : ''}`} key={key}>
-                              <input
-                                type="checkbox"
-                                checked={copyParts[key]}
-                                onChange={event => setCopyParts(parts => ({ ...parts, [key]: event.target.checked }))}
-                              />
-                              <span>
-                                <strong>{label}</strong>
-                                <small>{detail}</small>
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-
-                        <div className="trade-copy-mode">
-                          <button
-                            type="button"
-                            className={`trade-copy-mode-btn ${copyMode === 'merge' ? 'active' : ''}`}
-                            aria-pressed={copyMode === 'merge'}
-                            onClick={() => setCopyMode('merge')}
-                          >
-                            <strong>Fill blanks + add missing</strong>
-                            <span>Safest default. Keeps anything you already journaled.</span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`trade-copy-mode-btn danger ${copyMode === 'replace' ? 'active' : ''}`}
-                            aria-pressed={copyMode === 'replace'}
-                            onClick={() => setCopyMode('replace')}
-                          >
-                            <strong>Replace selected content</strong>
-                            <span>Use when this trade should mirror the source review.</span>
-                          </button>
-                        </div>
-
-                        {copyMode === 'replace' && (
-                          <div className="notice caution trade-copy-warning">
-                            Replace mode overwrites the selected review fields and structured tags on this trade.
+                        <div className="trade-copy-safe-box">
+                          <CheckCircle2 size={17} />
+                          <div>
+                            <strong>Safe copy</strong>
+                            <span>Fills only missing journal details and adds missing tags. It never overwrites your existing review.</span>
                           </div>
-                        )}
+                        </div>
+
+                        <div className="trade-copy-never">
+                          Never copies P&amp;L, executions, commissions, stop/target, planned risk, chart screenshots, or LE evidence.
+                        </div>
 
                         {copyError && <div className="notice neg trade-copy-error" role="alert">{copyError}</div>}
 
@@ -1801,16 +1759,16 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                             type="button"
                             className="btn btn-primary"
                             onClick={handleCopyJournal}
-                            disabled={copyBusy || !copySourceGroup || !Object.values(copyParts).some(Boolean)}
+                            disabled={copyBusy || !copySourceGroup}
                           >
-                            <Copy size={15} /> {copyBusy ? 'Copying…' : 'Copy journal'}
+                            <Copy size={15} /> {copyBusy ? 'Copying safely…' : 'Copy journal safely'}
                           </button>
                         </div>
                       </>
                     ) : (
                       <div className="trade-copy-empty">
-                        <strong>No similar reviewed trades found.</strong>
-                        <span>Set this trade’s Strategy or Playbook Setup first, or journal another trade with reusable context.</span>
+                        <strong>No previous reviewed trades found yet.</strong>
+                        <span>Journal one trade first, then this shortcut can reuse it safely on similar trades.</span>
                       </div>
                     )}
 
