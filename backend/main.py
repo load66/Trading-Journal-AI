@@ -47,6 +47,7 @@ from smoking_gun_library import ANALYTICS_ENGINE_VERSION
 from trade_metrics import (
     trade_is_closed,
     trade_pl_percent as canonical_trade_pl_percent,
+    hold_seconds as canonical_hold_seconds,
     entry_market_minutes,
     manual_pnl as canonical_manual_pnl,
     daily_totals as canonical_daily_totals,
