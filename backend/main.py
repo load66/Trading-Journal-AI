@@ -24,7 +24,7 @@ from database import (init_db, get_db, row_to_dict, insert_and_get_id,
                       year_filter_clause, is_integrity_error)
 from auth import AuthError, authorize_header, auth_required, validate_auth_config
 from storage import DiaryStorage, ChartStorage
-from csv_parser import parse_broker_csv, detect_broker, FUTURES_MULTIPLIERS
+from csv_parser import parse_broker_csv, detect_broker
 from ai_analysis import (
     analyze_diary_entry,
     analyze_diary_text,
@@ -39,7 +39,23 @@ from ai_analysis import (
 )
 from daily_summary import build_daily_context, generate_daily_summary
 from performance_report import build_performance_report
-from excursion_analysis import calculate_trade_excursion
+from trade_metrics import (
+    FUTURES_MULTIPLIERS,
+    closed_trades,
+    execution_financials,
+    first_entry_minutes,
+    hold_seconds,
+    instrument_multiplier,
+    performance_summary,
+    trade_is_closed,
+    trade_pl_percent,
+)
+from excursion_analysis import (
+    EXCURSION_ENGINE_VERSION,
+    calculate_trade_excursion,
+    excursion_metrics_are_current,
+    sanitize_excursion_metrics,
+)
 from library import router as library_router, init_library_tables, apply_aliases, library_names, TAG_TYPES as LIBRARY_TAG_TYPES
 from smoking_gun_routes import router as smoking_gun_router
 from le_analysis import build_le_levels, build_le_review
