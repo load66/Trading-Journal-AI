@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, Pencil, GitMerge, Trash2, Search } from 'lucide-react';
-import { libraryApi } from '../api';
+import { Plus, Pencil, GitMerge, Trash2, Search, HardDrive } from 'lucide-react';
+import { libraryApi, storageApi } from '../api';
 import { PageHeader } from './ui';
 
 const SECTIONS = [
   { id: 'strategy', label: 'Strategies' },
   { id: 'source', label: 'Sources' },
   { id: 'tag', label: 'Tags' },
+  { id: 'storage', label: 'Storage' },
 ];
 
 const TAG_TYPE_LABEL = {
@@ -270,6 +271,87 @@ function ItemList({ kind, tagType = '', title, sub, noun, items, onChanged }) {
   );
 }
 
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return '0 MB';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const amount = bytes / (1024 ** power);
+  return `${amount >= 100 || power === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[power]}`;
+}
+
+function StorageHealth() {
+  const [health, setHealth] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    storageApi.health()
+      .then(res => {
+        if (!active) return;
+        setHealth(res.data);
+        setError(null);
+      })
+      .catch(e => {
+        if (active) setError(errText(e));
+      });
+    return () => { active = false; };
+  }, []);
+
+  if (error) return <div className="notice neg" role="alert">{error}</div>;
+  if (!health) return <div className="skeleton" style={{ height: 250 }} />;
+
+  const pct = Math.max(0, Math.min(100, Number(health.usage_pct || 0)));
+  const tone = health.status === 'critical' ? 'critical'
+    : health.status === 'high' ? 'high'
+      : health.status === 'watch' ? 'watch' : 'healthy';
+
+  return (
+    <section className="card storage-health-card" aria-label="Screenshot storage">
+      <div className="storage-health-head">
+        <div className="storage-health-icon"><HardDrive size={18} /></div>
+        <div>
+          <h2 className="section-title">Screenshot Storage</h2>
+          <div className="section-sub">{health.provider_label} · high-resolution chart archive</div>
+        </div>
+        <span className={`storage-health-status ${tone}`}>{health.status}</span>
+      </div>
+
+      <div className="storage-health-usage">
+        <div>
+          <strong>{formatBytes(health.used_bytes)}</strong>
+          <span> of {formatBytes(health.capacity_bytes)}</span>
+        </div>
+        <span className="num">{pct.toFixed(pct < 10 ? 1 : 0)}%</span>
+      </div>
+      <div className="storage-health-bar" aria-label={`${pct}% storage used`}>
+        <span className={tone} style={{ width: `${pct}%` }} />
+      </div>
+
+      <div className="storage-health-grid">
+        <div><span>Screenshots</span><strong className="num">{Number(health.screenshot_count || 0).toLocaleString()}</strong></div>
+        <div><span>Average size</span><strong>{formatBytes(health.average_bytes)}</strong></div>
+        <div><span>Free space</span><strong>{formatBytes(health.remaining_bytes)}</strong></div>
+        <div>
+          <span>Estimated capacity</span>
+          <strong className="num">
+            {health.estimated_remaining_screenshots == null
+              ? '—'
+              : `~${Number(health.estimated_remaining_screenshots).toLocaleString()} more`}
+          </strong>
+        </div>
+      </div>
+
+      {health.untracked_count > 0 && (
+        <div className="storage-health-note">
+          {health.untracked_count} older screenshot{health.untracked_count === 1 ? '' : 's'} predate size tracking and are excluded from byte totals until replaced or migrated.
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function Settings() {
   const [lib, setLib] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -319,7 +401,9 @@ export default function Settings() {
               <span className="text-muted num" style={{ marginLeft: 6, fontWeight: 500 }}>
                 {s.id === 'tag'
                   ? TAG_TYPE_ORDER.reduce((n, t) => n + (lib.tags?.[t]?.length || 0), 0)
-                  : (s.id === 'strategy' ? lib.strategies : lib.sources).length}
+                  : s.id === 'storage'
+                    ? ''
+                    : (s.id === 'strategy' ? lib.strategies : lib.sources).length}
               </span>
             )}
           </button>
@@ -336,6 +420,8 @@ export default function Settings() {
         {lib && section === 'source' && (
           <ItemList kind="source" {...SECTION_COPY.source} items={lib.sources} onChanged={load} />
         )}
+        {section === 'storage' && <StorageHealth />}
+
         {lib && section === 'tag' && (
           <div className="stack">
             {TAG_TYPE_ORDER.map(t => (
