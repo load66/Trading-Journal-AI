@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Pencil, GitMerge, Trash2, Search, HardDrive, RefreshCw, ShieldCheck, AlertTriangle, ExternalLink, Activity } from 'lucide-react';
-import { libraryApi, storageApi } from '../api';
+import { accountsApi, libraryApi, storageApi } from '../api';
 import { PageHeader } from './ui';
+import { ACCOUNT_TYPES, accountTypeDescription, accountTypeImpact, accountTypeLabel } from '../accountTypes';
 
 const SECTIONS = [
+  { id: 'accounts', label: 'Accounts' },
   { id: 'strategy', label: 'Strategies' },
   { id: 'source', label: 'Sources' },
   { id: 'tag', label: 'Tags' },
@@ -272,6 +274,174 @@ function ItemList({ kind, tagType = '', title, sub, noun, items, onChanged }) {
 }
 
 
+function AccountSettingsPanel({ accounts, onAccountsChanged }) {
+  const [editing, setEditing] = useState(null);
+  const [pending, setPending] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+
+  const beginEdit = (account) => {
+    setEditing({ id: account.id, type: account.type });
+    setPending(null);
+    setError(null);
+    setNotice(null);
+  };
+
+  const reviewChange = (account) => {
+    if (!editing || editing.id !== account.id || editing.type === account.type) return;
+    setPending({
+      account,
+      nextType: editing.type,
+      impact: accountTypeImpact(account.type, editing.type),
+    });
+    setError(null);
+  };
+
+  const confirmChange = async () => {
+    if (!pending) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await accountsApi.update(pending.account.id, { type: pending.nextType });
+      if (onAccountsChanged) await onAccountsChanged();
+      setNotice(`${pending.account.name} is now ${accountTypeLabel(pending.nextType)}.`);
+      setEditing(null);
+      setPending(null);
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="account-settings-shell" aria-label="Account management">
+      <div className="account-settings-head">
+        <div>
+          <h2 className="section-title">Account management</h2>
+          <p className="section-sub">
+            Set how each brokerage account should be interpreted. Changing the type never edits raw trades, executions, or P&amp;L.
+          </p>
+        </div>
+        <span className="account-settings-count num">{plural(accounts.length, 'account')}</span>
+      </div>
+
+      {notice && <div className="notice pos settings-notice" role="status">{notice}</div>}
+      {error && <div className="notice neg settings-notice" role="alert">{error}</div>}
+
+      <div className="account-settings-list">
+        {accounts.map(account => {
+          const isEditing = editing?.id === account.id;
+          const draftType = isEditing ? editing.type : account.type;
+          const changed = isEditing && draftType !== account.type;
+
+          return (
+            <article className="account-settings-card" key={account.id}>
+              <div className="account-settings-identity">
+                <span className="acct-dot account-settings-dot" style={{ background: account.color }} aria-hidden="true" />
+                <div>
+                  <strong>{account.name}</strong>
+                  <span>{account.broker || 'Broker not set'}</span>
+                </div>
+              </div>
+
+              <div className="account-settings-type">
+                {isEditing ? (
+                  <>
+                    <label>
+                      <span className="field-label">Account type</span>
+                      <select
+                        aria-label={`Account type for ${account.name}`}
+                        value={draftType}
+                        onChange={e => setEditing({ id: account.id, type: e.target.value })}
+                      >
+                        {ACCOUNT_TYPES.map(option => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <p>{accountTypeDescription(draftType)}</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="account-settings-type-row">
+                      <span className="acct-type-badge">{accountTypeLabel(account.type)}</span>
+                    </div>
+                    <p>{accountTypeDescription(account.type)}</p>
+                  </>
+                )}
+              </div>
+
+              <div className="account-settings-actions">
+                {isEditing ? (
+                  <>
+                    <button type="button" className="btn btn-primary btn-sm" disabled={!changed || busy} onClick={() => reviewChange(account)}>
+                      Review change
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setEditing(null)}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => beginEdit(account)} aria-label={`Change type for ${account.name}`}>
+                    <Pencil size={13} /> Change type
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+
+        {!accounts.length && (
+          <div className="empty">No accounts are available yet. Create an account from the account selector first.</div>
+        )}
+      </div>
+
+      {pending && (
+        <div className="account-type-impact" role="dialog" aria-modal="true" aria-labelledby="account-type-confirm-title">
+          <div className="account-type-impact-head">
+            <div>
+              <span className="eyebrow">Analytics impact review</span>
+              <h3 id="account-type-confirm-title">Confirm account type change</h3>
+            </div>
+            <span className="account-type-change">
+              {accountTypeLabel(pending.account.type)} <span aria-hidden="true">→</span> {accountTypeLabel(pending.nextType)}
+            </span>
+          </div>
+
+          <p className="account-type-impact-note">{pending.impact.note}</p>
+
+          <div className="account-type-impact-grid">
+            <div>
+              <strong>Affected</strong>
+              <ul>
+                {pending.impact.affected.map(item => <li key={item}>{item}</li>)}
+              </ul>
+            </div>
+            <div>
+              <strong>Not affected</strong>
+              <ul>
+                {pending.impact.unchanged.map(item => <li key={item}>{item}</li>)}
+              </ul>
+            </div>
+          </div>
+
+          <div className="account-type-impact-actions">
+            <button type="button" className="btn btn-primary" disabled={busy} onClick={confirmChange}>
+              {busy ? 'Saving…' : 'Change account type'}
+            </button>
+            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPending(null)}>
+              Keep current type
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+
 const fmtBytes = (bytes) => {
   const n = Number(bytes || 0);
   if (n < 1024) return `${n} B`;
@@ -460,10 +630,10 @@ function StorageHealthPanel() {
   );
 }
 
-export default function Settings() {
+export default function Settings({ accounts = [], onAccountsChanged }) {
   const [lib, setLib] = useState(null);
   const [loadError, setLoadError] = useState(null);
-  const [section, setSection] = useState('strategy');
+  const [section, setSection] = useState('accounts');
 
   const load = useCallback(async () => {
     try {
@@ -487,7 +657,7 @@ export default function Settings() {
     <div>
       <PageHeader
         title="Settings"
-        subtitle="Clean up the names the journal uses. Renames and merges update every trade that uses the name."
+        subtitle="Manage account behavior, journal libraries, and storage without changing raw trade records."
       />
 
       <div className="tabs" role="tablist" aria-label="Settings sections" style={{ marginBottom: 'var(--space-5)' }}>
@@ -505,7 +675,10 @@ export default function Settings() {
             onKeyDown={onTabKey}
           >
             {s.label}
-            {lib && s.id !== 'storage' && (
+            {s.id === 'accounts' && (
+              <span className="text-muted num" style={{ marginLeft: 6, fontWeight: 500 }}>{accounts.length}</span>
+            )}
+            {lib && !['accounts', 'storage'].includes(s.id) && (
               <span className="text-muted num" style={{ marginLeft: 6, fontWeight: 500 }}>
                 {s.id === 'tag'
                   ? TAG_TYPE_ORDER.reduce((n, t) => n + (lib.tags?.[t]?.length || 0), 0)
@@ -520,6 +693,7 @@ export default function Settings() {
         {section !== 'storage' && loadError && <div className="notice neg" role="alert">{loadError}</div>}
         {section !== 'storage' && !lib && !loadError && <div className="skeleton" style={{ height: 320 }} />}
 
+        {section === 'accounts' && <AccountSettingsPanel accounts={accounts} onAccountsChanged={onAccountsChanged} />}
         {section === 'storage' && <StorageHealthPanel />}
 
         {lib && section === 'strategy' && (
