@@ -1445,13 +1445,26 @@ button.month-card:active { transform: translateY(1px); }
 .trade-review-head {
   text-align: center;
 }
+.trade-review-cell {
+  line-height: 0;
+}
 .trade-review-dot {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+  display: inline-block !important;
+  flex: 0 0 8px;
+  width: 8px !important;
+  min-width: 8px;
+  max-width: 8px;
+  height: 8px !important;
+  min-height: 8px;
+  max-height: 8px;
+  padding: 0 !important;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  box-sizing: border-box;
   vertical-align: middle;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+  line-height: 0;
+  font-size: 0;
 }
 .trade-review-dot.complete { color: var(--result-pos); background: var(--result-pos); }
 .trade-review-dot.partial { color: var(--caution); background: var(--caution); }
@@ -1531,6 +1544,13 @@ button.month-card:active { transform: translateY(1px); }
   font-size: 9.5px;
   font-weight: 650;
   white-space: nowrap;
+}
+.trade-r-pending {
+  color: var(--text-tertiary);
+  font-size: 8.5px !important;
+  font-weight: 550 !important;
+  letter-spacing: .01em;
+  opacity: .72;
 }
 .trade-r-missing {
   display: inline-block;
