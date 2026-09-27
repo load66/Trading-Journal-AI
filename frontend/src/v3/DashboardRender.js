@@ -125,7 +125,6 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
   const loserHoldN = Number(hold.loser_count || 0);
   const holdN = Number(hold.sample_count || (winnerHoldN + loserHoldN));
   const holdCoverage = Number(hold.coverage_pct ?? (totalTrades ? holdN / totalTrades * 100 : 0));
-  const holdRatio = winnerHold > 0 && loserHold != null ? loserHold / winnerHold : null;
   const avgHoldLeak = winnerHold != null && loserHold != null && loserHold > winnerHold * 1.10;
   const medianHoldLeak = winnerMedian != null && loserMedian != null && loserMedian > winnerMedian * 1.10;
   const holdReliable = winnerHoldN >= 5 && loserHoldN >= 5 && winnerHold != null && loserHold != null;
