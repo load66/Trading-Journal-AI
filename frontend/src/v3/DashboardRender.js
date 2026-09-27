@@ -210,8 +210,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
     : holdMixed
       ? 'Average and median hold times point in different directions, so no strong holding-time leak is diagnosed.'
       : holdLeak
-        ? 'Broker executions show losers are held longer than winners in both average and median behavior.'
-        : 'Broker executions do not show a consistent loser-holding leak in this window.';
+        ? 'Losing trades are held longer than winning trades in both average and median behavior.'
+        : 'No consistent loser-holding leak is present in this window.';
 
   const captureSplitSummary = !captureUsable
     ? 'Capture vs. giveback is withheld until actual-instrument path coverage is sufficient.'
@@ -237,15 +237,15 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
 
   const bottomCopy = (() => {
     const csvSentence = holdReliable
-      ? 'Broker CSV executions show winners average ' + winnerHold.toFixed(1) + ' min and losers average ' + loserHold.toFixed(1) + ' min.'
-      : 'Broker CSV executions do not yet provide enough hold-time evidence for a firm comparison.';
+      ? 'Winners average ' + winnerHold.toFixed(1) + ' min and losers average ' + loserHold.toFixed(1) + ' min.'
+      : 'There is not yet enough hold-time evidence for a firm comparison.';
 
     if (holdLeak) {
-      return csvSentence + ' The clearest broker-verified management issue is holding losing trades longer, and the median confirms the same pattern. Excursion-based capture/risk stays secondary.';
+      return csvSentence + ' The clearest management issue is holding losing trades longer, and the median confirms the same pattern. Excursion-based capture/risk stays secondary.';
     }
 
     if (holdMixed) {
-      return csvSentence + ' Average and median hold times disagree, so the broker CSV does not support a firm hold-time diagnosis. Supplemental market-path coverage is ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
+      return csvSentence + ' Average and median hold times disagree, so the data does not support a firm hold-time diagnosis. Supplemental market-path coverage is ' + managementCoverage.toFixed(0) + '% (' + excursionN + '/' + totalTrades + ' trades).';
     }
 
     if (!captureUsable && !riskUsable) {
@@ -302,7 +302,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <span className="v3-ref-title-icon"><BarChart3 size={26} /></span>
           <div>
             <h2>Trade management <HelpDot label="How well you manage trades after entry" /></h2>
-            <p>Broker CSV fills are authoritative; market bars are used only for the path between entry and exit.</p>
+            <p>Evaluate how efficiently you manage entries, risk, and exits.</p>
           </div>
         </div>
         <div className="v3-management-range v3-ref-range" role="group" aria-label="Trade management range">
@@ -326,7 +326,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             <span className="v3-ref-card-icon green"><Trophy size={20} /></span>
             <div>
               <h3>Profit capture <HelpDot label="How much favorable premium/price movement was retained on covered winners" /></h3>
-              <p>Uses broker fills plus the actual stock or option-premium path.</p>
+              <p>Measures how much of the available favorable move you retain.</p>
             </div>
           </div>
 
@@ -361,8 +361,8 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <div className="v3-ref-card-heading">
             <span className="v3-ref-card-icon amber"><Clock3 size={20} /></span>
             <div>
-              <h3>Holding behavior <HelpDot label="Average hold time calculated from broker execution timestamps" /></h3>
-              <p>Based directly on your imported broker execution timestamps.</p>
+              <h3>Holding behavior <HelpDot label="Average hold time for winning trades versus losing trades" /></h3>
+              <p>Compares how long winning and losing trades are held.</p>
             </div>
           </div>
 
@@ -424,7 +424,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
             <span className="v3-ref-card-icon red"><ShieldAlert size={20} /></span>
             <div>
               <h3>Risk during trade <HelpDot label="Average favorable and adverse excursion using actual stock/option-premium paths" /></h3>
-              <p>Broker fills define the window; actual instrument bars define the path.</p>
+              <p>Shows favorable versus adverse movement while trades are open.</p>
             </div>
           </div>
 
@@ -464,7 +464,7 @@ function TradeManagement({ kpis, edge, range, onRangeChange, goals }) {
           <span className="v3-ref-bulb"><Lightbulb size={24} /></span>
           <div>
             <h3>Bottom line</h3>
-            <p>Broker CSV first · {rangeCopy}</p>
+            <p>Analysis window · {rangeCopy}</p>
             <span>{totalTrades} closed trades · market-path coverage {excursionN}/{totalTrades}</span>
           </div>
         </div>
