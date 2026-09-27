@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { tradesApi, chartApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
@@ -113,9 +113,162 @@ function EditTextarea({ label, value, onChange }) {
   );
 }
 
+function QuickPickGroup({ title, subtitle, suggestions, value, onToggle, tone = 'accent' }) {
+  return (
+    <section className={`trade-review-pick-group ${tone}`} aria-label={title}>
+      <div className="trade-review-pick-head">
+        <div>
+          <div className="trade-review-pick-title">{title}</div>
+          <div className="trade-review-pick-subtitle">{subtitle}</div>
+        </div>
+      </div>
+      <div className="trade-review-chip-row">
+        {suggestions.map(item => {
+          const active = hasSuggestedPhrase(value, item.text);
+          return (
+            <button
+              key={item.label}
+              type="button"
+              className={`trade-review-chip${active ? ' active' : ''}`}
+              aria-pressed={active}
+              onClick={() => onToggle(item)}
+              title={item.text}
+            >
+              {active && <CheckCircle2 size={13} />}
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TradeReviewSummary({ trade, entryReason, exitReason, mistakes }) {
+  const completion = reviewCompletion(entryReason, exitReason, mistakes);
+  const selectedMistakes = selectedSuggestions(mistakes, MISTAKE_REVIEW_SUGGESTIONS);
+  const primary = selectedMistakes[0] || null;
+  const pnl = Number(trade?.net_pnl || 0);
+
+  const fallbackFocus = completion < 3
+    ? 'Complete the entry, exit, and mistake review so this trade can contribute to your pattern analysis.'
+    : pnl < 0
+      ? 'Convert the loss into one specific rule you can recognize and execute earlier next time.'
+      : 'Confirm that the profitable outcome came from repeatable process rather than outcome alone.';
+
+  return (
+    <section className="trade-review-summary" aria-label="Trade review summary">
+      <div className="trade-review-summary-head">
+        <div className="trade-review-summary-icon"><Target size={19} /></div>
+        <div>
+          <div className="trade-review-summary-title">Review summary</div>
+          <div className="trade-review-summary-subtitle">{completion}/3 review areas documented</div>
+        </div>
+        <div className={`trade-review-completion c${completion}`}>
+          {completion === 3 ? 'Complete' : 'In progress'}
+        </div>
+      </div>
+
+      <div className="trade-review-summary-grid">
+        <div className="trade-review-summary-cell">
+          <span>Primary improvement</span>
+          <strong className={primary ? 'neg' : ''}>
+            {primary ? primary.label : completion === 3 ? 'No tagged rule violation' : 'Finish the review'}
+          </strong>
+          {primary && <small>{primary.category} execution</small>}
+        </div>
+        <div className="trade-review-summary-cell focus">
+          <span>Next-trade rule</span>
+          <strong>{primary?.correction || fallbackFocus}</strong>
+        </div>
+      </div>
+
+      {selectedMistakes.length > 1 && (
+        <div className="trade-review-patterns">
+          <span>Also flagged</span>
+          {selectedMistakes.slice(1, 4).map(item => (
+            <b key={item.label}>{item.label}</b>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 const EMOTIONAL_STATES = ['Focused', 'Confident', 'Calm', 'Anxious', 'FOMO', 'Frustrated', 'Greedy', 'Fearful', 'Undisciplined', 'Overconfident'];
 const DEFAULT_SOURCES   = ['Watchlist', 'Scanner', 'Alert', 'News', 'Social Media', 'Own Research'];
+
 const TAG_TYPES = ['strategy', 'setup', 'execution', 'mistake', 'emotion', 'outcome', 'source'];
+
+const ENTRY_REVIEW_SUGGESTIONS = [
+  { label: 'Key level breakout', text: 'Entered on a confirmed break of a key level with momentum and follow-through.' },
+  { label: 'PDH / PMH breakout', text: 'Entered on a confirmed break of the prior-day or premarket high.' },
+  { label: 'Break + retest', text: 'Entered after the breakout level held on a retest.' },
+  { label: 'VWAP reclaim', text: 'Entered after VWAP was reclaimed and held with confirmation.' },
+  { label: '8 EMA pullback · 10m', text: 'Entered on a controlled pullback into the 8 EMA on the 10-minute timeframe.' },
+  { label: 'Opening range breakout', text: 'Entered on an opening-range breakout with confirmation.' },
+  { label: 'Trend continuation', text: 'Entered with the established intraday trend after consolidation.' },
+  { label: 'Reversal at key level', text: 'Entered on a confirmed reversal from a defined support or resistance level.' },
+  { label: 'Waited for confirmation', text: 'Waited for confirmation before entering instead of anticipating the move.' },
+];
+
+const EXIT_REVIEW_SUGGESTIONS = [
+  { label: 'HOD trim + 8 EMA trail', text: 'Trimmed into the high of day, then trailed the remainder using the 8 EMA on the 10-minute timeframe.' },
+  { label: 'Key-level trim + trail', text: 'Trimmed at the next key level, then trailed the remaining position.' },
+  { label: 'Partial at 1R + trail', text: 'Took a partial at 1R, then managed the remainder with a trailing stop.' },
+  { label: 'Technical invalidation', text: 'Exited when the original technical thesis was invalidated.' },
+  { label: 'Lost 8 EMA · 10m', text: 'Exited after price lost the 8 EMA on the 10-minute timeframe and failed to reclaim it.' },
+  { label: 'Lost VWAP', text: 'Exited after VWAP was lost and the reclaim failed.' },
+  { label: 'Momentum stalled', text: 'Exited when momentum stalled and follow-through failed to develop.' },
+  { label: 'Target reached', text: 'Exited into the planned target area.' },
+  { label: 'Time-based exit', text: 'Exited because the trade failed to progress within the planned time window.' },
+];
+
+const MISTAKE_REVIEW_SUGGESTIONS = [
+  { label: 'Entered before confirmation', category: 'Entry', text: 'Entered before confirmation and anticipated the setup.', correction: 'Wait for the setup to confirm before committing risk.' },
+  { label: 'Chased extended move', category: 'Entry', text: 'Chased an extended move instead of waiting for a cleaner entry.', correction: 'Wait for a pullback, retest, or fresh base instead of chasing extension.' },
+  { label: 'Entered into key level', category: 'Entry', text: 'Entered too close to opposing support or resistance.', correction: 'Require enough room to the next key level before entering.' },
+  { label: 'No volume confirmation', category: 'Entry', text: 'Entered without sufficient volume or momentum confirmation.', correction: 'Require volume and momentum confirmation before entry.' },
+  { label: 'Poor risk/reward', category: 'Entry', text: 'Accepted a trade with poor reward relative to the planned risk.', correction: 'Skip trades that do not offer enough reward to the next realistic target.' },
+  { label: 'Oversized position', category: 'Risk', text: 'Position size was too large for the setup quality or stop distance.', correction: 'Size from the invalidation level and planned dollar risk before entry.' },
+  { label: 'Added to loser', category: 'Risk', text: 'Added to a losing position after the original entry was already under pressure.', correction: 'Do not add risk after the original setup begins failing unless a separate planned add condition is met.' },
+  { label: 'Moved / ignored stop', category: 'Risk', text: 'Moved or ignored the planned stop after the trade invalidated.', correction: 'Honor the predefined invalidation without widening risk after entry.' },
+  { label: 'Held loser too long', category: 'Exit', text: 'Held a losing trade too long after the setup stopped working.', correction: 'Exit sooner when favorable progress fails and technical invalidation begins.' },
+  { label: 'Cut winner too early', category: 'Exit', text: 'Exited a winning trade too early before the planned management signal triggered.', correction: 'Let the planned trailing rule manage the remainder instead of exiting from noise.' },
+  { label: 'Skipped partials', category: 'Exit', text: 'Failed to take planned partial profits into strength.', correction: 'Use the planned partial level and trail the remaining position mechanically.' },
+  { label: 'No exit plan', category: 'Exit', text: 'Entered without a clearly defined profit-taking and invalidation plan.', correction: 'Define the initial stop, first trim, and trailing rule before entering.' },
+  { label: 'FOMO entry', category: 'Discipline', text: 'Entered because of FOMO instead of waiting for the planned setup.', correction: 'If the planned entry is missed, wait for a new setup instead of chasing.' },
+  { label: 'Revenge trade', category: 'Discipline', text: 'Took the trade to recover a prior loss rather than because the setup qualified.', correction: 'Reset after a loss and require the full checklist before the next trade.' },
+  { label: 'Overtraded', category: 'Discipline', text: 'Took an extra trade that did not meet the normal quality threshold.', correction: 'Respect the daily trade limit and only take qualified setups.' },
+];
+
+function phraseLine(text) {
+  return `• ${text}`;
+}
+
+function hasSuggestedPhrase(value, text) {
+  const lines = String(value || '').split('\n').map(line => line.trim());
+  return lines.includes(text) || lines.includes(phraseLine(text));
+}
+
+function toggleSuggestedPhrase(value, text) {
+  const bullet = phraseLine(text);
+  const lines = String(value || '').split('\n').map(line => line.trim()).filter(Boolean);
+  const exists = lines.some(line => line === text || line === bullet);
+  const next = exists
+    ? lines.filter(line => line !== text && line !== bullet)
+    : [...lines, bullet];
+  return next.join('\n');
+}
+
+function selectedSuggestions(value, suggestions) {
+  return suggestions.filter(item => hasSuggestedPhrase(value, item.text));
+}
+
+function reviewCompletion(entryReason, exitReason, mistakes) {
+  return [entryReason, exitReason, mistakes].filter(value => String(value || '').trim()).length;
+}
+
 
 // ── Dropdown with add-new option ──────────────────────────────────────────────
 
@@ -273,7 +426,7 @@ function barETMinutes(timestamp) {
   return Number(parts.hour) * 60 + Number(parts.minute);
 }
 
-const TABS = ['Stats', 'Strategy', 'Tags', 'LE Review', 'Executions', 'What If'];
+const TABS = ['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'What If'];
 
 const SCENARIOS = [
   { label: '+5 min',    offsetMin: 5 },
@@ -526,6 +679,13 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     } finally {
       setSavingStrategy(false);
     }
+  };
+
+  const handleReviewSuggestion = (field, item) => {
+    setStrategyForm(prev => ({
+      ...prev,
+      [field]: toggleSuggestedPhrase(prev?.[field] || '', item.text),
+    }));
   };
 
   // ── Tag handlers ──────────────────────────────────────────────────────────
@@ -828,10 +988,14 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               </div>
             )}
 
-            {/* ── Strategy tab ──────────────────────────────────────────── */}
-            {tab === 'Strategy' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            {/* ── Guided trade review tab ─────────────────────────────── */}
+            {tab === 'Review' && (
+              <div className="trade-review-shell">
+                <div className="trade-review-toolbar">
+                  <div>
+                    <div className="trade-review-kicker"><Sparkles size={14} /> Guided journal</div>
+                    <div className="trade-review-toolbar-copy">Use quick picks to document the trade consistently, then add any detail that matters.</div>
+                  </div>
                   {!editingStrategy ? (
                     <button
                       onClick={() => {
@@ -842,45 +1006,95 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         });
                         setEditingStrategy(true);
                       }}
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-primary btn-sm"
                       type="button"
                     >
-                      <Pencil size={13} /> Edit
+                      <Pencil size={13} /> {(analysis?.entry_reason || analysis?.exit_reason || analysis?.mistakes) ? 'Edit review' : 'Start review'}
                     </button>
                   ) : (
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">{savingStrategy ? 'Saving…' : 'Save'}</button>
+                      <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">{savingStrategy ? 'Saving…' : 'Save review'}</button>
                       <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost btn-sm">Cancel</button>
                     </div>
                   )}
                 </div>
 
+                <TradeReviewSummary
+                  trade={trade}
+                  entryReason={editingStrategy ? strategyForm.entry_reason : analysis?.entry_reason}
+                  exitReason={editingStrategy ? strategyForm.exit_reason : analysis?.exit_reason}
+                  mistakes={editingStrategy ? strategyForm.mistakes : analysis?.mistakes}
+                />
+
                 {editingStrategy ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <EditTextarea label="Entry Reason" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
-                    <EditTextarea label="Exit Reason"  value={strategyForm.exit_reason}  onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
-                    <EditTextarea label="Mistakes"     value={strategyForm.mistakes}     onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
+                  <div className="trade-review-editor">
+                    <div className="trade-review-editor-head">
+                      <div>
+                        <h3>Build the review</h3>
+                        <p>Click any suggestion to add it. Click it again to remove it. You can still type your own notes.</p>
+                      </div>
+                    </div>
+
+                    <QuickPickGroup
+                      title="Entry"
+                      subtitle="What justified the entry?"
+                      suggestions={ENTRY_REVIEW_SUGGESTIONS}
+                      value={strategyForm.entry_reason}
+                      onToggle={item => handleReviewSuggestion('entry_reason', item)}
+                      tone="entry"
+                    />
+                    <EditTextarea label="Entry notes" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
+
+                    <QuickPickGroup
+                      title="Exit"
+                      subtitle="How did you manage or close the trade?"
+                      suggestions={EXIT_REVIEW_SUGGESTIONS}
+                      value={strategyForm.exit_reason}
+                      onToggle={item => handleReviewSuggestion('exit_reason', item)}
+                      tone="exit"
+                    />
+                    <EditTextarea label="Exit notes" value={strategyForm.exit_reason} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
+
+                    <QuickPickGroup
+                      title="Mistake / improvement"
+                      subtitle="What should change next time?"
+                      suggestions={MISTAKE_REVIEW_SUGGESTIONS}
+                      value={strategyForm.mistakes}
+                      onToggle={item => handleReviewSuggestion('mistakes', item)}
+                      tone="mistake"
+                    />
+                    <EditTextarea label="Mistake / improvement notes" value={strategyForm.mistakes} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
                   </div>
                 ) : (
-                  <>
+                  <div className="trade-review-readonly">
                     {(analysis?.strategy || analysis?.idea_source) && (
-                      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                        {analysis?.strategy && <div><div className="field-label" style={{ marginBottom: 4 }}>Strategy</div><div style={{ color: 'var(--accent-line)', fontWeight: 600 }}>{analysis.strategy}</div></div>}
-                        {analysis?.idea_source && <div><div className="field-label" style={{ marginBottom: 4 }}>Source</div><div style={{ color: 'var(--text-primary)', fontSize: 14 }}>{analysis.idea_source}</div></div>}
+                      <div className="trade-review-context">
+                        {analysis?.strategy && <div><span>Strategy</span><strong>{analysis.strategy}</strong></div>}
+                        {analysis?.idea_source && <div><span>Source</span><strong>{analysis.idea_source}</strong></div>}
                       </div>
                     )}
-                    {analysis?.entry_reason && <div><div className="field-label" style={{ marginBottom: 4 }}>Entry Reason</div><div style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.entry_reason}</div></div>}
-                    {analysis?.exit_reason  && <div><div className="field-label" style={{ marginBottom: 4 }}>Exit Reason</div><div style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.exit_reason}</div></div>}
-                    {analysis?.mistakes     && <div><div className="field-label" style={{ marginBottom: 4 }}>Mistakes</div><div className="neg" style={{ fontSize: 14.5, lineHeight: 1.55 }}>{analysis.mistakes}</div></div>}
-                    {analysis?.ai_feedback  && (
+
+                    <div className="trade-review-note-grid">
+                      <article>
+                        <div className="trade-review-note-title"><Target size={15} /> Entry</div>
+                        <div className="trade-review-note-copy">{analysis?.entry_reason || 'Not documented yet.'}</div>
+                      </article>
+                      <article>
+                        <div className="trade-review-note-title"><CheckCircle2 size={15} /> Exit</div>
+                        <div className="trade-review-note-copy">{analysis?.exit_reason || 'Not documented yet.'}</div>
+                      </article>
+                      <article className={analysis?.mistakes ? 'has-mistake' : ''}>
+                        <div className="trade-review-note-title"><AlertTriangle size={15} /> Mistake / improvement</div>
+                        <div className="trade-review-note-copy">{analysis?.mistakes || 'No improvement note documented yet.'}</div>
+                      </article>
+                    </div>
+
+                    {analysis?.ai_feedback && (
                       <div className="notice accent">
                         {analysis.ai_feedback}
                       </div>
                     )}
-                    {!analysis?.strategy && !analysis?.entry_reason && (
-                      <div className="text-muted" style={{ fontSize: 14 }}>No strategy notes yet. Click Edit to add.</div>
-                    )}
-                  </>
+                  </div>
                 )}
               </div>
             )}
