@@ -166,17 +166,17 @@ const inputStyle = {
   width: '100%', fontSize: 14, minHeight: 34, padding: '5px 9px', boxSizing: 'border-box',
 };
 
-function EditField({ label, value, onChange, type = 'text', options, inputRef }) {
+function EditField({ label, value, onChange, type = 'text', options, inputRef, autoFocus = false }) {
   return (
     <label style={{ display: 'block' }}>
       <span className="field-label" style={{ marginBottom: 4 }}>{label}</span>
       {options ? (
-        <select ref={inputRef} value={value} onChange={e => onChange(e.target.value)} style={inputStyle}>
+        <select ref={inputRef} autoFocus={autoFocus} value={value} onChange={e => onChange(e.target.value)} style={inputStyle}>
           <option value="">—</option>
           {options.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
       ) : (
-        <input ref={inputRef} type={type} value={value} onChange={e => onChange(e.target.value)} style={inputStyle} />
+        <input ref={inputRef} autoFocus={autoFocus} type={type} value={value} onChange={e => onChange(e.target.value)} style={inputStyle} />
       )}
     </label>
   );
@@ -1107,7 +1107,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     </div>
                     <EditField label="Stop Loss ($)" type="number" value={String(statsForm.stop_loss)} onChange={v => setStatsForm(f => ({ ...f, stop_loss: v }))} />
                     <div>
-                      <EditField inputRef={plannedRiskInputRef} label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
+                      <EditField inputRef={plannedRiskInputRef} autoFocus={focusPlannedRisk} label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
                       <div className="text-muted" style={{ fontSize: 11.5, marginTop: 4, lineHeight: 1.35 }}>
                         Dollar amount you accepted losing at entry. This unlocks a reliable realized R.
                       </div>
