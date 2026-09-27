@@ -629,6 +629,45 @@ def test_excursion_kpis_ignore_legacy_underlying_option_efficiency(monkeypatch, 
         conn.close()
 
 
+def test_excursion_kpis_expose_medians_to_detect_outlier_skew(monkeypatch, tmp_path):
+    main = fresh_main(monkeypatch, tmp_path)
+    main.init_db()
+    conn = main.get_db()
+    try:
+        account_id = main.insert_and_get_id(
+            conn,
+            "INSERT INTO accounts (name, type, broker) VALUES (?,?,?)",
+            ("Median Risk Test", "day_trading", "schwab"),
+        )
+        mfe_values = [8.0, 10.0, 12.0, 15.0, 409.42]
+        mae_values = [20.0, 24.0, 26.0, 28.0, 30.0]
+        for i, (mfe, mae) in enumerate(zip(mfe_values, mae_values)):
+            conn.execute(
+                """INSERT INTO trades
+                   (account_id, trade_group, date, ticker, instrument_type, side,
+                    gross_pnl, net_pnl, commissions, executions, source,
+                    option_expiry, option_strike, option_type,
+                    mfe_pct, mae_pct, exit_efficiency, excursion_basis)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    account_id, f"skew-{i}", f"2026-09-{21 + i:02d}", "QQQ", "OPTION", "LONG",
+                    50.0, 50.0, 0.0, "[]", "imported",
+                    "2026-09-25", 500.0, "CALL",
+                    mfe, mae, 70.0, "option_premium_1m",
+                ),
+            )
+        conn.commit()
+
+        result = main._excursion_kpis(conn, account_id=account_id)
+
+        assert result["avg_mfe"] > result["avg_mae"]
+        assert result["median_mfe"] == 12.0
+        assert result["median_mae"] == 26.0
+        assert result["median_mfe"] < result["median_mae"]
+    finally:
+        conn.close()
+
+
 def test_excursion_confidence_requires_multiple_days(monkeypatch, tmp_path):
     main = fresh_main(monkeypatch, tmp_path)
     main.init_db()
