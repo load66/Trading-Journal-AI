@@ -612,7 +612,7 @@
 @media (prefers-reduced-motion: reduce) {
   .td-chart-preview,
   .td-image-modal,
-  .td-image-modal img {
+  .td-image-modal-stage img {
     animation: none;
     transition: none;
   }
