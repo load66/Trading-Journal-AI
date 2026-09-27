@@ -2,6 +2,7 @@ import os
 import logging
 import tempfile
 import json
+import hashlib
 import sqlite3
 import aiofiles
 from pathlib import Path
@@ -1196,9 +1197,21 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
     trade = row_to_dict(row)
     trade_group = trade['trade_group']
 
+    analysis_row = conn.execute(
+        "SELECT chart_screenshot_path FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    screenshot_path = analysis_row["chart_screenshot_path"] if analysis_row else None
+
     conn.execute("DELETE FROM trade_tags WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trade_analysis WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trades WHERE id=?", (trade_id,))
+
+    if screenshot_path:
+        try:
+            DIARY_STORAGE.delete(screenshot_path)
+        except Exception:
+            logger.warning("Could not remove trade screenshot %s", screenshot_path, exc_info=True)
     conn.commit()
 
     return {"deleted": True, "id": trade_id}
@@ -1218,6 +1231,115 @@ def get_trade_analysis(trade_group: str, conn: sqlite3.Connection = Depends(get_
         "analysis": row_to_dict(analysis) if analysis else None,
         "tags": [row_to_dict(t) for t in tags],
     }
+
+
+
+ALLOWED_TRADE_SCREENSHOT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
+MAX_TRADE_SCREENSHOT_BYTES = 12 * 1024 * 1024
+
+
+def _ensure_trade_analysis_row(conn, trade_group: str):
+    trade = conn.execute(
+        "SELECT trade_group, ticker, date FROM trades WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    existing = conn.execute(
+        "SELECT id FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    if not existing:
+        conn.execute(
+            "INSERT INTO trade_analysis (trade_group, ticker, date) VALUES (?,?,?)",
+            (trade_group, trade["ticker"], trade["date"]),
+        )
+    return trade
+
+
+def _trade_screenshot_object_name(trade_group: str, ext: str) -> str:
+    digest = hashlib.sha256(trade_group.encode("utf-8")).hexdigest()[:24]
+    return f"trade-review/{digest}/chart{ext}"
+
+
+@app.post("/api/trades/{trade_group:path}/chart-screenshot")
+async def upload_trade_chart_screenshot(
+    trade_group: str,
+    file: UploadFile = File(...),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_TRADE_SCREENSHOT_EXTENSIONS:
+        raise ValueError("Chart screenshot must be PNG, JPG, JPEG, or WEBP.")
+
+    raw = await file.read()
+    if not raw:
+        raise ValueError("Chart screenshot is empty.")
+    if len(raw) > MAX_TRADE_SCREENSHOT_BYTES:
+        raise ValueError("Chart screenshot must be 12 MB or smaller.")
+
+    _ensure_trade_analysis_row(conn, trade_group)
+    current = conn.execute(
+        "SELECT chart_screenshot_path FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    old_path = current["chart_screenshot_path"] if current else None
+
+    object_name = _trade_screenshot_object_name(trade_group, ext)
+    content_type = file.content_type or "application/octet-stream"
+    DIARY_STORAGE.save(object_name, raw, content_type)
+
+    conn.execute(
+        "UPDATE trade_analysis SET chart_screenshot_path=? WHERE trade_group=?",
+        (object_name, trade_group),
+    )
+    conn.commit()
+
+    if old_path and old_path != object_name:
+        try:
+            DIARY_STORAGE.delete(old_path)
+        except Exception:
+            logger.warning("Could not remove replaced trade screenshot %s", old_path, exc_info=True)
+
+    return {"chart_screenshot_path": object_name, "filename": file.filename}
+
+
+@app.get("/api/trades/{trade_group:path}/chart-screenshot")
+def get_trade_chart_screenshot(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    row = conn.execute(
+        "SELECT chart_screenshot_path FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    path = row["chart_screenshot_path"] if row else None
+    if not path:
+        raise HTTPException(status_code=404, detail="No chart screenshot saved for this trade.")
+    data, content_type = DIARY_STORAGE.read(path)
+    return Response(content=data, media_type=content_type)
+
+
+@app.delete("/api/trades/{trade_group:path}/chart-screenshot")
+def delete_trade_chart_screenshot(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    row = conn.execute(
+        "SELECT chart_screenshot_path FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    path = row["chart_screenshot_path"] if row else None
+    if not path:
+        return {"deleted": False}
+
+    DIARY_STORAGE.delete(path)
+    conn.execute(
+        "UPDATE trade_analysis SET chart_screenshot_path=NULL WHERE trade_group=?",
+        (trade_group,),
+    )
+    conn.commit()
+    return {"deleted": True}
 
 
 @app.get("/api/trades/{trade_group:path}/le-review")
