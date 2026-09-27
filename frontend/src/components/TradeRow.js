@@ -153,7 +153,7 @@ function ExitQuality({ trade }) {
   );
 }
 
-export default function TradeRow({ trade, openTime, onOpenDetail, customSetups = [], onCustomSetupsChanged }) {
+export default function TradeRow({ trade, openTime, onOpenDetail, onSetRisk, customSetups = [], onCustomSetupsChanged }) {
   const pnl = trade.net_pnl ?? 0;
   const pnlTone = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
   const side = (trade.side || '').toUpperCase();
@@ -321,7 +321,18 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
             {realizedR > 0 ? '+' : ''}{realizedR.toFixed(2)}R
           </span>
         ) : (
-          <span className="trade-r-missing" title="Add Planned Risk ($) in the trade Stats tab to calculate realized R.">Set risk</span>
+          <button
+            type="button"
+            className="trade-r-missing trade-r-action"
+            title="Set Planned Risk ($) to calculate realized R."
+            onClick={(event) => {
+              event.stopPropagation();
+              if (onSetRisk) onSetRisk(trade);
+              else handleOpen();
+            }}
+          >
+            Set risk
+          </button>
         )}
       </td>
 
