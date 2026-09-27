@@ -585,7 +585,8 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
 
   expect(await screen.findByRole('heading', { name: /Trade management/i })).toBeVisible();
   expect(screen.getByText('Total net P&L')).toBeVisible();
-  expect(screen.getByText(/Broker CSV fills are authoritative/i)).toBeVisible();
+  expect(screen.getByText(/Evaluate how efficiently you manage entries, risk, and exits/i)).toBeVisible();
+  expect(screen.queryByText(/Broker CSV/i)).not.toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /Profit capture/i })).toBeVisible();
   expect(screen.getByRole('heading', { name: /Holding behavior/i })).toBeVisible();
   expect(screen.getByRole('heading', { name: /Profit vs\. left on table/i })).toBeVisible();
