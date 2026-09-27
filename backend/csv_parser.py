@@ -513,7 +513,7 @@ def _parse_trade_history_expiry(exp_str: str) -> str | None:
     return f"{year:04d}-{month:02d}-{int(day):02d}"
 
 
-def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
+def parse_trade_history_section(rows: list[list[str]], timezone_info: dict | None = None) -> list[dict]:
     """
     Parse Account Trade History section.
     Header: ,Exec Time,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,Price,Net Price,Order Type
@@ -521,6 +521,7 @@ def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
     """
     if not rows:
         return []
+    timezone_info = timezone_info or detect_csv_timezone("", "thinkorswim")
 
     header_idx = None
     for i, row in enumerate(rows):
@@ -609,9 +610,10 @@ def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
             'date': date_part,
             'iso_date': iso_date,
             'time': time_part,
+            'source_timestamp': exec_time_str,
             'amount': round(amount, 2),
             'commission': 0.0,
-        }, "thinkorswim"))
+        }, "thinkorswim", timezone_info))
 
     return executions
 
@@ -691,7 +693,11 @@ def aggregate_executions(fills: list[dict]) -> dict:
     }
 
 
-def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = None) -> list[dict]:
+def parse_cash_balance_section(
+    rows: list[list[str]],
+    date_filter: str | None = None,
+    timezone_info: dict | None = None,
+) -> list[dict]:
     """
     Parse rows from the Cash Balance section.
     Expects header: DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
@@ -699,6 +705,7 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
     """
     if not rows:
         return []
+    timezone_info = timezone_info or detect_csv_timezone("", "thinkorswim")
 
     # Find header row
     header_idx = None
@@ -753,11 +760,12 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
             'date': date_val,
             'iso_date': normalize_date(date_val),
             'time': time_val,
+            'source_timestamp': f"{date_val} {time_val}".strip(),
             'amount': amount,
             'commission': total_commission,
             'raw_description': desc,
         })
-        executions.append(attach_execution_timestamp(parsed, "thinkorswim"))
+        executions.append(attach_detected_execution_timestamp(parsed, "thinkorswim", timezone_info))
 
     return executions
 
@@ -773,6 +781,7 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
     "9/25/26 10:11 AM"). The importer stores ":00" seconds and explicitly marks
     timestamp_precision="minute"; it never invents sub-minute timing.
     """
+    timezone_info = detect_csv_timezone(content, "schwab_transactions")
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
     header_idx = None
     col = {}
@@ -845,9 +854,12 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
             'raw_description': desc,
             'source_ref': source_ref,
             'source_row': line_no,
+            'source_timestamp': dt_text,
             'timestamp_precision': timestamp_precision,
         })
-        executions.append(attach_execution_timestamp(parsed, "schwab_transactions"))
+        executions.append(
+            attach_detected_execution_timestamp(parsed, "schwab_transactions", timezone_info)
+        )
 
     if problems:
         more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ''
@@ -866,13 +878,14 @@ def parse_schwab_transactions_csv(content: str, account_id: int, conn=None) -> t
 
     return build_trades_from_executions(executions, account_id, conn)
 
-def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
+def parse_futures_section_rows(rows: list[list[str]], timezone_info: dict | None = None) -> list[dict]:
     """
     Parse rows from the Futures Statements section.
     Header: Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance
     """
     if not rows:
         return []
+    timezone_info = timezone_info or detect_csv_timezone("", "thinkorswim")
 
     header_idx = None
     for i, row in enumerate(rows):
@@ -917,11 +930,12 @@ def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
             'date': trade_date,
             'iso_date': normalize_date(trade_date),
             'time': exec_time,
+            'source_timestamp': f"{trade_date} {exec_time}".strip(),
             'amount': amount,
             'commission': total_commission,
             'raw_description': desc,
         })
-        executions.append(attach_execution_timestamp(parsed, "thinkorswim"))
+        executions.append(attach_detected_execution_timestamp(parsed, "thinkorswim", timezone_info))
 
     return executions
 
@@ -1262,6 +1276,7 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
     Returns (list of trade dicts ready for DB insert, skipped_count).
     """
     content = content.lstrip('﻿')
+    timezone_info = detect_csv_timezone(content, "thinkorswim")
 
     sections = split_csv_sections(content)
     cash_rows = find_cash_balance_section(sections)
@@ -1270,9 +1285,9 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
 
     all_executions = []
     if cash_rows:
-        all_executions.extend(parse_cash_balance_section(cash_rows))
+        all_executions.extend(parse_cash_balance_section(cash_rows, timezone_info=timezone_info))
     if futures_rows:
-        all_executions.extend(parse_futures_section_rows(futures_rows))
+        all_executions.extend(parse_futures_section_rows(futures_rows, timezone_info=timezone_info))
 
     # Merge Trade History: add fills not already represented in Cash Balance / Futures.
     # Use (iso_date, ticker, action, qty, price) to match across sections — time formats differ.
@@ -1284,7 +1299,7 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
         for ex in all_executions:
             k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
             cb_qty_map[k] = cb_qty_map.get(k, 0) + ex.get('qty', 0)
-        for ex in parse_trade_history_section(trade_history_rows):
+        for ex in parse_trade_history_section(trade_history_rows, timezone_info=timezone_info):
             if _cross_section_key(ex) in cb_exact_keys:
                 continue
             k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
@@ -1634,6 +1649,7 @@ def parse_ibkr_trades_section(records: list[dict[str, str]]) -> list[dict]:
             'date': iso_date,
             'iso_date': iso_date,
             'time': time_part,
+            'source_timestamp': r.get('Date/Time', '') or r.get('Date', ''),
             'amount': round(proceeds, 2),
             'commission': round(commission, 2),
             'raw_description': f"{action} {qty} {symbol} @{price}",
@@ -1649,6 +1665,7 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
     parse_thinkorswim_csv: (trade dicts ready for DB insert, skipped_count).
     """
     content = content.lstrip('﻿')
+    timezone_info = detect_csv_timezone(content, "ibkr")
     sections = split_ibkr_sections(content)
 
     trade_records = sections.get('Trades')
@@ -1658,7 +1675,16 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
             "with the Trades section enabled."
         )
 
-    executions = parse_ibkr_trades_section(trade_records)
+    raw_executions = parse_ibkr_trades_section(trade_records)
+    executions = [
+        attach_detected_execution_timestamp(ex, "ibkr", timezone_info)
+        for ex in raw_executions
+    ]
+    missing_ts = [ex for ex in executions if not ex.get("timestamp_utc")]
+    if missing_ts:
+        raise ValueError(
+            "IBKR execution timestamp could not be normalized; nothing was imported."
+        )
     return build_trades_from_executions(executions, account_id, conn)
 
 
@@ -1669,7 +1695,7 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
 # fill.
 #
 # Required columns: date, time, symbol, side, quantity, price
-# Optional columns: commission, asset_type, expiry, strike, put_call, multiplier
+# Optional columns: commission, asset_type, expiry, strike, put_call, multiplier, timezone
 #
 # Header names are case-insensitive and extra columns are ignored, so a broker
 # export that already uses these headers imports as-is. Rows that cannot be read
@@ -1677,7 +1703,9 @@ def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict]
 # missing fill changes every P&L number after it.
 
 GENERIC_REQUIRED = ('date', 'time', 'symbol', 'side', 'quantity', 'price')
-GENERIC_OPTIONAL = ('commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier')
+GENERIC_OPTIONAL = (
+    'commission', 'asset_type', 'expiry', 'strike', 'put_call', 'multiplier', 'timezone'
+)
 
 _GENERIC_ALIASES = {
     'ticker': 'symbol', 'qty': 'quantity', 'shares': 'quantity', 'contracts': 'quantity',
@@ -1686,6 +1714,8 @@ _GENERIC_ALIASES = {
     'type': 'asset_type', 'instrument': 'asset_type', 'instrument_type': 'asset_type',
     'expiration': 'expiry', 'exp': 'expiry', 'call_put': 'put_call', 'right': 'put_call',
     'strike_price': 'strike',
+    'time_zone': 'timezone', 'timezone_name': 'timezone',
+    'tz': 'timezone', 'source_timezone': 'timezone',
 }
 
 
@@ -1773,6 +1803,7 @@ def _num(text):
 
 def parse_generic_rows(content):
     """Read the generic template into execution dicts. Raises ValueError naming every bad line."""
+    file_timezone_info = detect_csv_timezone(content, "generic")
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
 
     header_at, col = None, None
@@ -1798,10 +1829,21 @@ def parse_generic_rows(content):
         why = []
 
         symbol = cell(cells, 'symbol').upper()
-        date = _generic_date(cell(cells, 'date'))
-        time_ = _generic_time(cell(cells, 'time'))
+        raw_date = cell(cells, 'date')
+        raw_time = cell(cells, 'time')
+        date = _generic_date(raw_date)
+        time_ = _generic_time(raw_time)
         action = _generic_side(cell(cells, 'side'))
         asset = _generic_asset(cell(cells, 'asset_type'), symbol)
+        timezone_info = None
+        try:
+            row_timezone = cell(cells, 'timezone')
+            timezone_info = (
+                detect_csv_timezone("", "generic", row_timezone=row_timezone)
+                if row_timezone else file_timezone_info
+            )
+        except ValueError as exc:
+            why.append(str(exc))
 
         try:
             qty = abs(_num(cell(cells, 'quantity')))
@@ -1884,10 +1926,14 @@ def parse_generic_rows(content):
             'date': date,
             'iso_date': date,
             'time': time_,
+            'source_timestamp': f"{raw_date} {raw_time}".strip(),
             'amount': round(amount, 2),
             'commission': round(commission, 2),
             'raw_description': f"{action} {qty} {ticker} @{price}",
         })
+        executions[-1] = attach_detected_execution_timestamp(
+            executions[-1], "generic", timezone_info
+        )
 
     if problems:
         more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ""
