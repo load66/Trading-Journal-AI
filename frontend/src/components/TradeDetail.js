@@ -4,6 +4,7 @@ import { tradesApi, libraryApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
+import { tradeStats as canonicalTradeStats } from '../tradeMetrics';
 
 const fmt$ = (v) => {
   if (v == null) return '—';
@@ -107,48 +108,26 @@ function parseExecs(trade) {
 }
 
 function computeStats(trade) {
-  const execs = parseExecs(trade);
-  const side = trade.side;
-  const entryFills = execs.filter(e => side === 'LONG' ? e.action === 'BOT' : e.action === 'SOLD');
-  const exitFills  = execs.filter(e => side === 'LONG' ? e.action === 'SOLD' : e.action === 'BOT');
-
-  const avgPrice = (fills) => {
-    const qty = fills.reduce((s, f) => s + (f.qty || 0), 0);
-    if (!qty) return null;
-    return fills.reduce((s, f) => s + (f.qty || 0) * (f.price || 0), 0) / qty;
-  };
-
-  const avgEntry = avgPrice(entryFills);
-  const avgExit  = avgPrice(exitFills);
-  const totalQty = entryFills.reduce((s, f) => s + (f.qty || 0), 0);
-  const instrument = (trade.instrument_type || 'STOCK').toUpperCase();
-  const multiplier = instrument === 'OPTION' ? 100 : 1;
-  const adjustedCost = avgEntry ? avgEntry * totalQty * multiplier : null;
-  const plPercent = trade.pl_pct != null
-    ? Number(trade.pl_pct)
-    : adjustedCost ? (trade.net_pnl / adjustedCost * 100) : null;
-
-  const sortedTimes = [...execs].map(e => e.time).filter(Boolean).sort();
-  const openTime  = sortedTimes[0];
-  const closeTime = sortedTimes[sortedTimes.length - 1];
-
-  let holdMinutes = null;
-  if (openTime && closeTime && exitFills.length > 0) {
-    const [oh, om] = openTime.split(':').map(Number);
-    const [ch, cm] = closeTime.split(':').map(Number);
-    holdMinutes = (ch * 60 + cm) - (oh * 60 + om);
-  }
+  const stats = canonicalTradeStats(trade);
+  const openTime = stats.entryFills[0]?.time || null;
+  const closeTime = stats.exitFills[stats.exitFills.length - 1]?.time || null;
 
   const fmtHold = (m) => {
-    if (m == null) return '—';
-    if (m < 60) return `${m}m`;
-    return `${Math.floor(m / 60)}h ${m % 60}m`;
+    if (m == null || !Number.isFinite(Number(m))) return '—';
+    const totalSec = Math.max(0, Math.round(Number(m) * 60));
+    if (totalSec < 60) return `${totalSec}s`;
+    if (totalSec < 3600) return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`;
+    const h = Math.floor(totalSec / 3600);
+    const min = Math.floor((totalSec % 3600) / 60);
+    return `${h}h ${min}m`;
   };
 
-  const isClosed = exitFills.length > 0;
-  const isWin = (trade.net_pnl || 0) > 0;
-
-  return { avgEntry, avgExit, totalQty, adjustedCost, plPercent, openTime, closeTime, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
+  return {
+    ...stats,
+    openTime,
+    closeTime,
+    fmtHold,
+  };
 }
 
 export function calculateDefaultPlannedRisk(trade) {
