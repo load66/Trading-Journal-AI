@@ -607,7 +607,7 @@ test('trade screenshot can be pasted from clipboard without saving a local file'
   expect(formData.get('file').type).toBe('image/webp');
 });
 
-test('saved chart screenshot sits below Tags as a compact click-to-enlarge preview', async () => {
+test('saved chart screenshot sits below Tags as a compact inline expandable preview', async () => {
   URL.createObjectURL.mockImplementation(() => 'blob:trade-chart-review');
   tradesApi.getAnalysis.mockResolvedValue({
     data: {
@@ -627,10 +627,13 @@ test('saved chart screenshot sits below Tags as a compact click-to-enlarge previ
 
   await waitFor(() => expect(tradesApi.getChartScreenshot).toHaveBeenCalled());
   expect(await screen.findByText('Chart screenshot')).toBeVisible();
-  const preview = await screen.findByTitle('Click to enlarge');
+  const preview = await screen.findByTitle('Enlarge preview');
   expect(preview).toBeVisible();
+  expect(preview).not.toHaveClass('is-expanded');
   fireEvent.click(preview);
-  expect(await screen.findByRole('dialog', { name: 'TradingView screenshot' })).toBeVisible();
+  expect(preview).toHaveClass('is-expanded');
+  expect(preview).toHaveAttribute('title', 'Reduce preview');
+  expect(screen.queryByRole('dialog', { name: 'TradingView screenshot' })).not.toBeInTheDocument();
 });
 
 test('guided Review quick picks generate journal text and actionable correction', async () => {

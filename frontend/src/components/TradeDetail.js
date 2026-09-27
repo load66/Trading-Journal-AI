@@ -17,8 +17,8 @@ const fmtSigned$ = (v) => {
   return (n >= 0 ? '+$' : '-$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-const SCREENSHOT_MAX_DIMENSION = 1600;
-const SCREENSHOT_TARGET_BYTES = 900 * 1024;
+const SCREENSHOT_MAX_DIMENSION = 1200;
+const SCREENSHOT_TARGET_BYTES = 500 * 1024;
 
 function canvasBlob(canvas, type, quality) {
   return new Promise((resolve, reject) => {
@@ -61,10 +61,10 @@ export async function optimizeChartScreenshot(file) {
   const image = await loadScreenshotImage(file);
   try {
     const originalLongEdge = Math.max(image.width, image.height);
-    const dimensionSteps = [SCREENSHOT_MAX_DIMENSION, 1400, 1200]
+    const dimensionSteps = [SCREENSHOT_MAX_DIMENSION, 1000, 800]
       .map(maxDimension => Math.min(maxDimension, originalLongEdge))
       .filter((value, index, arr) => value > 0 && arr.indexOf(value) === index);
-    const qualitySteps = [0.82, 0.72, 0.62];
+    const qualitySteps = [0.78, 0.66, 0.54];
 
     let bestBlob = null;
     for (const maxDimension of dimensionSteps) {
@@ -1559,12 +1559,13 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               <>
                 <button
                   type="button"
-                  className="td-chart-preview"
-                  onClick={() => setChartScreenshotExpanded(true)}
-                  title="Click to enlarge"
+                  className={`td-chart-preview${chartScreenshotExpanded ? ' is-expanded' : ''}`}
+                  onClick={() => setChartScreenshotExpanded(value => !value)}
+                  title={chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}
+                  aria-pressed={chartScreenshotExpanded}
                 >
                   <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
-                  <span><Maximize2 size={13} /> Click to enlarge</span>
+                  <span><Maximize2 size={13} /> {chartScreenshotExpanded ? 'Reduce preview' : 'Enlarge preview'}</span>
                 </button>
                 <div className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom">
                   <label className="btn btn-ghost btn-sm td-chart-review-upload">
@@ -1647,12 +1648,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
       </div>
 
-      {chartScreenshotExpanded && chartScreenshotUrl && (
-        <div className="td-image-modal" role="dialog" aria-modal="true" aria-label="TradingView screenshot">
-          <button type="button" className="td-image-modal-close" onClick={() => setChartScreenshotExpanded(false)}>×</button>
-          <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot enlarged`} />
-        </div>
-      )}
     </div>
   );
 }
