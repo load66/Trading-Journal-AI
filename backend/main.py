@@ -3926,10 +3926,25 @@ def get_daily_summary(
     force: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    # First resolve any saved diagnosis. Automatic AI generation is capped at
-    # once per journal-local calendar day. This prevents background enrichment
-    # or tab navigation from repeatedly spending an AI request. force=true is
-    # the explicit user override and always bypasses this guard.
+    # Resolve the current day first so an empty session never queries cache or AI.
+    # The frontend memoizes an already-loaded review across tab navigation, so
+    # this deterministic context build is not on the repeated-tab hot path.
+    try:
+        context = build_daily_context(conn, date, account_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not context['trades']:
+        return {
+            "date": date,
+            "cached": False,
+            "no_trades": True,
+            "narrative": "No completed trades to diagnose for this date.",
+        }
+
+    # Automatic AI generation is capped at once per journal-local calendar day.
+    # Changed background evidence cannot spend another AI request until tomorrow;
+    # force=true from the Re-run button is the explicit bypass.
     if account_id is None:
         row = conn.execute(
             "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
@@ -3952,21 +3967,6 @@ def get_daily_summary(
         except Exception:
             # Corrupt legacy cache should not block rebuilding a valid review.
             pass
-
-    # No same-day automatic generation exists, so build the current evidence.
-    # Empty sessions never spend an AI request.
-    try:
-        context = build_daily_context(conn, date, account_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    if not context['trades']:
-        return {
-            "date": date,
-            "cached": False,
-            "no_trades": True,
-            "narrative": "No completed trades to diagnose for this date.",
-        }
 
     input_signature = daily_context_signature(context)
 
