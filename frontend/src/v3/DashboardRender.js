@@ -815,18 +815,20 @@ export default function DashboardRender(p) {
               goals={goals}
             />
           </section>
-        </main>
 
-        <aside className="v3-dashboard-side">
-          <section className="v3-side-section">
-            <MonthPanel
-              accountId={accountId}
-              onDayClick={onDayClick}
-              latestDate={days.length ? days[days.length - 1].date : null}
-            />
-            <LERiskPlanner accountId={accountId} />
+          <section className="v3-dashboard-planning" aria-label="Trading day planning">
+            <article className="v3-planning-card v3-planning-calendar" aria-label="Trading calendar">
+              <MonthPanel
+                accountId={accountId}
+                onDayClick={onDayClick}
+                latestDate={days.length ? days[days.length - 1].date : null}
+              />
+            </article>
+            <article className="v3-planning-card v3-planning-risk" aria-label="LE daily risk plan">
+              <LERiskPlanner accountId={accountId} />
+            </article>
           </section>
-        </aside>
+        </main>
       </div>
 
       <section className="v3-band v3-smoking-band">

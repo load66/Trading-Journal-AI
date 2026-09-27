@@ -1115,6 +1115,23 @@ test('Dashboard prioritizes trade management and the latest saved Smoking Gun re
 });
 
 
+test('Dashboard places the calendar and LE planner below Trade Management and before Smoking Gun', async () => {
+  await renderApp();
+
+  const management = await screen.findByRole('heading', { name: /Trade management/i });
+  const planning = document.querySelector('.v3-dashboard-planning');
+  const smoking = screen.getByRole('heading', { name: /Latest Smoking Gun report summary/i });
+
+  expect(planning).toBeInTheDocument();
+  expect(within(planning).getByRole('article', { name: 'Trading calendar' })).toBeVisible();
+  expect(within(planning).getByRole('article', { name: 'LE daily risk plan' })).toBeVisible();
+  expect(document.querySelector('.v3-dashboard-side')).not.toBeInTheDocument();
+
+  expect(management.compareDocumentPosition(planning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(planning.compareDocumentPosition(smoking) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+
 test('Risk During Trade turns winner-vs-loser excursion into actionable coaching', async () => {
   kpisApi.get.mockResolvedValue({
     data: {
