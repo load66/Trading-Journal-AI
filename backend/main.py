@@ -4023,8 +4023,15 @@ def get_daily_summary(
     )
     conn.commit()
 
+    saved_row = conn.execute(
+        "SELECT generated_at FROM daily_summaries WHERE summary_date = ? AND "
+        + ("account_id IS NULL" if account_id is None else "account_id = ?"),
+        (date,) if account_id is None else (date, account_id),
+    ).fetchone()
+
     summary['date'] = date
     summary['cached'] = False
+    summary['generated_at'] = saved_row['generated_at'] if saved_row else None
     return summary
 
 
