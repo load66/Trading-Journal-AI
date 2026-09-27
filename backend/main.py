@@ -1426,6 +1426,11 @@ def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.
 
     updates = data.model_dump(exclude_unset=True)
 
+    if "risk_per_trade" in updates and updates["risk_per_trade"] is not None:
+        if float(updates["risk_per_trade"]) <= 0:
+            raise HTTPException(status_code=400, detail="Planned risk must be greater than $0.")
+        updates["risk_per_trade"] = abs(float(updates["risk_per_trade"]))
+
     existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
     if not existing:
         conn.execute(
