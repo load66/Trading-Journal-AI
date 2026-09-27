@@ -477,7 +477,7 @@ test('Trade View surfaces option strategy, review status, excursion and missing-
   expect(screen.getByText('+103.7%')).toBeVisible();
   expect(screen.getByText('-72.2%')).toBeVisible();
   expect(screen.getByText('71.8%')).toBeVisible();
-  const setRisk = screen.getByRole('button', { name: 'Set risk' });
+  const setRisk = screen.getByRole('button', { name: 'Set R:R' });
   expect(setRisk).toBeVisible();
   expect(screen.queryByText('Not tagged')).not.toBeInTheDocument();
 
@@ -492,9 +492,11 @@ test('Trade View surfaces option strategy, review status, excursion and missing-
   });
   fireEvent.click(setRisk);
 
-  const riskInput = await screen.findByLabelText('Planned Risk ($)');
-  expect(riskInput).toBeVisible();
-  await waitFor(() => expect(riskInput).toHaveFocus());
+  const stopDistanceInput = await screen.findByLabelText('Stop Distance ($)');
+  expect(stopDistanceInput).toBeVisible();
+  expect(screen.getByLabelText('Target Distance ($)')).toBeVisible();
+  expect(screen.getByText(/Planned R:R:/)).toBeVisible();
+  await waitFor(() => expect(stopDistanceInput).toHaveFocus());
 });
 
 test('Stats planned risk is explicit and is sent with the saved trade analysis', async () => {
@@ -519,6 +521,8 @@ test('Stats planned risk is explicit and is sent with the saved trade analysis',
 
   const panel = await screen.findByRole('tabpanel');
   fireEvent.click(within(panel).getByRole('button', { name: /^Edit$/ }));
+  expect(within(panel).getByLabelText('Stop Distance ($)')).toBeVisible();
+  expect(within(panel).getByLabelText('Target Distance ($)')).toBeVisible();
   const riskInput = within(panel).getByLabelText('Planned Risk ($)');
   fireEvent.change(riskInput, { target: { value: '150' } });
   fireEvent.click(within(panel).getByRole('button', { name: /^Save$/ }));
