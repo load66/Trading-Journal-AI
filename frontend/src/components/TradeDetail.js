@@ -821,14 +821,24 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         />
         <KpiCell
           label="Realized R"
-          value={<span className="num">{realizedR ? `${analysis.r_multiple > 0 ? '+' : ''}${realizedR}` : 'n/a'}</span>}
-          tone={analysis?.r_multiple != null ? (analysis.r_multiple >= 0 ? 'pos' : 'neg') : undefined}
-          foot={plannedR ? <>Planned <span className="num">{plannedR}</span></> : null}
+          value={<span className="num">{realizedR || 'Set risk'}</span>}
+          tone={realizedRValue != null ? (realizedRValue >= 0 ? 'pos' : 'neg') : undefined}
+          foot={plannedRisk
+            ? <>Planned risk <span className="num">{fmt$(plannedRisk)}</span></>
+            : <>Add planned risk to calculate R</>}
         />
-        <KpiCell label="Avg entry" value={<span className="num">{stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : 'n/a'}</span>} />
-        <KpiCell label="Avg exit" value={<span className="num">{stats.avgExit ? `$${stats.avgExit.toFixed(2)}` : 'n/a'}</span>} />
-        <KpiCell label="Quantity" value={<span className="num">{stats.totalQty || 'n/a'}</span>} foot={trade.commissions ? <>Comm <span className="num">{fmt$(trade.commissions)}</span></> : null} />
-        <KpiCell label="Risk" value={<span className="num">{tradeRisk ? fmt$(tradeRisk) : 'n/a'}</span>} />
+        <KpiCell label="Avg entry" value={<span className="num">{stats.avgEntry ? `${stats.avgEntry.toFixed(2)}` : 'n/a'}</span>} />
+        <KpiCell label="Avg exit" value={<span className="num">{stats.avgExit ? `${stats.avgExit.toFixed(2)}` : 'n/a'}</span>} />
+        <KpiCell
+          label={trade.instrument_type === 'STOCK' ? 'Shares' : 'Contracts'}
+          value={<span className="num">{stats.totalQty || 'n/a'}</span>}
+          foot={trade.commissions ? <>Comm <span className="num">{fmt$(trade.commissions)}</span></> : null}
+        />
+        <KpiCell
+          label="Exit efficiency"
+          value={<span className="num">{trade.exit_efficiency != null ? `${Number(trade.exit_efficiency).toFixed(1)}%` : 'n/a'}</span>}
+          tone={trade.exit_efficiency != null ? (Number(trade.exit_efficiency) >= 50 ? 'pos' : 'neg') : undefined}
+        />
       </KpiStrip>
 
       {/* Layout: session list | chart, then tabs beside notes */}
