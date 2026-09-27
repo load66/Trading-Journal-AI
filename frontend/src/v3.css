@@ -3899,3 +3899,14 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   color: #342600;
   background: #f3b63c;
 }
+
+
+/* ---------- dashboard overlay fixes ---------- */
+.v3-hero-compact {
+  overflow: visible;
+  z-index: 30;
+}
+.v3-measures-dashboard {
+  position: relative;
+  z-index: 1;
+}
