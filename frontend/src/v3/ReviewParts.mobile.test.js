@@ -40,7 +40,9 @@ test('DayTrades provides a mobile card representation without removing the deskt
   expect(screen.getByRole('table')).toBeInTheDocument();
   expect(screen.getByRole('list', { name: 'Trades for this day' })).toBeInTheDocument();
 
-  const card = screen.getByRole('listitem', { name: /Open WMT trade/i });
+  const listItem = screen.getByRole('listitem');
+  expect(listItem).toHaveClass('v3-trade-card-shell');
+  const card = screen.getByRole('button', { name: /Open WMT trade/i });
   expect(card).toHaveClass('v3-trade-card');
   expect(screen.getByText('Averaging down weakened the trade management.')).toBeVisible();
 
