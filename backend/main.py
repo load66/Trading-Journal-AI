@@ -2252,10 +2252,10 @@ async def upload_diary(
     )
     conn.commit()
 
-    # Build trades context for Claude
+    # Build canonical trades context for diary AI
     trades_context = build_trades_context(conn, date, account_id)
 
-    # Call Claude — image vision or text depending on file type
+    # Analyze with the configured AI provider — image vision or text depending on file type
     analysis_error = None
     analysis = None
     try:
@@ -2285,6 +2285,9 @@ async def upload_diary(
         result['analysis_error'] = analysis_error
     else:
         result['trade_count'] = len(analysis.get('trade_analyses', [])) if analysis else 0
+        if analysis:
+            result['ai_provider'] = analysis.get('ai_provider')
+            result['ai_model'] = analysis.get('ai_model')
 
     return result
 
