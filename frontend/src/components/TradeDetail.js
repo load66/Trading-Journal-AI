@@ -870,64 +870,16 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
 
         <div className="td-main">
-          <section className="td-visual-review" aria-label="Visual trade review">
-            <div className="card td-live-chart">
-              <TradingChart
-                ticker={trade.ticker}
-                date={trade.date}
-                tradeGroup={trade.trade_group}
-                defaultTimeframe="10Min"
-                executions={parseExecs(trade)}
-                side={trade.side}
-                analysis={analysis}
-                height={520}
-              />
-            </div>
-
-            <aside className="card td-chart-screenshot">
-              <div className="td-chart-screenshot-head">
-                <div>
-                  <div className="section-title" style={{ fontSize: 17 }}>TradingView screenshot</div>
-                  <div className="text-muted" style={{ fontSize: 12.5, marginTop: 3 }}>Compare your marked-up plan with the recorded trade.</div>
-                </div>
-                {analysis?.chart_screenshot_path && (
-                  <div className="td-chart-screenshot-actions">
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setChartScreenshotExpanded(true)} title="Open larger">
-                      <Maximize2 size={14} /> View
-                    </button>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={handleChartScreenshotDelete} title="Remove screenshot">
-                      <Trash2 size={14} /> Remove
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <label className={`td-chart-dropzone${chartScreenshotUrl ? ' has-image' : ''}`}>
-                {chartScreenshotLoading ? (
-                  <div className="text-muted">Loading screenshot…</div>
-                ) : chartScreenshotUrl ? (
-                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
-                ) : (
-                  <div className="td-chart-dropzone-empty">
-                    <Upload size={30} />
-                    <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload TradingView screenshot'}</strong>
-                    <span>Press Ctrl+V anywhere on this trade, or click here to choose a file. Images are automatically resized and compressed before storage.</span>
-                  </div>
-                )}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  disabled={chartScreenshotUploading}
-                  onChange={e => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    handleChartScreenshotUpload(file);
-                  }}
-                />
-              </label>
-              {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
-              {chartScreenshotUrl && <div className="text-muted td-chart-replace-hint">Paste a new screenshot with Ctrl+V to replace it, click the image to choose a file, or use View for full size.</div>}
-            </aside>
+          <section className="card td-live-chart" aria-label="Trade chart">
+            <TradingChart
+              ticker={trade.ticker}
+              date={trade.date}
+              tradeGroup={trade.trade_group}
+              defaultTimeframe="10Min"
+              executions={parseExecs(trade)}
+              side={trade.side}
+              height={520}
+            />
           </section>
 
           <div className="td-lower">
@@ -1462,6 +1414,71 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               </div>
             </section>
           )}
+
+          {/* TradingView screenshot — compact until opened */}
+          <section className="card td-chart-screenshot-side" aria-label="TradingView screenshot">
+            <div className="td-chart-screenshot-head">
+              <div>
+                <div className="section-title" style={{ fontSize: 15 }}>Chart screenshot</div>
+                <div className="text-muted" style={{ fontSize: 11.5, marginTop: 2 }}>
+                  Paste with Ctrl+V or upload. Stored images are automatically compressed.
+                </div>
+              </div>
+            </div>
+
+            {chartScreenshotLoading ? (
+              <div className="td-chart-preview-loading text-muted">Loading screenshot…</div>
+            ) : chartScreenshotUrl ? (
+              <>
+                <button
+                  type="button"
+                  className="td-chart-preview"
+                  onClick={() => setChartScreenshotExpanded(true)}
+                  title="Click to enlarge"
+                >
+                  <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
+                  <span><Maximize2 size={13} /> Click to enlarge</span>
+                </button>
+                <div className="td-chart-screenshot-actions td-chart-screenshot-actions-bottom">
+                  <label className="btn btn-ghost btn-sm td-chart-review-upload">
+                    <Upload size={13} /> Replace
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={chartScreenshotUploading}
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        handleChartScreenshotUpload(file);
+                      }}
+                    />
+                  </label>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={handleChartScreenshotDelete}>
+                    <Trash2 size={13} /> Remove
+                  </button>
+                </div>
+              </>
+            ) : (
+              <label className="td-chart-dropzone td-chart-dropzone-compact">
+                <div className="td-chart-dropzone-empty">
+                  <Upload size={24} />
+                  <strong>{chartScreenshotUploading ? 'Optimizing & uploading…' : 'Paste or upload screenshot'}</strong>
+                  <span>Ctrl+V works anywhere on this trade. Or click here to choose an image.</span>
+                </div>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={chartScreenshotUploading}
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    handleChartScreenshotUpload(file);
+                  }}
+                />
+              </label>
+            )}
+            {chartScreenshotError && <div className="notice neg" role="alert">{chartScreenshotError}</div>}
+          </section>
 
           {/* AI Feedback — only shown when diary analysis exists */}
           {analysis?.ai_feedback && (
