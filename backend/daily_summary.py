@@ -1,5 +1,9 @@
 import hashlib
 import json
+import os
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 import httpx
 
 from behavior_rules import detect_daily_flags, deterministic_strengths, recorded_observations
@@ -15,6 +19,9 @@ from ai_analysis import (
     get_client,
     response_text,
 )
+
+DAY_REVIEW_TIMEZONE = os.getenv("DAY_REVIEW_TIMEZONE", "America/Chicago")
+
 
 DAILY_SUMMARY_PROMPT = """You are a professional trading coach producing an end-of-day performance review for a day trader.
 
@@ -87,6 +94,42 @@ def daily_context_signature(context: dict) -> str:
         default=str,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def daily_auto_generation_is_fresh(generated_at, now: datetime | None = None) -> bool:
+    """Return True when a saved diagnosis was generated today in journal-local time.
+
+    Database CURRENT_TIMESTAMP values are UTC in SQLite and timezone-aware in
+    Postgres. Naive values are therefore interpreted as UTC before comparing
+    dates in DAY_REVIEW_TIMEZONE.
+    """
+    if not generated_at:
+        return False
+
+    if isinstance(generated_at, datetime):
+        generated = generated_at
+    else:
+        raw = str(generated_at).strip()
+        if not raw:
+            return False
+        try:
+            generated = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+
+    if generated.tzinfo is None:
+        generated = generated.replace(tzinfo=timezone.utc)
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+
+    try:
+        local_tz = ZoneInfo(DAY_REVIEW_TIMEZONE)
+    except Exception:
+        local_tz = ZoneInfo("America/Chicago")
+
+    return generated.astimezone(local_tz).date() == current.astimezone(local_tz).date()
 
 
 def daily_cache_matches(content: dict, input_signature: str) -> bool:
