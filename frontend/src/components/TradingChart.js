@@ -227,6 +227,15 @@ const etWallTs = (dateStr, hhmm) => Math.floor(new Date(`${dateStr}T${hhmm}:00Z`
 // Legend entries that can be switched on and off. Not remembered between trades.
 const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, ema8: true, prevLevels: true, premarketLevels: true };
 
+export function resolveChartHeight(baseHeight = 320, mobileHeight = null, viewportWidth = Infinity) {
+  const desktopHeight = Number(baseHeight) > 0 ? Number(baseHeight) : 320;
+  const phoneHeight = Number(mobileHeight);
+  if (Number.isFinite(phoneHeight) && phoneHeight > 0 && Number(viewportWidth) <= 720) {
+    return phoneHeight;
+  }
+  return desktopHeight;
+}
+
 // Show or hide the toggleable layers on an existing chart.
 function applyLayers(layers, visible) {
   if (!layers) return;
@@ -252,6 +261,8 @@ export default function TradingChart({
   ticker, date, tradeGroup = null, defaultTimeframe = '10Min',
   executions = [], side = 'LONG',
   height = 320,
+  mobileHeight = null,
+  compactMobile = false,
   lockedTimeframe = null,
   showHeader = true,
 }) {
@@ -264,7 +275,12 @@ export default function TradingChart({
   const [warning, setWarning] = useState(null);
   const [leLevels, setLeLevels] = useState({});
   const [loading, setLoading] = useState(true);
+  const [viewportWidth, setViewportWidth] = useState(() => (
+    typeof window === 'undefined' ? 1024 : window.innerWidth
+  ));
   const isWide = WIDE_RANGE_TFS.has(timeframe);
+  const isCompactMobile = Boolean(compactMobile && viewportWidth <= 720);
+  const chartHeight = resolveChartHeight(height, mobileHeight, viewportWidth);
   const [visible, setVisible] = useState(DEFAULT_VISIBLE);
   const visibleRef = useRef(DEFAULT_VISIBLE);
   // Handles to everything a legend toggle controls, so toggling never rebuilds
@@ -287,6 +303,14 @@ export default function TradingChart({
   // fired the fetch once with the stale daysBack and again with the reset
   // value once it caught up.
   const selectionKeyRef = useRef(null);
+
+  useEffect(() => {
+    if (!mobileHeight && !compactMobile) return undefined;
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    handleResize();
+    window.addEventListener('resize', handleResize, { passive: true });
+    return () => window.removeEventListener('resize', handleResize);
+  }, [mobileHeight, compactMobile]);
 
   useEffect(() => {
     let cancelled = false;
@@ -347,7 +371,7 @@ export default function TradingChart({
       layout: {
         background: { type: ColorType.Solid, color: T.bg },
         textColor: T.text,
-        fontSize: 11,
+        fontSize: isCompactMobile ? 10 : 11,
       },
       grid: {
         vertLines: { color: T.grid },
@@ -356,7 +380,7 @@ export default function TradingChart({
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: {
         borderColor: T.border,
-        scaleMargins: { top: 0.1, bottom: 0.22 },
+        scaleMargins: isCompactMobile ? { top: 0.08, bottom: 0.2 } : { top: 0.1, bottom: 0.22 },
       },
       timeScale: {
         borderColor: T.border,
@@ -364,7 +388,7 @@ export default function TradingChart({
         secondsVisible: false,
       },
       width: containerRef.current.clientWidth,
-      height,
+      height: chartHeight,
     });
     chartRef.current = chart;
 
@@ -581,7 +605,7 @@ export default function TradingChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, executions, side, leLevels, height, loading, date, timeframe, isWide, daysBack]);
+  }, [bars, executions, side, leLevels, chartHeight, isCompactMobile, loading, date, timeframe, isWide, daysBack]);
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -601,7 +625,7 @@ export default function TradingChart({
   ].filter(Boolean);
 
   return (
-    <div>
+    <div className={compactMobile ? 'trading-chart trading-chart-compact-mobile' : 'trading-chart'}>
       {showHeader && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -641,7 +665,7 @@ export default function TradingChart({
       )}
 
       {loading ? (
-        <div className="skeleton" style={{ height, borderRadius: 8 }} />
+        <div className="skeleton" style={{ height: chartHeight, borderRadius: 8 }} />
       ) : warning && !bars.length ? (
         <div role="status" style={{
           display: 'flex', alignItems: 'center', gap: 10,
@@ -670,13 +694,21 @@ export default function TradingChart({
             ))}
           </div>
           {!isWide && executions.length > 0 && (
-            <div className="text-muted" style={{ fontSize: 11.5, margin: '3px 0 7px' }}>
+            <div className="text-muted chart-execution-help" style={{ fontSize: 11.5, margin: '3px 0 7px' }}>
               {timeframe === '1Min'
-                ? 'Execution markers are shown at the broker source minute. Multiple fills in the same minute are grouped without losing quantity or price.'
-                : `Execution markers are anchored to the containing ${TIMEFRAMES.find(t => t.id === timeframe)?.label || timeframe} candle; labels preserve the broker-reported ET minute. Use Exact fills · 1m for minute-by-minute placement.`}
+                ? (isCompactMobile
+                  ? 'Exact broker-minute fills are shown; same-minute fills are grouped.'
+                  : 'Execution markers are shown at the broker source minute. Multiple fills in the same minute are grouped without losing quantity or price.')
+                : (isCompactMobile
+                  ? `${TIMEFRAMES.find(t => t.id === timeframe)?.label || timeframe} fills are grouped by candle. Use Exact fills · 1m for broker-minute placement.`
+                  : `Execution markers are anchored to the containing ${TIMEFRAMES.find(t => t.id === timeframe)?.label || timeframe} candle; labels preserve the broker-reported ET minute. Use Exact fills · 1m for minute-by-minute placement.`)}
             </div>
           )}
-          <div ref={containerRef} style={{ width: '100%', background: 'var(--surface-panel)', borderRadius: 'var(--radius-md)' }} />
+          <div
+            ref={containerRef}
+            className="chart-canvas"
+            style={{ width: '100%', background: 'var(--surface-panel)', borderRadius: 'var(--radius-md)' }}
+          />
         </>
       )}
     </div>

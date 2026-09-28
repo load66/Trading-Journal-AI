@@ -1,10 +1,27 @@
-import { buildExecutionMarkerGroups, execToTs, executionTimeLabelET, toTs } from './TradingChart';
+import { buildExecutionMarkerGroups, execToTs, executionTimeLabelET, resolveChartHeight, toTs } from './TradingChart';
 
 const utcWallTs = (dateStr, hhmm) => {
   const [h, m] = hhmm.split(':').map(Number);
   const [y, mo, d] = dateStr.split('-').map(Number);
   return Math.floor(Date.UTC(y, mo - 1, d, h, m, 0) / 1000);
 };
+
+describe('TradingChart responsive height', () => {
+  test('keeps the full desktop height above the mobile breakpoint', () => {
+    expect(resolveChartHeight(520, 340, 1024)).toBe(520);
+    expect(resolveChartHeight(520, 340, 721)).toBe(520);
+  });
+
+  test('uses the dedicated compact height on phone widths', () => {
+    expect(resolveChartHeight(520, 340, 720)).toBe(340);
+    expect(resolveChartHeight(520, 340, 390)).toBe(340);
+  });
+
+  test('falls back safely when no valid mobile height is supplied', () => {
+    expect(resolveChartHeight(520, null, 390)).toBe(520);
+    expect(resolveChartHeight(520, 0, 390)).toBe(520);
+  });
+});
 
 describe('TradingChart timezone integrity', () => {
   test('market bars project to 10:00 ET in summer and winter', () => {
