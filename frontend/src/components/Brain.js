@@ -101,6 +101,22 @@ export default function Brain({ accountId, open: openProp, onOpenChange }) {
     }
   };
 
+  const retry = async () => {
+    if (loading || !messages.length) return;
+    setError('');
+    setLoading(true);
+    try {
+      const res = await brainApi.chat(messages, accountId);
+      const answer = res?.data?.response;
+      if (!answer) throw new Error('Brain returned an empty response.');
+      setMessages(prev => [...prev, { role: 'assistant', content: answer }]);
+    } catch (e) {
+      setError(e.response?.data?.detail || e.message || 'Brain could not answer that question.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const clearChat = () => {
     if (loading) return;
     setMessages([]);
@@ -182,7 +198,7 @@ export default function Brain({ accountId, open: openProp, onOpenChange }) {
               <div className="brain-error" role="alert">
                 <strong>Brain couldn't answer.</strong>
                 <span>{error}</span>
-                <button type="button" onClick={() => send(messages[messages.length - 1]?.content)}>Retry</button>
+                <button type="button" onClick={retry}>Retry</button>
               </div>
             )}
             <div ref={bottomRef} />
