@@ -141,7 +141,7 @@ export function buildMonthShareSvg({
   tradingDays,
   asOfDate,
 }) {
-  const width = 1200;
+  const width = 1400;
   const margin = 50;
   const inner = width - margin * 2;
   const metricGap = 10;
@@ -151,7 +151,11 @@ export function buildMonthShareSvg({
   const gridY = 366;
   const headerH = 34;
   const cellGap = 7;
-  const cellW = (inner - cellGap * 4) / 5;
+  const weeklyGap = 14;
+  const weeklyW = 200;
+  const dayGridW = inner - weeklyGap - weeklyW;
+  const cellW = (dayGridW - cellGap * 4) / 5;
+  const weeklyX = margin + dayGridW + weeklyGap;
   const cellH = 100;
   const rows = Math.max(1, weeks.length);
   const height = gridY + headerH + rows * cellH + Math.max(0, rows - 1) * cellGap + 78;
@@ -199,6 +203,9 @@ export function buildMonthShareSvg({
   const weekdayHeaders = ['MON', 'TUE', 'WED', 'THU', 'FRI'].map((d, i) =>
     `<text x="${margin + i * (cellW + cellGap) + cellW / 2}" y="${gridY + 22}" text-anchor="middle" fill="${SHARE_PALETTE.muted}" font-size="11.5" font-weight="750" letter-spacing="1.5">${d}</text>`
   ).join('');
+  const weeklyHeader = `
+    <text x="${weeklyX + weeklyW / 2}" y="${gridY + 22}" text-anchor="middle"
+      fill="${SHARE_PALETTE.muted}" font-size="11.5" font-weight="750" letter-spacing="1.5">WEEK TOTAL</text>`;
 
   const cells = weeks.map((week, wi) => week.slice(0, 5).map((day, di) => {
     const x = margin + di * (cellW + cellGap);
@@ -238,6 +245,67 @@ export function buildMonthShareSvg({
       </g>`;
   }).join('')).join('');
 
+  const weeklyTotals = weeks.map((week, wi) => {
+    const visibleDays = week.slice(0, 5).filter(Boolean);
+    const keys = visibleDays.map(day => `${year}-${pad(month)}-${pad(day)}`);
+    const tradedKeys = keys.filter(key => {
+      const data = dayData[key];
+      return data && Number(data.trade_count || 0) > 0;
+    });
+    const total = tradedKeys.reduce((sum, key) => sum + Number(dayData[key]?.net_pnl || 0), 0);
+    const hasFuture = keys.some(key => key > todayKey);
+    const allFuture = keys.length > 0 && keys.every(key => key > todayKey);
+    const isPartialToDate = !allFuture && hasFuture && tradedKeys.length > 0;
+    const firstDay = visibleDays[0];
+    const lastDay = visibleDays[visibleDays.length - 1];
+    const range = firstDay == null
+      ? `WEEK ${wi + 1}`
+      : `WEEK ${wi + 1} · ${monthShort.toUpperCase()} ${firstDay}${lastDay !== firstDay ? `–${lastDay}` : ''}`;
+    const y = gridY + headerH + wi * (cellH + cellGap);
+
+    const tone = total > 0 ? 'pos' : total < 0 ? 'neg' : 'neutral';
+    const fill = allFuture
+      ? '#081722'
+      : tradedKeys.length
+        ? (tone === 'pos' ? '#0d3028' : tone === 'neg' ? '#32171e' : SHARE_PALETTE.panel2)
+        : '#091923';
+    const accent = allFuture
+      ? '#24465b'
+      : tradedKeys.length
+        ? (tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.border)
+        : '#173246';
+    const valueColor = allFuture
+      ? SHARE_PALETTE.muted
+      : tradedKeys.length
+        ? (tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.text)
+        : SHARE_PALETTE.dim;
+    const value = allFuture ? 'UPCOMING' : tradedKeys.length ? fmtShareDayPnl(total) : '—';
+    const meta = allFuture
+      ? 'Future week'
+      : tradedKeys.length
+        ? `${tradedKeys.length} session${tradedKeys.length === 1 ? '' : 's'}${isPartialToDate ? ' · to date' : ''}`
+        : 'No sessions';
+
+    return `
+      <g>
+        <rect x="${weeklyX}" y="${y}" width="${weeklyW}" height="${cellH}" rx="12"
+          fill="${fill}" stroke="${SHARE_PALETTE.border}" />
+        <rect x="${weeklyX}" y="${y}" width="4" height="${cellH}" rx="2" fill="${accent}" />
+        <text x="${weeklyX + 16}" y="${y + 23}" fill="${SHARE_PALETTE.muted}"
+          font-size="10.5" font-weight="750" letter-spacing=".65">${escapeXml(range)}</text>
+        <text class="tabular" x="${weeklyX + 16}" y="${y + 60}" fill="${valueColor}"
+          font-size="${tradedKeys.length ? 22 : 11}" font-weight="${tradedKeys.length ? 800 : 750}"
+          letter-spacing="${tradedKeys.length ? '-.25' : '1'}">${escapeXml(value)}</text>
+        <text x="${weeklyX + 16}" y="${y + 82}" fill="${SHARE_PALETTE.dim}"
+          font-size="9.7" font-weight="500">${escapeXml(meta)}</text>
+      </g>`;
+  }).join('');
+
+  const weeklyDivider = `
+    <line x1="${weeklyX - weeklyGap / 2}" y1="${gridY + 4}"
+      x2="${weeklyX - weeklyGap / 2}" y2="${gridY + headerH + rows * cellH + Math.max(0, rows - 1) * cellGap}"
+      stroke="${SHARE_PALETTE.border}" opacity=".75" />`;
+
   const activitySummary = `${tradingDays} trading day${tradingDays === 1 ? '' : 's'} · ${totalTrades} trade${totalTrades === 1 ? '' : 's'} · ${greenDays} green / ${redDays} red day${redDays === 1 ? '' : 's'}`;
 
   return {
@@ -265,7 +333,10 @@ export function buildMonthShareSvg({
       ${insights}
       <text x="${margin}" y="${gridY - 10}" fill="${SHARE_PALETTE.text}" font-size="12" font-weight="750" letter-spacing="1.2">DAILY PERFORMANCE</text>
       ${weekdayHeaders}
+      ${weeklyHeader}
+      ${weeklyDivider}
       ${cells}
+      ${weeklyTotals}
       <line x1="${margin}" y1="${height - 54}" x2="${width - margin}" y2="${height - 54}" stroke="${SHARE_PALETTE.border}" />
       <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Goals: Win Rate ≥ 50% · Profit Factor ≥ 1.30 · Avg Win/Loss ≥ 1.20 · Green = profitable · Upcoming = future session</text>
       <text x="${width - margin}" y="${height - 28}" text-anchor="end" fill="${SHARE_PALETTE.dim}" font-size="10.5" font-weight="650">AI Journal</text>
