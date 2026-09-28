@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import './TradeDetail.mobile.css';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, BookOpen, ClipboardCheck, FileText, ShieldCheck, Tags as TagsIcon, Library, RefreshCw } from 'lucide-react';
 import { tradesApi, libraryApi } from '../api';
@@ -310,6 +310,127 @@ const TAG_TYPE_META = {
 
 function tagLibraryItems(library, type) {
   return library?.tags?.[type] || [];
+}
+
+export function filterTagLibraryItems(items = [], query = '') {
+  const normalized = String(query || '').trim().toLocaleLowerCase();
+  if (!normalized) return [...items];
+
+  return [...items]
+    .map((item, index) => {
+      const name = String(item?.name || '');
+      const description = String(item?.description || '');
+      const lowerName = name.toLocaleLowerCase();
+      const lowerDescription = description.toLocaleLowerCase();
+      const starts = lowerName.startsWith(normalized);
+      const contains = lowerName.includes(normalized);
+      const descriptionMatch = lowerDescription.includes(normalized);
+      return { item, index, starts, contains, descriptionMatch };
+    })
+    .filter(row => row.contains || row.descriptionMatch)
+    .sort((a, b) => (
+      Number(b.starts) - Number(a.starts)
+      || Number(b.contains) - Number(a.contains)
+      || a.index - b.index
+    ))
+    .map(row => row.item);
+}
+
+export function SavedTagCombobox({
+  items = [],
+  value = '',
+  onSelect,
+  disabled = false,
+  placeholder = 'Search saved tags…',
+  ariaLabel = 'Search saved tag',
+}) {
+  const [query, setQuery] = useState(value || '');
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const listId = useId();
+
+  useEffect(() => {
+    setQuery(value || '');
+    setActiveIndex(0);
+  }, [value]);
+
+  const matches = filterTagLibraryItems(items, query).slice(0, 30);
+
+  const choose = (item) => {
+    if (!item?.name) return;
+    setQuery(item.name);
+    setOpen(false);
+    setActiveIndex(0);
+    onSelect?.(item.name);
+  };
+
+  const handleInput = (event) => {
+    setQuery(event.target.value);
+    setOpen(true);
+    setActiveIndex(0);
+    if (value) onSelect?.('');
+  };
+
+  const handleKeyDown = (event) => {
+    if (disabled) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setOpen(true);
+      setActiveIndex(index => Math.min(index + 1, Math.max(0, matches.length - 1)));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setOpen(true);
+      setActiveIndex(index => Math.max(index - 1, 0));
+    } else if (event.key === 'Enter' && open && matches.length) {
+      event.preventDefault();
+      choose(matches[activeIndex] || matches[0]);
+    } else if (event.key === 'Escape') {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div className="td-tags-combobox">
+      <input
+        type="search"
+        role="combobox"
+        aria-label={ariaLabel}
+        aria-expanded={open && !disabled}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        autoComplete="off"
+        spellCheck="false"
+        disabled={disabled}
+        value={query}
+        placeholder={placeholder}
+        onFocus={() => setOpen(true)}
+        onChange={handleInput}
+        onKeyDown={handleKeyDown}
+      />
+      {open && !disabled && (
+        <div id={listId} className="td-tags-combobox-menu" role="listbox" aria-label="Saved tag matches">
+          {matches.length ? matches.map((item, index) => (
+            <button
+              key={item.name}
+              type="button"
+              role="option"
+              aria-selected={item.name === value}
+              className={`td-tags-combobox-option${index === activeIndex ? ' active' : ''}`}
+              onMouseDown={event => event.preventDefault()}
+              onClick={() => choose(item)}
+            >
+              <span>{item.name}</span>
+              {item.description && <small>{item.description}</small>}
+            </button>
+          )) : (
+            <div className="td-tags-combobox-empty">
+              {query.trim() ? `No saved tags match “${query.trim()}”.` : 'No unused saved tags in this category.'}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const MOBILE_REVIEW_STEPS = [
@@ -1618,11 +1739,18 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   <select value={tagForm.tag_type} onChange={e => setTagForm(f => ({ ...f, tag_type: e.target.value }))} aria-label="Tag type">
                     {TAG_TYPES.map(type => <option value={type} key={type}>{TAG_TYPE_META[type]?.label || type}</option>)}
                   </select>
-                  <input
+                  <SavedTagCombobox
+                    items={tagLibraryItems(tagLibrary, tagForm.tag_type).filter(
+                      item => !tags.some(tag => tag.tag_type === tagForm.tag_type && tag.tag_value === item.name)
+                    )}
                     value={tagForm.tag_value}
-                    onChange={e => setTagForm(f => ({ ...f, tag_value: e.target.value }))}
-                    placeholder="Add tag"
-                    aria-label="Tag value"
+                    onSelect={value => {
+                      setTagForm(f => ({ ...f, tag_value: value }));
+                      setTagError(null);
+                    }}
+                    disabled={tagLibraryLoading}
+                    placeholder={tagLibraryLoading ? 'Loading saved tags…' : 'Search saved tags…'}
+                    ariaLabel="Search saved tag"
                   />
                   <button type="button" className="btn btn-primary btn-sm" onClick={handleAddTag} disabled={savingTag || !tagForm.tag_value.trim()}>
                     {savingTag ? 'Adding…' : 'Add'}
@@ -2190,7 +2318,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   </div>
 
                   <div className="td-tags-grid">
-                    <section className="td-tags-card" aria-label="Add trade tag">
+                    <section className="td-tags-card td-tags-add-card" aria-label="Add trade tag">
                       <div className="td-tags-card-head">
                         <div>
                           <h3>Add a tag</h3>
@@ -2232,26 +2360,21 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         <div className="td-tags-field">
                           <div className="td-tags-field-label">Saved tag</div>
                           <div className="td-tags-picker-row">
-                            <select
-                              aria-label="Saved tag"
+                            <SavedTagCombobox
+                              items={availableItems}
                               value={tagForm.tag_value}
-                              onChange={e => {
-                                setTagForm(f => ({ ...f, tag_value: e.target.value }));
+                              onSelect={value => {
+                                setTagForm(f => ({ ...f, tag_value: value }));
                                 setTagError(null);
                               }}
                               disabled={tagLibraryLoading || availableItems.length === 0}
-                            >
-                              <option value="">
-                                {tagLibraryLoading
-                                  ? 'Loading saved tags…'
-                                  : availableItems.length
-                                    ? `Choose a ${TAG_TYPE_META[tagForm.tag_type].label.toLowerCase()}…`
-                                    : 'No unused saved tags'}
-                              </option>
-                              {availableItems.map(item => (
-                                <option key={item.name} value={item.name}>{item.name}</option>
-                              ))}
-                            </select>
+                              placeholder={tagLibraryLoading
+                                ? 'Loading saved tags…'
+                                : availableItems.length
+                                  ? `Search ${TAG_TYPE_META[tagForm.tag_type].label.toLowerCase()} tags…`
+                                  : 'No unused saved tags'}
+                              ariaLabel="Search saved tag"
+                            />
 
                             <button
                               type="button"
