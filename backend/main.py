@@ -4318,6 +4318,90 @@ def get_daily_summary(
 
 # ── Brain AI Chatbot ────────────────────────────────────────────────────────────
 
+LE_BRAIN_AUDIT_TERMS = (
+    " le ",
+    "le ",
+    "rule",
+    "compliance",
+    "flag",
+    "line",
+    "sign",
+    "chop",
+    "three trade",
+    "3 trade",
+    "8 ema",
+    "runner",
+    "purple profits",
+    "level break",
+)
+
+
+def _brain_question_needs_le_audit(question: str) -> bool:
+    q = f" {str(question or '').strip().lower()} "
+    return any(term in q for term in LE_BRAIN_AUDIT_TERMS)
+
+
+async def _warm_brain_le_compliance(
+    conn,
+    account_id: int | None,
+    question: str,
+    *,
+    limit: int = 5,
+) -> dict:
+    """Lazily audit a small recent batch for LE-specific Brain questions.
+
+    This keeps normal Brain latency unchanged while steadily increasing LE audit
+    coverage across repeated coaching sessions. Groq classification is disabled:
+    only deterministic market/journal evidence is cached.
+    """
+    if not _brain_question_needs_le_audit(question):
+        return {"triggered": False, "processed": 0}
+
+    cached_groups = {
+        str(item.get("trade_group"))
+        for item in _load_cached_le_compliance(conn, account_id)
+        if item.get("trade_group") and item.get("compliance_version") == LE_COMPLIANCE_VERSION
+    }
+
+    if account_id is None:
+        rows = conn.execute(
+            "SELECT trade_group FROM trades ORDER BY date DESC, id DESC"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT trade_group FROM trades WHERE account_id=? ORDER BY date DESC, id DESC",
+            (account_id,),
+        ).fetchall()
+
+    candidates = [
+        str(row["trade_group"])
+        for row in rows
+        if str(row["trade_group"]) not in cached_groups
+    ][:max(1, min(int(limit), 8))]
+
+    processed = 0
+    errors = []
+    for group in candidates:
+        try:
+            await _build_trade_le_compliance(
+                conn,
+                group,
+                include_ai=False,
+                persist=True,
+            )
+            processed += 1
+        except Exception as exc:
+            logger.warning("Brain LE warm audit failed for %s", group, exc_info=True)
+            errors.append({"trade_group": group, "error": str(exc)})
+
+    return {
+        "triggered": True,
+        "processed": processed,
+        "attempted": len(candidates),
+        "errors": errors,
+    }
+
+
 from fastapi import Request as FastAPIRequest
 
 @app.post("/api/brain")
@@ -4334,8 +4418,13 @@ async def brain_chat(
 
     try:
         current_question = str(messages[-1].get("content") or "") if messages else ""
+        le_warm = await _warm_brain_le_compliance(
+            conn,
+            account_id,
+            current_question,
+        )
         context = build_brain_context(conn, account_id, current_question)
         response_text = generate_brain_response(messages, context)
-        return {"response": response_text}
+        return {"response": response_text, "le_audit_warmup": le_warm}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
