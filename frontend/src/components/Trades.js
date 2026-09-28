@@ -30,6 +30,24 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
+  const [isMobileView, setIsMobileView] = useState(() => (
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 768px)').matches
+  ));
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const query = window.matchMedia('(max-width: 768px)');
+    const sync = () => setIsMobileView(query.matches);
+    sync();
+    if (typeof query.addEventListener === 'function') {
+      query.addEventListener('change', sync);
+      return () => query.removeEventListener('change', sync);
+    }
+    query.addListener(sync);
+    return () => query.removeListener(sync);
+  }, []);
 
   const [customSetups, setCustomSetups] = useState([]);
   const reloadCustomSetups = useCallback(async () => {
@@ -212,80 +230,81 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
       )}
 
       <section className="card panel-flush trade-view-results" aria-label="Trades">
-        <div className="table-container trade-view-desktop-table">
-          <table className="trade-view-table">
-            <thead>
-              <tr>
-                {sortTh('datetime', 'Date / Time')}
-                {sortTh('ticker', 'Trade')}
-                <th title="The setup or strategy used for this trade.">Setup / Strategy</th>
-                <th className="num" title="Planned reward-to-risk. Realized R appears underneath when available.">Planned R:R</th>
-                <th title="Best move in your favor versus worst move against you while the trade was open.">Best / Worst Move</th>
-                <th title="How much of the favorable move you kept when you exited.">Exit Capture</th>
-                {sortTh('net_pnl', 'Profit / Loss', 'num')}
-                <th><span className="sr-only">Open trade</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                [...Array(5)].map((_, i) => (
-                  <tr key={i}>
-                    {[...Array(8)].map((_, j) => (
-                      <td key={j}><div className="skeleton" style={{ height: 16, width: '80%' }} /></td>
-                    ))}
-                  </tr>
-                ))
-              ) : paginated.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="empty">
-                    No trades found. Import a CSV to get started.
-                  </td>
-                </tr>
-              ) : (
-                paginated.map(trade => (
-                  <TradeRow
-                    key={trade.id}
-                    trade={trade}
-                    openTime={getOpenTime(trade)}
-                    onOpenDetail={(t) => onOpenDetail(t, paginated)}
-                    onSetRisk={(t) => onSetRisk && onSetRisk(t, paginated)}
-                    customSetups={customSetups}
-                    onCustomSetupsChanged={reloadCustomSetups}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="trade-view-mobile-list" aria-label="Trades">
-          {loading ? (
-            [...Array(5)].map((_, i) => (
-              <div className="trade-mobile-card trade-mobile-card-skeleton" key={i} aria-hidden="true">
-                <div className="skeleton" style={{ height: 18, width: '44%' }} />
-                <div className="skeleton" style={{ height: 13, width: '70%', marginTop: 8 }} />
-                <div className="skeleton" style={{ height: 52, width: '100%', marginTop: 12 }} />
+        {isMobileView ? (
+          <div className="trade-view-mobile-list" aria-label="Trades">
+            {loading ? (
+              [...Array(5)].map((_, i) => (
+                <div className="trade-mobile-card trade-mobile-card-skeleton" key={i} aria-hidden="true">
+                  <div className="skeleton" style={{ height: 18, width: '44%' }} />
+                  <div className="skeleton" style={{ height: 13, width: '70%', marginTop: 8 }} />
+                  <div className="skeleton" style={{ height: 52, width: '100%', marginTop: 12 }} />
+                </div>
+              ))
+            ) : paginated.length === 0 ? (
+              <div className="empty trade-view-mobile-empty">
+                No trades found. Import a CSV to get started.
               </div>
-            ))
-          ) : paginated.length === 0 ? (
-            <div className="empty trade-view-mobile-empty">
-              No trades found. Import a CSV to get started.
-            </div>
-          ) : (
-            paginated.map(trade => (
-              <TradeRow
-                key={`mobile-${trade.id}`}
-                trade={trade}
-                openTime={getOpenTime(trade)}
-                onOpenDetail={(t) => onOpenDetail(t, paginated)}
-                customSetups={customSetups}
-                onCustomSetupsChanged={reloadCustomSetups}
-                mobile
-              />
-            ))
-          )}
-        </div>
-
+            ) : (
+              paginated.map(trade => (
+                <TradeRow
+                  key={`mobile-${trade.id}`}
+                  trade={trade}
+                  openTime={getOpenTime(trade)}
+                  onOpenDetail={(t) => onOpenDetail(t, paginated)}
+                  customSetups={customSetups}
+                  onCustomSetupsChanged={reloadCustomSetups}
+                  mobile
+                />
+              ))
+            )}
+          </div>
+        ) : (
+          <div className="table-container trade-view-desktop-table">
+            <table className="trade-view-table">
+              <thead>
+                <tr>
+                  {sortTh('datetime', 'Date / Time')}
+                  {sortTh('ticker', 'Trade')}
+                  <th title="The setup or strategy used for this trade.">Setup / Strategy</th>
+                  <th className="num" title="Planned reward-to-risk. Realized R appears underneath when available.">Planned R:R</th>
+                  <th title="Best move in your favor versus worst move against you while the trade was open.">Best / Worst Move</th>
+                  <th title="How much of the favorable move you kept when you exited.">Exit Capture</th>
+                  {sortTh('net_pnl', 'Profit / Loss', 'num')}
+                  <th><span className="sr-only">Open trade</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  [...Array(5)].map((_, i) => (
+                    <tr key={i}>
+                      {[...Array(8)].map((_, j) => (
+                        <td key={j}><div className="skeleton" style={{ height: 16, width: '80%' }} /></td>
+                      ))}
+                    </tr>
+                  ))
+                ) : paginated.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="empty">
+                      No trades found. Import a CSV to get started.
+                    </td>
+                  </tr>
+                ) : (
+                  paginated.map(trade => (
+                    <TradeRow
+                      key={trade.id}
+                      trade={trade}
+                      openTime={getOpenTime(trade)}
+                      onOpenDetail={(t) => onOpenDetail(t, paginated)}
+                      onSetRisk={(t) => onSetRisk && onSetRisk(t, paginated)}
+                      customSetups={customSetups}
+                      onCustomSetupsChanged={reloadCustomSetups}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="trade-view-pagination">
           <span className="text-muted" style={{ fontSize: 13 }}>
