@@ -12,7 +12,7 @@ jest.mock('../api', () => ({
 }));
 
 const REPORT = {
-  compliance_version: 'LE_PLAYBOOK_2026_09_v1',
+  compliance_version: 'LE_PLAYBOOK_2026_09_v3',
   total_trades: 191,
   audited_trades: 191,
   missing_trades: 0,
@@ -55,6 +55,11 @@ const REPORT = {
       title: 'Most profitable proven LE cohort',
       text: 'Outside Day produced strong results.',
     },
+    {
+      kind: 'manual',
+      title: 'User-confirmed LE evidence',
+      text: '2 audited trades contain authoritative manual LE tags.',
+    },
   ],
   cohorts: [
     {
@@ -68,6 +73,25 @@ const REPORT = {
       stable_sample: true,
     },
   ],
+  manual_evidence: {
+    trades: 2,
+    override_count: 4,
+    conflict_count: 1,
+    authoritative_source: 'USER_MANUAL',
+  },
+  user_confirmed_setups: [
+    {
+      id: 'outside_day',
+      label: 'Outside Day',
+      trades: 2,
+      win_rate: 100,
+      net_pnl: 648.63,
+      avg_pnl: 324.32,
+      profit_factor: null,
+      stable_sample: false,
+      evidence_source: 'USER_MANUAL',
+    },
+  ],
   rules: [
     {
       id: 'not_chop_hour',
@@ -76,6 +100,8 @@ const REPORT = {
       pass: { trades: 172, net_pnl: 4691.67 },
       fail: { trades: 19, net_pnl: -351.33, profit_factor: 0.63 },
       unknown: { trades: 0, net_pnl: 0 },
+      user_backed_trades: 1,
+      user_system_conflicts: 1,
     },
   ],
   evidence_gaps: [
@@ -92,6 +118,14 @@ const REPORT = {
       classification_label: 'LE violation found',
       score: { passed: 7, failed: 1, unknown: 5 },
       failed_rule_ids: ['not_chop_hour'],
+      manual_le_evidence: {
+        override_count: 1,
+        conflict_count: 1,
+        setup_tags: ['Outside Day'],
+        recognized_tags: [
+          { id: 7, tag_type: 'setup', tag_value: 'Outside Day', source: 'manual' },
+        ],
+      },
     },
   ],
   note: 'LE diagnosis is deterministic.',
@@ -106,6 +140,9 @@ test('renders journal-wide LE diagnosis and automation status', async () => {
   expect(screen.getByText('191 / 191')).toBeVisible();
   expect(screen.getByText('Outside Day — both directional levels broken')).toBeVisible();
   expect(screen.getByText('Rule Performance Matrix')).toBeVisible();
+  expect(screen.getByText('User-Confirmed LE Setups')).toBeVisible();
+  expect(screen.getByText('User-backed LE evidence')).toBeVisible();
+  expect(screen.getByText('Outside Day')).toBeVisible();
   expect(screen.getByText('VIX Checked?')).toBeVisible();
 });
 
