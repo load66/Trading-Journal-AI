@@ -1567,23 +1567,23 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   </div>
                 ) : (
                   <div className="tdm-note-stack">
-                    <details className="tdm-note-block" open>
-                      <summary><span>Entry reason</span><ChevronRight size={15} /></summary>
-                      <div>{analysis?.entry_reason || 'No entry reason recorded.'}</div>
-                    </details>
-                    <details className="tdm-note-block">
-                      <summary><span>Exit reason</span><ChevronRight size={15} /></summary>
-                      <div>{analysis?.exit_reason || 'No exit reason recorded.'}</div>
-                    </details>
-                    <details className={`tdm-note-block ${analysis?.mistakes ? 'danger' : ''}`}>
-                      <summary><span>Mistakes</span><ChevronRight size={15} /></summary>
-                      <div>{analysis?.mistakes || 'No mistake recorded.'}</div>
-                    </details>
+                    <article className="tdm-note-block static">
+                      <div className="tdm-note-title">Entry reason</div>
+                      <div className="tdm-note-body">{analysis?.entry_reason || 'No entry reason recorded.'}</div>
+                    </article>
+                    <article className="tdm-note-block static">
+                      <div className="tdm-note-title">Exit reason</div>
+                      <div className="tdm-note-body">{analysis?.exit_reason || 'No exit reason recorded.'}</div>
+                    </article>
+                    <article className={`tdm-note-block static ${analysis?.mistakes ? 'danger' : ''}`}>
+                      <div className="tdm-note-title">Mistakes</div>
+                      <div className="tdm-note-body">{analysis?.mistakes || 'No mistake recorded.'}</div>
+                    </article>
                     {analysis?.notes && (
-                      <details className="tdm-note-block">
-                        <summary><span>Journal note</span><ChevronRight size={15} /></summary>
-                        <div className="tdm-note-pre">{analysis.notes}</div>
-                      </details>
+                      <article className="tdm-note-block static">
+                        <div className="tdm-note-title">Journal note</div>
+                        <div className="tdm-note-body tdm-note-pre">{analysis.notes}</div>
+                      </article>
                     )}
                   </div>
                 )}
