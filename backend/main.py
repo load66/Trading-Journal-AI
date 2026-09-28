@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 import tempfile
 import json
@@ -2189,7 +2190,7 @@ class TagCreate(BaseModel):
 
 
 @app.post("/api/trades/{trade_group:path}/tags", status_code=201)
-async def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = Depends(get_connection)):
+def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = Depends(get_connection)):
     trade = conn.execute("SELECT trade_group FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
@@ -2222,12 +2223,12 @@ async def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connect
 
     if is_manual_le_tag(tag_type, tag_value, "manual"):
         try:
-            review = await _build_trade_le_compliance(
+            review = asyncio.run(_build_trade_le_compliance(
                 conn,
                 trade_group,
                 include_ai=False,
                 persist=True,
-            )
+            ))
             result["le_compliance_updated"] = True
             result["le_compliance_version"] = (review.get("compliance") or {}).get("compliance_version")
         except Exception:
@@ -2264,7 +2265,7 @@ def get_analysis_options(conn: sqlite3.Connection = Depends(get_connection)):
 
 
 @app.delete("/api/trade-tags/{tag_id}")
-async def delete_trade_tag(tag_id: int, conn: sqlite3.Connection = Depends(get_connection)):
+def delete_trade_tag(tag_id: int, conn: sqlite3.Connection = Depends(get_connection)):
     row = conn.execute(
         "SELECT id, trade_group, tag_type, tag_value, source FROM trade_tags WHERE id=?",
         (tag_id,),
@@ -2279,12 +2280,12 @@ async def delete_trade_tag(tag_id: int, conn: sqlite3.Connection = Depends(get_c
     result = {"deleted": True, "id": tag_id}
     if is_manual_le_tag(tag.get("tag_type"), tag.get("tag_value"), tag.get("source")):
         try:
-            review = await _build_trade_le_compliance(
+            review = asyncio.run(_build_trade_le_compliance(
                 conn,
                 str(tag.get("trade_group")),
                 include_ai=False,
                 persist=True,
-            )
+            ))
             result["le_compliance_updated"] = True
             result["le_compliance_version"] = (review.get("compliance") or {}).get("compliance_version")
         except Exception:
