@@ -3323,3 +3323,42 @@ button.month-card:active { transform: translateY(1px); }
     border-bottom: 1px solid var(--divider-soft);
   }
 }
+
+
+/* Compact AI utility on phones: keep it reachable without covering KPI cards. */
+@media (max-width: 600px) {
+  .brain-launcher {
+    right: 14px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    width: 48px;
+    height: 48px;
+    min-height: 48px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    border-radius: 15px;
+    background:
+      linear-gradient(155deg, color-mix(in srgb, var(--surface-panel) 88%, var(--accent-line) 12%), var(--surface-control));
+    border-color: color-mix(in srgb, var(--accent-line) 28%, var(--divider));
+    box-shadow: 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.025);
+  }
+  .brain-launcher .brain-launcher-label {
+    display: none;
+  }
+  .brain-launcher svg {
+    width: 20px;
+    height: 20px;
+  }
+  .brain-panel {
+    left: 10px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    width: auto;
+    max-width: none;
+    height: min(680px, calc(100dvh - 20px - env(safe-area-inset-bottom)));
+    max-height: calc(100dvh - 20px - env(safe-area-inset-bottom));
+    border-radius: 16px;
+    border-color: color-mix(in srgb, var(--accent-line) 20%, var(--divider));
+    box-shadow: 0 32px 90px rgba(0,0,0,.58);
+  }
+}
