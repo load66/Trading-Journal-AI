@@ -5,8 +5,10 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from trade_metrics import entry_market_minutes
 
-LE_COMPLIANCE_VERSION = "LE_PLAYBOOK_2026_09_v1"
+
+LE_COMPLIANCE_VERSION = "LE_PLAYBOOK_2026_09_v2"
 
 LE_PLAYBOOK_REFERENCE = {
     "name": "The LE Trading System — Guide Series",
@@ -52,6 +54,27 @@ CHECK_DEFINITIONS = (
     ("not_chop_hour", "Not in Chop Hour?", [40, 50]),
     ("vix_checked", "VIX Checked?", [22, 40, 50]),
 )
+
+
+def _session_window_from_trade(trade: dict) -> str:
+    """Derive the LE session window directly from canonical broker entry time.
+
+    This remains available even when chart/market-data evidence is unavailable.
+    """
+    minute = entry_market_minutes(trade)
+    if minute is None:
+        return ""
+    if 9 * 60 + 30 <= minute < 9 * 60 + 40:
+        return "scan_only"
+    if 9 * 60 + 40 <= minute < 11 * 60 + 30:
+        return "prime"
+    if 11 * 60 + 30 <= minute < 13 * 60 + 30:
+        return "chop_hour"
+    if 13 * 60 + 30 <= minute < 15 * 60:
+        return "cautious"
+    if 15 * 60 <= minute < 15 * 60 + 45:
+        return "close_window"
+    return "outside_primary_window"
 
 
 def _normalize_status(value: Any) -> str:
@@ -255,6 +278,7 @@ def build_le_compliance(
     ev = (review or {}).get("evidence") or {}
     entry_checks = ev.get("entry_checks") or {}
     management = ev.get("management_10m8ema") or {}
+    window = str(ev.get("session_window") or _session_window_from_trade(trade) or "")
 
     checks: list[dict] = []
 
@@ -345,11 +369,10 @@ def build_le_compliance(
         )
     checks.append(_check(
         "not_chasing", "Not Chasing?", chase_status, chase_detail,
-        evidence={"ema_extension": entry_checks.get("ema_extension"), "session_window": ev.get("session_window")},
+        evidence={"ema_extension": entry_checks.get("ema_extension"), "session_window": window},
         source_pages=[15, 31, 44, 50],
     ))
 
-    window = str(ev.get("session_window") or "")
     if window == "chop_hour":
         chop_hour_status = "fail"
         chop_hour_detail = "Entry occurred during 11:30 AM-1:30 PM ET, the LE Chop Hour."
