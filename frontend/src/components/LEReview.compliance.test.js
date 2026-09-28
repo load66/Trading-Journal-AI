@@ -85,7 +85,7 @@ test('LE Review renders the deterministic 13-point compliance audit and caches i
 
   await waitFor(() => expect(tradesApi.refreshLeCompliance).toHaveBeenCalledWith('g1'));
 
-  expect(screen.getByText('13-Point LE Compliance')).toBeVisible();
+  expect(await screen.findByText('13-Point LE Compliance')).toBeVisible();
   expect(screen.getByText('Incomplete evidence')).toBeVisible();
   expect(screen.getByText('53.8%')).toBeVisible();
   expect(screen.getByText('Level Broken?')).toBeVisible();
