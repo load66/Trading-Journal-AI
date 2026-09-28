@@ -67,7 +67,12 @@ function fmtShareDayPnl(value) {
   const n = Number(value || 0);
   const sign = n > 0 ? '+' : n < 0 ? '-' : '';
   const abs = Math.abs(n);
-  if (abs >= 1000) return sign + '
+  const currency = String.fromCharCode(36);
+  if (abs >= 1000) {
+    return sign + currency + (abs / 1000).toFixed(abs >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'K';
+  }
+  return sign + currency + Math.round(abs).toLocaleString('en-US');
+}
 
 function localDateKey(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
