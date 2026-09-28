@@ -288,9 +288,11 @@ const nav = () => screen.getByRole('navigation', { name: 'Main' });
 
 test('header keeps every page, Settings, Import, Add Trade and a labeled Brain entry visible', async () => {
   await renderApp();
-  for (const label of ['Dashboard', 'Trade View', 'Calendar', 'Day Review', 'Reports', 'Diary', 'Help', 'Settings']) {
+  for (const label of ['Dashboard', 'Calendar', 'Day Review', 'Trade View', 'Reports', 'Diary', 'Help', 'Settings']) {
     expect(within(nav()).getByRole('button', { name: label })).toBeVisible();
   }
+  expect(within(nav()).getAllByRole('button').slice(0, 4).map(button => button.textContent.trim()))
+    .toEqual(['Dashboard', 'Calendar', 'Day Review', 'Trade View']);
   const banner = screen.getByRole('banner');
   expect(within(banner).getByRole('button', { name: /^Import$/ })).toBeVisible();
   expect(within(banner).getByRole('button', { name: /Add Trade/ })).toBeVisible();

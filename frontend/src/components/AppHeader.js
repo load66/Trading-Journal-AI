@@ -11,9 +11,9 @@ import aiJournalLogo from '../assets/ai-journal-logo.png';
 // account selector on the right, the rest are the labeled navigation.
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'trades', label: 'Trade View', icon: TrendingUp },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'day-review', label: 'Day Review', icon: CalendarCheck },
+  { id: 'trades', label: 'Trade View', icon: TrendingUp },
   { id: 'reports', label: 'Reports', icon: BarChart2 },
   { id: 'diary', label: 'Diary', icon: BookOpen },
   { id: 'help', label: 'Help', icon: HelpCircle },
