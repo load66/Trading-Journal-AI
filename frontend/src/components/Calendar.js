@@ -202,7 +202,12 @@ export function buildYearShareSvg({ year, yearData, yearPnl, yearWinRate, totalT
 }
 
 async function svgToPngBlob(svg, width, height) {
-  if (typeof document === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return null;
+  if (
+    typeof document === 'undefined'
+    || typeof URL === 'undefined'
+    || typeof URL.createObjectURL !== 'function'
+    || typeof CanvasRenderingContext2D === 'undefined'
+  ) return null;
   const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
   const svgUrl = URL.createObjectURL(svgBlob);
   try {
@@ -437,7 +442,7 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
             <div className="calendar-share-head-actions">
               <button type="button" className="cal-nav" onClick={() => setYear(y => y - 1)} aria-label="Previous year"><ChevronLeft size={16} /></button>
               <button type="button" className="cal-nav" onClick={() => setYear(y => y + 1)} aria-label="Next year"><ChevronRight size={16} /></button>
-              <button type="button" className="btn btn-primary btn-sm calendar-share-save" disabled={shareStatus === 'saving' || loading} onClick={exportYearImage}>
+              <button type="button" className="btn btn-primary btn-sm calendar-share-save" aria-label="Save Image" disabled={shareStatus === 'saving' || loading} onClick={exportYearImage}>
                 <Download size={14} /> {shareStatus === 'saving' ? 'Creating…' : 'Save Image'}
               </button>
               <button type="button" className="btn btn-ghost btn-sm calendar-share-exit" onClick={() => onShareModeChange(false)}>
@@ -589,7 +594,7 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
             <div className="calendar-share-head-actions">
               <button type="button" className="cal-nav" onClick={prevMonth} aria-label="Previous month"><ChevronLeft size={16} /></button>
               <button type="button" className="cal-nav" onClick={nextMonth} aria-label="Next month"><ChevronRight size={16} /></button>
-              <button type="button" className="btn btn-primary btn-sm calendar-share-save" disabled={shareStatus === 'saving' || loading} onClick={exportMonthImage}>
+              <button type="button" className="btn btn-primary btn-sm calendar-share-save" aria-label="Save Image" disabled={shareStatus === 'saving' || loading} onClick={exportMonthImage}>
                 <Download size={14} /> {shareStatus === 'saving' ? 'Creating…' : 'Save Image'}
               </button>
               <button type="button" className="btn btn-ghost btn-sm calendar-share-exit" onClick={() => onShareModeChange(false)}>
