@@ -61,6 +61,8 @@ export const leApi = {
   getPlaybook: () => api.get('/api/le-playbook'),
   getComplianceSummary: (params) => api.get('/api/le-compliance/summary', { params }),
   rebuildCompliance: (data) => api.post('/api/le-compliance/rebuild', data),
+  getDiagnosis: (params) => api.get('/api/le-diagnosis', { params }),
+  generateDiagnosis: (data) => api.post('/api/le-diagnosis/generate', data),
 };
 
 export const importApi = {

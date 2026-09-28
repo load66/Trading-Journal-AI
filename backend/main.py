@@ -61,6 +61,7 @@ from le_compliance import (
     build_le_compliance,
     summarize_le_compliance_snapshots,
 )
+from le_diagnosis import build_le_diagnosis
 from smoking_gun_library import ANALYTICS_ENGINE_VERSION
 from trade_metrics import (
     trade_is_closed,
@@ -843,6 +844,14 @@ async def import_csv(
     imported = 0
     errors = []
     reconcile_state = None
+    affected_le_dates = {str(trade.get('date') or '') for trade in trades if trade.get('date')}
+    for trade in trades:
+        existing = conn.execute(
+            "SELECT date FROM trades WHERE account_id=? AND trade_group=?",
+            (account_id, trade.get('trade_group')),
+        ).fetchone()
+        if existing and existing['date']:
+            affected_le_dates.add(str(existing['date']))
 
     try:
         if reconcile:
@@ -908,17 +917,28 @@ async def import_csv(
             except Exception as e:
                 errors.append({"trade_group": trade.get('trade_group'), "error": str(e)})
 
-        # A broker import can regroup fills, change trade dates/outcomes, or alter
-        # same-day sequence. All cached LE compliance for this account is derived
-        # data, so invalidate it atomically and rebuild lazily from broker truth.
-        conn.execute(
-            "DELETE FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
-            (account_id,),
-        )
+        # Preserve unaffected historical LE audits. A broker import can change
+        # same-day sequence, so invalidate only impacted dates and rebuild those
+        # trades immediately after broker truth is committed.
+        if reconcile_state:
+            affected_le_dates.update(str(day) for day in reconcile_state['covered_dates'] if day)
+            for group in reconcile_state['replace_groups']:
+                conn.execute(
+                    "DELETE FROM settings WHERE account_id=? AND key=?",
+                    (account_id, _le_compliance_cache_key(group)),
+                )
+        _invalidate_le_compliance_for_dates(conn, account_id, affected_le_dates)
         conn.commit()
     except Exception as e:
         conn.rollback()
         raise
+
+    le_automation = await _refresh_le_compliance_for_dates(
+        conn,
+        account_id,
+        affected_le_dates,
+        reason='broker_import',
+    )
 
     reconciled = len(reconcile_state['replace_groups']) if reconcile_state else 0
     return {
@@ -930,6 +950,7 @@ async def import_csv(
         "timezone_override": timezone_override.strip() or None,
         "execution_integrity": execution_integrity,
         "errors": errors,
+        "le_compliance_automation": le_automation,
         "message": (
             f"Reconciled {reconciled} existing imported trade group(s) and rebuilt "
             f"{imported} authoritative trade group(s) from the broker file."
@@ -1175,7 +1196,7 @@ def list_trades(
 
 
 @app.post("/api/trades", status_code=201)
-def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_connection)):
+async def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_connection)):
     account = conn.execute("SELECT id FROM accounts WHERE id=?", (data.account_id,)).fetchone()
     if not account:
         raise ValueError(f"Account {data.account_id} not found")
@@ -1245,8 +1266,16 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
 
     _invalidate_le_compliance_for_dates(conn, data.account_id, {data.date})
     conn.commit()
+    le_automation = await _refresh_le_compliance_for_dates(
+        conn,
+        data.account_id,
+        {data.date},
+        reason='manual_trade_create',
+    )
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-    return row_to_dict(row)
+    result = row_to_dict(row)
+    result["le_compliance_automation"] = le_automation
+    return result
 
 
 def _invalidate_le_compliance_for_dates(conn, account_id, dates) -> None:
@@ -1760,6 +1789,71 @@ async def _build_trade_le_compliance(
     return review
 
 
+async def _refresh_le_compliance_for_dates(
+    conn,
+    account_id: int | None,
+    dates,
+    *,
+    reason: str,
+) -> dict:
+    """Best-effort deterministic LE audit for all trades on affected dates.
+
+    Same-day trades are rebuilt together because the Three Trade Rule depends on
+    prior outcomes. Broker/manual data commits remain authoritative even if
+    market evidence is temporarily unavailable.
+    """
+    if account_id is None:
+        return {"reason": reason, "processed": 0, "errors": [], "dates": []}
+
+    normalized = sorted({
+        str(value or "").strip()
+        for value in (dates or [])
+        if str(value or "").strip()
+    })
+    if not normalized:
+        return {"reason": reason, "processed": 0, "errors": [], "dates": []}
+
+    placeholders = ",".join("?" for _ in normalized)
+    rows = conn.execute(
+        f"""SELECT trade_group
+            FROM trades
+            WHERE account_id=? AND date IN ({placeholders})
+            ORDER BY date, id""",
+        (account_id, *normalized),
+    ).fetchall()
+
+    processed = 0
+    errors = []
+    for row in rows:
+        group = str(row["trade_group"])
+        try:
+            await _build_trade_le_compliance(
+                conn,
+                group,
+                include_ai=False,
+                persist=True,
+            )
+            processed += 1
+        except Exception as exc:
+            logger.warning(
+                "Automatic LE compliance failed for %s (%s)",
+                group,
+                reason,
+                exc_info=True,
+            )
+            errors.append({"trade_group": group, "error": str(exc)})
+
+    return {
+        "reason": reason,
+        "processed": processed,
+        "attempted": len(rows),
+        "errors": errors,
+        "dates": normalized,
+        "complete": processed == len(rows) and not errors,
+        "compliance_version": LE_COMPLIANCE_VERSION,
+    }
+
+
 @app.get("/api/trades/{trade_group:path}/le-review")
 async def get_trade_le_review(
     trade_group: str,
@@ -1803,6 +1897,109 @@ def get_le_compliance_summary(
 ):
     snapshots = _load_cached_le_compliance(conn, account_id)
     return summarize_le_compliance_snapshots(snapshots)
+
+
+def _load_le_diagnosis_trades(
+    conn,
+    account_id: int | None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
+    clauses = ["1=1"]
+    params = []
+    if account_id is not None:
+        clauses.append("account_id=?")
+        params.append(account_id)
+    if date_from:
+        clauses.append("date>=?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("date<=?")
+        params.append(date_to)
+
+    rows = conn.execute(
+        f"SELECT * FROM trades WHERE {' AND '.join(clauses)} ORDER BY date, id",
+        tuple(params),
+    ).fetchall()
+    trades = [_trade_dict_with_executions(row) for row in rows]
+    return [trade for trade in trades if trade_is_closed(trade)]
+
+
+@app.get("/api/le-diagnosis")
+def get_le_diagnosis(
+    account_id: int | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    trades = _load_le_diagnosis_trades(conn, account_id, date_from, date_to)
+    snapshots = _load_cached_le_compliance(conn, account_id)
+    return build_le_diagnosis(
+        trades,
+        snapshots,
+        compliance_version=LE_COMPLIANCE_VERSION,
+    )
+
+
+class LEDiagnosisGenerateBody(BaseModel):
+    account_id: int | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    force: bool = False
+
+
+@app.post("/api/le-diagnosis/generate")
+async def generate_le_diagnosis(
+    body: LEDiagnosisGenerateBody,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    trades = _load_le_diagnosis_trades(
+        conn,
+        body.account_id,
+        body.date_from,
+        body.date_to,
+    )
+    snapshots = _load_cached_le_compliance(conn, body.account_id)
+    current = {
+        str(snapshot.get("trade_group")): snapshot
+        for snapshot in snapshots
+        if snapshot.get("trade_group")
+        and snapshot.get("compliance_version") == LE_COMPLIANCE_VERSION
+    }
+
+    candidates = [
+        str(trade["trade_group"])
+        for trade in trades
+        if body.force or str(trade["trade_group"]) not in current
+    ]
+    processed = 0
+    errors = []
+    for group in candidates:
+        try:
+            await _build_trade_le_compliance(
+                conn,
+                group,
+                include_ai=False,
+                persist=True,
+            )
+            processed += 1
+        except Exception as exc:
+            logger.warning("LE diagnosis generation failed for %s", group, exc_info=True)
+            errors.append({"trade_group": group, "error": str(exc)})
+
+    refreshed_snapshots = _load_cached_le_compliance(conn, body.account_id)
+    report = build_le_diagnosis(
+        trades,
+        refreshed_snapshots,
+        compliance_version=LE_COMPLIANCE_VERSION,
+    )
+    return {
+        "processed": processed,
+        "attempted": len(candidates),
+        "errors": errors,
+        "complete": not errors and report["missing_trades"] == 0 and report["stale_snapshots"] == 0,
+        "report": report,
+    }
 
 
 class LEComplianceRebuildBody(BaseModel):

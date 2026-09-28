@@ -3,7 +3,6 @@ import './TradeDetail.mobile.css';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, BookOpen, ClipboardCheck, FileText, ShieldCheck, Tags as TagsIcon, Library, RefreshCw } from 'lucide-react';
 import { tradesApi, libraryApi } from '../api';
 import TradingChart from './TradingChart';
-import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
 import { executionInstant, executionMarketParts, tradeStats as canonicalTradeStats } from '../tradeMetrics';
 
@@ -748,7 +747,7 @@ export function executionTimeETMinutes(dateStr, timeStr) {
 }
 
 
-const TABS = ['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'Chart Review'];
+const TABS = ['Stats', 'Review', 'Tags', 'Executions', 'Chart Review'];
 const TRADE_DETAIL_TAB_KEY = 'trading-journal:trade-detail-tab';
 
 const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', date: '', time: '' };
@@ -1946,17 +1945,6 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </div>
               );
             })()}
-
-            {/* ── LE Review tab ────────────────────────────────────────── */}
-            {tab === 'LE Review' && (
-              <LEReview
-                trade={trade}
-                analysis={analysis}
-                tags={tags}
-                onAnalysisChange={setAnalysis}
-                onTagsChange={setTags}
-              />
-            )}
 
             {/* ── Executions tab ────────────────────────────────────────── */}
             {tab === 'Executions' && (
