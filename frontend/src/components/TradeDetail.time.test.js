@@ -1,9 +1,39 @@
 import {
   calculateDefaultPlannedRisk,
   executionTimeETMinutes,
+  groupDayTradesByTicker,
   formatExecutionTimeET,
   optimizeChartScreenshot,
 } from './TradeDetail';
+
+describe('TradeDetail session grouping', () => {
+  test('orders ticker groups by their newest trade and trades newest-first inside each group', () => {
+    const makeTrade = (id, ticker, timestampUtc, pnl) => ({
+      id,
+      ticker,
+      date: '2026-09-25',
+      side: 'LONG',
+      instrument_type: 'STOCK',
+      net_pnl: pnl,
+      is_open: false,
+      executions: [
+        { action: 'BOT', qty: 1, price: 1, timestamp_utc: timestampUtc },
+        { action: 'SOLD', qty: 1, price: 1, timestamp_utc: timestampUtc },
+      ],
+    });
+
+    const groups = groupDayTradesByTicker([
+      makeTrade(1, 'QCOM', '2026-09-25T14:22:00Z', 206),
+      makeTrade(2, 'TSM', '2026-09-25T16:06:00Z', 66),
+      makeTrade(3, 'QCOM', '2026-09-25T14:47:00Z', 443),
+      makeTrade(4, 'WMT', '2026-09-25T19:43:00Z', -172),
+    ]);
+
+    expect(groups.map(group => group.ticker)).toEqual(['WMT', 'TSM', 'QCOM']);
+    expect(groups.find(group => group.ticker === 'QCOM').trades.map(trade => trade.id)).toEqual([3, 1]);
+    expect(groups.find(group => group.ticker === 'QCOM').netPnl).toBe(649);
+  });
+});
 
 describe('TradeDetail Eastern Time normalization', () => {
   test('converts Schwab Central execution time to Eastern time', () => {
