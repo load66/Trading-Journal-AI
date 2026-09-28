@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 
-LE_RULESET_VERSION = "LE_2026_09_v7_MARKET_SIGN"
+LE_RULESET_VERSION = "LE_2026_09_v8_FLAG_LINE_SIGN"
 ET = ZoneInfo("America/New_York")
 EXECUTION_TIMEZONE_NAME = os.getenv("TRADE_EXECUTION_TIMEZONE", "America/Chicago")
 EXECUTION_TZ = ZoneInfo(EXECUTION_TIMEZONE_NAME)
@@ -417,11 +417,20 @@ def _market_index_snapshot(
     bars: list[dict],
     entry_dt: datetime,
     direction: str,
+    *,
+    market_calendar: dict | None = None,
+    feed: str | None = None,
 ) -> dict:
-    """Return the LE market-sign snapshot for SPY or QQQ at the trade entry."""
+    """Return the LE Sign snapshot for SPY or QQQ at trade entry.
+
+    The source examples define Sign with both the 10m 8 EMA ("Line") and the
+    market's own key-level structure. We therefore require completed 10-minute
+    evidence only: no future bars and no inference from the entry candle.
+    """
     vwap = _session_vwap_snapshot(bars, entry_dt)
     price = vwap.get("price")
-    ema_points = _ema_series_10m(_aggregate_10m(bars))
+    bars_10m = _aggregate_10m(bars)
+    ema_points = _ema_series_10m(bars_10m)
     completed = [point for point in ema_points if point["end"] < entry_dt]
     ema8 = float(completed[-1]["ema8"]) if completed else None
     ema_aligned = _directionally_aligned(direction, price, ema8)
@@ -433,6 +442,94 @@ def _market_index_snapshot(
     else:
         vwap_aligned = price <= float(vwap["vwap"])
 
+    trade_day = entry_dt.date()
+    dated = [(bar, _bar_dt(bar)) for bar in bars]
+    calendar_verified = bool((market_calendar or {}).get("verified"))
+    previous_session = (market_calendar or {}).get("previous")
+
+    if previous_session:
+        previous_day = previous_session["date"]
+        previous_open = previous_session["open"]
+        previous_close = previous_session["close"]
+    else:
+        prior_rth_dates = sorted({
+            dt.date() for _, dt in dated
+            if dt.date() < trade_day and _is_rth(dt)
+        })
+        previous_day = prior_rth_dates[-1] if prior_rth_dates else None
+        previous_open = (
+            datetime.combine(previous_day, time(9, 30), tzinfo=ET)
+            if previous_day else None
+        )
+        previous_close = (
+            datetime.combine(previous_day, time(16, 0), tzinfo=ET)
+            if previous_day else None
+        )
+
+    previous_rth = [
+        bar for bar, dt in dated
+        if previous_open is not None and previous_close is not None
+        and _within(dt, previous_open, previous_close)
+    ]
+    premarket_start = datetime.combine(trade_day, time(4, 0), tzinfo=ET)
+    premarket_end = datetime.combine(trade_day, time(9, 30), tzinfo=ET)
+    premarket = [
+        bar for bar, dt in dated
+        if _within(dt, premarket_start, premarket_end)
+    ]
+
+    pdh = max((float(bar["h"]) for bar in previous_rth), default=None)
+    pdl = min((float(bar["l"]) for bar in previous_rth), default=None)
+    pmh = max((float(bar["h"]) for bar in premarket), default=None)
+    pml = min((float(bar["l"]) for bar in premarket), default=None)
+
+    pd_status = _level_status(feed, calendar_verified, previous_close)
+    pm_status = _level_status(feed, calendar_verified, premarket_end)
+    verified = {
+        "PDH": _status_is_verified(pd_status) and pdh is not None,
+        "PDL": _status_is_verified(pd_status) and pdl is not None,
+        "PMH": _status_is_verified(pm_status) and pmh is not None,
+        "PML": _status_is_verified(pm_status) and pml is not None,
+    }
+    levels = {"PDH": pdh, "PDL": pdl, "PMH": pmh, "PML": pml}
+
+    break_times = {
+        "PDH": _first_completed_break(bars_10m, trade_day, entry_dt, pdh, "up") if verified["PDH"] else None,
+        "PDL": _first_completed_break(bars_10m, trade_day, entry_dt, pdl, "down") if verified["PDL"] else None,
+        "PMH": _first_completed_break(bars_10m, trade_day, entry_dt, pmh, "up") if verified["PMH"] else None,
+        "PML": _first_completed_break(bars_10m, trade_day, entry_dt, pml, "down") if verified["PML"] else None,
+    }
+    breaks = {name: when is not None for name, when in break_times.items()}
+
+    if direction == "bullish":
+        aligned_names = ("PDH", "PMH")
+        opposing_names = ("PDL", "PML")
+    else:
+        aligned_names = ("PDL", "PML")
+        opposing_names = ("PDH", "PMH")
+
+    aligned_breaks = [name for name in aligned_names if breaks[name]]
+    opposing_breaks = [name for name in opposing_names if breaks[name]]
+    evaluable = any(verified[name] for name in (*aligned_names, *opposing_names))
+
+    if aligned_breaks and not opposing_breaks:
+        level_state = "aligned"
+    elif opposing_breaks:
+        level_state = "opposed"
+    elif evaluable:
+        level_state = "neutral"
+    else:
+        level_state = "unknown"
+
+    if ema_aligned is None or level_state == "unknown":
+        sign_state = "unknown"
+    elif ema_aligned is True and level_state == "aligned":
+        sign_state = "confirmed"
+    elif ema_aligned is False or level_state == "opposed":
+        sign_state = "opposed"
+    else:
+        sign_state = "weak"
+
     return {
         "price": price,
         "ema8_10m": ema8,
@@ -441,19 +538,25 @@ def _market_index_snapshot(
         "vwap": vwap.get("vwap"),
         "position_vs_vwap": vwap.get("position_vs_vwap"),
         "vwap_aligned": vwap_aligned,
+        "levels": levels,
+        "level_verified": verified,
+        "aligned_level_breaks": aligned_breaks,
+        "opposing_level_breaks": opposing_breaks,
+        "level_state": level_state,
+        "sign_state": sign_state,
     }
 
 
 def _market_sign_status(direction: str, spy: dict, qqq: dict) -> str:
-    """Both SPY and QQQ must agree with the trade on the primary 10m 8 EMA."""
-    del direction  # Direction is already encoded in each index snapshot's ema_aligned field.
-    alignments = [spy.get("ema_aligned"), qqq.get("ema_aligned")]
-    if any(value is None for value in alignments):
-        return "unknown"
-    if all(value is True for value in alignments):
-        return "confirmed"
-    if all(value is False for value in alignments):
+    """Classify SPY/QQQ Sign using both 10m 8 EMA and key-level structure."""
+    del direction  # Direction is encoded in each index snapshot.
+    states = [spy.get("sign_state"), qqq.get("sign_state")]
+    if any(state == "opposed" for state in states):
         return "failed"
+    if all(state == "confirmed" for state in states):
+        return "confirmed"
+    if any(state in {None, "unknown"} for state in states):
+        return "unknown"
     return "mixed"
 
 
@@ -585,15 +688,27 @@ def analyze_context(
     direction = market_direction(trade)
     dated = [(b, _bar_dt(b)) for b in underlying_bars]
 
-    spy_snapshot = _market_index_snapshot(spy_bars, entry_dt, direction)
-    qqq_snapshot = _market_index_snapshot(qqq_bars, entry_dt, direction)
+    spy_snapshot = _market_index_snapshot(
+        spy_bars,
+        entry_dt,
+        direction,
+        market_calendar=market_calendar,
+        feed=spy_feed,
+    )
+    qqq_snapshot = _market_index_snapshot(
+        qqq_bars,
+        entry_dt,
+        direction,
+        market_calendar=market_calendar,
+        feed=qqq_feed,
+    )
     spy_sign_status = _level_status(spy_feed, True, entry_dt - timedelta(minutes=1))
     qqq_sign_status = _level_status(qqq_feed, True, entry_dt - timedelta(minutes=1))
     market_sign_verified = (
         _status_is_verified(spy_sign_status)
         and _status_is_verified(qqq_sign_status)
-        and spy_snapshot.get("ema_aligned") is not None
-        and qqq_snapshot.get("ema_aligned") is not None
+        and spy_snapshot.get("sign_state") != "unknown"
+        and qqq_snapshot.get("sign_state") != "unknown"
     )
     market_sign_status = (
         _market_sign_status(direction, spy_snapshot, qqq_snapshot)
@@ -886,9 +1001,9 @@ def analyze_context(
                 else "unverified"
             ),
             "detail": (
-                "SPY and QQQ both confirmed the trade direction on the 10m 8 EMA."
+                "SPY and QQQ both confirmed the trade direction with their 10m 8 EMA and directional key-level structure."
                 if market_sign_status == "confirmed"
-                else "SPY and QQQ did not both confirm the trade direction."
+                else "SPY/QQQ Sign was weak, mixed, or actively opposed by 10m 8 EMA / key-level structure."
                 if market_sign_status in {"mixed", "failed"}
                 else "Consolidated SPY/QQQ market-sign evidence was unavailable."
             ),
@@ -982,7 +1097,7 @@ def analyze_context(
         qqq_state = qqq_snapshot.get("position_vs_ema") or "unknown"
         add_rule_tag(
             "mistake", "No Market Sign",
-            f"SPY was {spy_state} its 10m 8 EMA and QQQ was {qqq_state}; both did not confirm the {direction} trade.",
+            f"SPY was {spy_state} its 10m 8 EMA with {spy_snapshot.get('level_state')} level structure; QQQ was {qqq_state} with {qqq_snapshot.get('level_state')} level structure. The Sign did not confirm the {direction} trade.",
         )
 
     pnl = trade.get("net_pnl")
