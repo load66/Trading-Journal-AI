@@ -15,6 +15,7 @@ from le_compliance import (
     summarize_le_compliance_snapshots,
 )
 from le_learning import build_le_learning_core
+from le_diagnosis import COHORT_REGISTRY, build_le_diagnosis
 
 from trade_metrics import (
     execution_datetime,
@@ -829,6 +830,10 @@ def _brain_question_needs_le(question: str) -> bool:
         r"\b3-2-1\b",
         r"10m 8 ema",
         r"10 min 8 ema",
+        r"level break",
+        r"ema snug",
+        r"outside day",
+        r"cohort",
         r"compliance",
         r"playbook",
     )
@@ -974,6 +979,16 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
         le_summary["audit_coverage_pct"] = round(
             len(le_snapshots) / len(trades) * 100, 1
         ) if trades else 0.0
+
+    le_diagnosis = (
+        build_le_diagnosis(
+            trades,
+            le_snapshots,
+            compliance_version=LE_COMPLIANCE_VERSION,
+        )
+        if le_requested
+        else {}
+    )
 
     def compact_trade(t: dict) -> dict:
         executions = t.get("executions") or []
@@ -1130,6 +1145,14 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
             "compliance_version": LE_COMPLIANCE_VERSION,
             **LE_PLAYBOOK_REFERENCE,
         }
+        snapshot["le_diagnosis"] = {
+            "cohort_glossary": le_diagnosis.get("cohort_glossary") or [dict(item) for item in COHORT_REGISTRY],
+            "cohorts": le_diagnosis.get("cohorts") or [],
+            "user_confirmed_setups": le_diagnosis.get("user_confirmed_setups") or [],
+            "most_profitable_cohort": le_diagnosis.get("most_profitable_cohort"),
+            "highest_quality_cohort": le_diagnosis.get("highest_quality_cohort"),
+            "biggest_verified_leak": le_diagnosis.get("biggest_verified_leak"),
+        }
         snapshot["le_compliance"] = {
             "summary": le_summary,
             "learning_core": build_le_learning_core(le_snapshots),
@@ -1215,12 +1238,72 @@ def _brain_le_coverage_line(data: dict) -> str:
     return f"LE audit coverage: **{audited}/{total} completed trades ({coverage:.1f}%)**."
 
 
+def _brain_normalize_cohort_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _brain_match_cohort(question: str) -> dict | None:
+    q = _brain_normalize_cohort_text(question)
+    if not q:
+        return None
+    matches = []
+    for item in COHORT_REGISTRY:
+        terms = [item.get("label"), *(item.get("aliases") or [])]
+        for term in terms:
+            normalized = _brain_normalize_cohort_text(term)
+            if normalized and normalized in q:
+                matches.append((len(normalized), item))
+                break
+    if not matches:
+        return None
+    return max(matches, key=lambda pair: pair[0])[1]
+
+
+def _brain_cohort_answer(cohort: dict, data: dict) -> str:
+    diagnosis = data.get("le_diagnosis") or {}
+    stats = next(
+        (row for row in (diagnosis.get("cohorts") or []) if row.get("id") == cohort.get("id")),
+        None,
+    )
+    requirements = cohort.get("requirements") or []
+    req_text = "\n".join(f"- {item}" for item in requirements) if requirements else "- No additional requirements recorded."
+
+    parts = [
+        f"## {cohort.get('label')}",
+        "",
+        str(cohort.get("definition") or "No cohort definition is available."),
+        "",
+        "### How Brain classifies it",
+        req_text,
+    ]
+
+    if stats:
+        parts.extend([
+            "",
+            "### Your journal stats",
+            f"- Trades: **{int(stats.get('trades') or 0)}**",
+            f"- Win rate: **{float(stats.get('win_rate') or 0):.1f}%**",
+            f"- Net P&L: **{_brain_money_text(stats.get('net_pnl'))}**",
+            f"- Average P&L: **{_brain_money_text(stats.get('avg_pnl'))}**",
+            f"- Profit factor: **{stats.get('profit_factor') if stats.get('profit_factor') is not None else '—'}**",
+            f"- Sample: **{'Established' if stats.get('stable_sample') else 'Thin'}**",
+            "",
+            "These are descriptive journal results, not proof that the cohort itself caused the outcome.",
+        ])
+    return "\n".join(parts)
+
+
 def _brain_deterministic_le_answer(question: str, context: str) -> str | None:
     q = str(question or "").strip().lower()
     if not _brain_question_needs_le(q):
         return None
 
     data = _brain_load_context(context)
+
+    cohort = _brain_match_cohort(q)
+    if cohort:
+        return _brain_cohort_answer(cohort, data)
+
     le = data.get("le_compliance") or {}
     summary = le.get("summary") or {}
     audited = le.get("audited_trades") or []
@@ -1396,6 +1479,14 @@ def _brain_provider_context(context: str, max_chars: int = BRAIN_PROVIDER_CONTEX
             "compliance_version": playbook.get("compliance_version"),
             "principles": (playbook.get("principles") or [])[:6],
         }
+    if data.get("le_diagnosis"):
+        diagnosis = data.get("le_diagnosis") or {}
+        compact["le_diagnosis"] = {
+            "cohort_glossary": diagnosis.get("cohort_glossary") or [],
+            "cohorts": (diagnosis.get("cohorts") or [])[:10],
+            "most_profitable_cohort": diagnosis.get("most_profitable_cohort"),
+            "highest_quality_cohort": diagnosis.get("highest_quality_cohort"),
+        }
     if data.get("le_compliance"):
         le = data.get("le_compliance") or {}
         le_summary = dict(le.get("summary") or {})
@@ -1420,6 +1511,7 @@ def _brain_provider_context(context: str, max_chars: int = BRAIN_PROVIDER_CONTEX
         "targeted_matches": (compact.get("targeted_matches") or [])[:3],
         "worst_trades": (compact.get("worst_trades") or [])[:2],
         "best_trades": (compact.get("best_trades") or [])[:2],
+        "le_diagnosis": compact.get("le_diagnosis"),
         "le_compliance": compact.get("le_compliance"),
     }
     minimal = _brain_trim_strings(minimal, 160)
