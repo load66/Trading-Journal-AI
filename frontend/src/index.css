@@ -3564,8 +3564,8 @@ button.month-card:active { transform: translateY(1px); }
     bottom: calc(6px + env(safe-area-inset-bottom));
     width: auto;
     max-width: none;
-    height: min(72dvh, 610px);
-    max-height: calc(100dvh - 104px - env(safe-area-inset-bottom));
+    height: min(62dvh, 560px);
+    max-height: calc(100dvh - 136px - env(safe-area-inset-bottom));
     border-radius: 18px;
     box-shadow: 0 28px 82px rgba(0,0,0,.58);
   }
