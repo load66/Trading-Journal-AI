@@ -1448,6 +1448,9 @@ button.month-card:active { transform: translateY(1px); }
 .date-range-month { box-sizing: border-box; }
 
 @media (max-width: 600px) {
+  .v3-heroside .v3-acts {
+    width: 100%;
+  }
   .date-range-picker {
     width: 100%;
     flex: 1 1 100%;
