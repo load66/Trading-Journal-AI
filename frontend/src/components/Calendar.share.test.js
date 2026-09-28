@@ -11,7 +11,9 @@ describe('Calendar share image documents', () => {
       ],
       dayData: {
         '2026-09-01': { net_pnl: 446, trade_count: 3 },
+        '2026-09-02': { net_pnl: 100, trade_count: 2 },
         '2026-09-09': { net_pnl: -1600, trade_count: 7 },
+        '2026-09-10': { net_pnl: 200, trade_count: 3 },
       },
       monthPnl: 2750,
       winRate: '51.4',
@@ -31,6 +33,12 @@ describe('Calendar share image documents', () => {
     expect(spec.svg).toContain('+$446');
     expect(spec.svg).toContain('-$1.6K');
     expect(spec.svg).toContain('3 trades');
+    expect(spec.svg).toContain('WEEK TOTAL');
+    expect(spec.svg).toContain('WEEK 1 · SEP 1–4');
+    expect(spec.svg).toContain('WEEK 2 · SEP 7–11');
+    expect(spec.svg).toContain('+$546');
+    expect(spec.svg).toContain('-$1.4K');
+    expect(spec.svg).toContain('2 sessions');
     expect(spec.svg).toContain('BEST DAY');
     expect(spec.svg).toContain('AVG / TRADING DAY');
     expect(spec.svg).not.toContain('LARGEST LOSS');
@@ -40,9 +48,49 @@ describe('Calendar share image documents', () => {
     expect(spec.svg).toContain('Goal ≥ 1.30 · Goal met');
     expect(spec.svg).toContain('Goal ≥ 1.20 · Goal met');
     expect(spec.svg).toContain('system-ui');
-    expect(spec.width).toBe(1200);
+    expect(spec.width).toBe(1400);
     expect(spec.height).toBeGreaterThan(500);
     expect(spec.height).toBeLessThan(1110);
+  });
+
+  test('month image marks a partially completed current week as to date', () => {
+    const spec = buildMonthShareSvg({
+      year: 2026,
+      month: 9,
+      weeks: [[28, 29, 30, null, null]],
+      dayData: {
+        '2026-09-28': { net_pnl: 449.91, trade_count: 6 },
+      },
+      monthPnl: 449.91,
+      winRate: '50.0',
+      profitFactor: 1.2,
+      avgWinLoss: '1.10',
+      tradingDays: 1,
+      asOfDate: new Date('2026-09-28T12:00:00'),
+    });
+
+    expect(spec.svg).toContain('WEEK 1 · SEP 28–30');
+    expect(spec.svg).toContain('+$450');
+    expect(spec.svg).toContain('1 session · to date');
+  });
+
+  test('month image labels an entirely future week without fabricating a weekly P&L', () => {
+    const spec = buildMonthShareSvg({
+      year: 2026,
+      month: 10,
+      weeks: [[null, null, null, 1, 2]],
+      dayData: {},
+      monthPnl: 0,
+      winRate: '--',
+      profitFactor: undefined,
+      avgWinLoss: '--',
+      tradingDays: 0,
+      asOfDate: new Date('2026-09-28T12:00:00'),
+    });
+
+    expect(spec.svg).toContain('WEEK 1 · OCT 1–2');
+    expect(spec.svg).toContain('UPCOMING');
+    expect(spec.svg).toContain('Future week');
   });
 
   test('year image contains all twelve months and plain-English yearly metrics', () => {
