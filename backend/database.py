@@ -87,13 +87,27 @@ class DBAPICursor:
 
 
 def translate_qmark_sql(sql: str) -> str:
-    """Translate DB-API qmark placeholders without touching quoted question marks."""
+    """Translate qmark SQL into psycopg pyformat safely.
+
+    The app writes portable DB-API qmark SQL. Psycopg treats every percent
+    sign in a parameterized query as pyformat syntax, even inside SQL string
+    literals such as LIKE 'le_compliance:%'. Literal percent signs therefore
+    must be doubled before the query reaches psycopg.
+
+    Question marks inside quoted SQL literals remain literal; unquoted
+    question marks become %s placeholders.
+    """
     out: list[str] = []
     quote: str | None = None
     index = 0
 
     while index < len(sql):
         ch = sql[index]
+
+        if ch == '%':
+            out.append('%%')
+            index += 1
+            continue
 
         if quote is not None:
             out.append(ch)
