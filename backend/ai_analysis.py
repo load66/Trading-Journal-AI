@@ -1033,6 +1033,10 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
             "improvement_areas": (analysis.get("improvement_areas") or [])[:5],
         })
 
+    if targets["dates"]:
+        diary = [item for item in diary if str(item.get("date") or "") in targets["dates"]]
+    diary = diary[:8]
+
     summary_params = []
     summary_sql = """
         SELECT summary_date, ai_content, generated_at
@@ -1080,34 +1084,46 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
     except Exception:
         daily_reviews = []
 
+    if targets["dates"]:
+        daily_reviews = [
+            item for item in daily_reviews
+            if str(item.get("date") or "") in targets["dates"]
+        ]
+    daily_reviews = daily_reviews[:8]
+
     snapshot = {
         "journal_scope": {
             "account_id": account_id,
             "question": question,
             "completed_trades": len(trades),
             "date_range": [overall.get("date_from"), overall.get("date_to")],
-            "source_note": "All aggregates below are computed from completed trades in the selected account scope.",
+            "source_note": "Full-journal overall metrics plus question-scoped evidence.",
         },
+        "question_scope": question_scope,
+        "question_scope_stats": question_scope_stats,
         "overall": overall,
         "management": management,
-        "by_strategy": by_strategy[:40],
-        "by_ticker": by_ticker[:60],
+        "by_strategy": by_strategy[:20],
+        "by_ticker": by_ticker[:30],
         "by_side": by_side,
         "by_exit_window_et": by_window,
         "by_hold_time": by_hold,
-        "by_day": by_day[:90],
+        "by_day": by_day[:45],
         "best_trades": [compact_trade(t) for t in best_trades],
         "worst_trades": [compact_trade(t) for t in worst_trades],
-        "recent_trades": [compact_trade(t) for t in trades[:75]],
+        "recent_trades": [compact_trade(t) for t in analysis_trades[:30]],
         "target_detection": targets,
-        "targeted_matches": [compact_trade(t) for t in targeted],
+        "targeted_matches": [compact_trade(t) for t in targeted[:50]],
         "recent_diary_insights": diary,
         "recent_day_reviews": daily_reviews,
-        "le_playbook": {
+    }
+
+    if le_requested:
+        snapshot["le_playbook"] = {
             "compliance_version": LE_COMPLIANCE_VERSION,
             **LE_PLAYBOOK_REFERENCE,
-        },
-        "le_compliance": {
+        }
+        snapshot["le_compliance"] = {
             "summary": le_summary,
             "audited_trades": [
                 {
@@ -1124,18 +1140,35 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
                     le_snapshots,
                     key=lambda x: (str(x.get("date") or ""), str(x.get("trade_group") or "")),
                     reverse=True,
-                )[:100]
+                )[:40]
             ],
-        },
-    }
-    return json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+        }
+
+    raw = json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+    if len(raw) > 55000:
+        snapshot["context_compacted"] = True
+        snapshot["recent_trades"] = snapshot["recent_trades"][:12]
+        snapshot["targeted_matches"] = snapshot["targeted_matches"][:20]
+        snapshot["by_strategy"] = snapshot["by_strategy"][:12]
+        snapshot["by_ticker"] = snapshot["by_ticker"][:16]
+        snapshot["by_day"] = snapshot["by_day"][:24]
+        snapshot["recent_diary_insights"] = snapshot["recent_diary_insights"][:4]
+        snapshot["recent_day_reviews"] = snapshot["recent_day_reviews"][:4]
+        if "le_compliance" in snapshot:
+            snapshot["le_compliance"]["audited_trades"] = snapshot["le_compliance"]["audited_trades"][:20]
+        raw = json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+
+    return raw
 
 
 def _groq_brain_response(messages: list[dict], context: str, api_key: str) -> str:
     history = []
-    for msg in messages[-16:]:
+    for msg in messages[-8:]:
         role = "assistant" if msg.get("role") == "assistant" else "user"
-        history.append({"role": role, "content": str(msg.get("content") or "")})
+        content = str(msg.get("content") or "")
+        if len(content) > 4000:
+            content = content[:4000] + "\n[message truncated]"
+        history.append({"role": role, "content": content})
     if history:
         history[-1] = {
             "role": "user",
@@ -1168,9 +1201,12 @@ def _groq_brain_response(messages: list[dict], context: str, api_key: str) -> st
 def _anthropic_brain_response(messages: list[dict], context: str) -> str:
     client = get_client()
     claude_messages = []
-    for msg in messages[-16:]:
+    for msg in messages[-8:]:
         role = "assistant" if msg.get("role") == "assistant" else "user"
-        claude_messages.append({"role": role, "content": str(msg.get("content") or "")})
+        content = str(msg.get("content") or "")
+        if len(content) > 4000:
+            content = content[:4000] + "\n[message truncated]"
+        claude_messages.append({"role": role, "content": content})
     if claude_messages:
         claude_messages[-1] = {
             "role": "user",
