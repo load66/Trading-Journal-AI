@@ -212,34 +212,6 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
       )}
 
       <section className="card panel-flush trade-view-results" aria-label="Trades">
-        <div className="trade-view-mobile-list" aria-label="Trades">
-          {loading ? (
-            [...Array(5)].map((_, i) => (
-              <div className="trade-mobile-card trade-mobile-card-skeleton" key={i} aria-hidden="true">
-                <div className="skeleton" style={{ height: 18, width: '44%' }} />
-                <div className="skeleton" style={{ height: 13, width: '70%', marginTop: 8 }} />
-                <div className="skeleton" style={{ height: 52, width: '100%', marginTop: 12 }} />
-              </div>
-            ))
-          ) : paginated.length === 0 ? (
-            <div className="empty trade-view-mobile-empty">
-              No trades found. Import a CSV to get started.
-            </div>
-          ) : (
-            paginated.map(trade => (
-              <TradeRow
-                key={`mobile-${trade.id}`}
-                trade={trade}
-                openTime={getOpenTime(trade)}
-                onOpenDetail={(t) => onOpenDetail(t, paginated)}
-                customSetups={customSetups}
-                onCustomSetupsChanged={reloadCustomSetups}
-                mobile
-              />
-            ))
-          )}
-        </div>
-
         <div className="table-container trade-view-desktop-table">
           <table className="trade-view-table">
             <thead>
@@ -285,6 +257,35 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
             </tbody>
           </table>
         </div>
+
+        <div className="trade-view-mobile-list" aria-label="Trades">
+          {loading ? (
+            [...Array(5)].map((_, i) => (
+              <div className="trade-mobile-card trade-mobile-card-skeleton" key={i} aria-hidden="true">
+                <div className="skeleton" style={{ height: 18, width: '44%' }} />
+                <div className="skeleton" style={{ height: 13, width: '70%', marginTop: 8 }} />
+                <div className="skeleton" style={{ height: 52, width: '100%', marginTop: 12 }} />
+              </div>
+            ))
+          ) : paginated.length === 0 ? (
+            <div className="empty trade-view-mobile-empty">
+              No trades found. Import a CSV to get started.
+            </div>
+          ) : (
+            paginated.map(trade => (
+              <TradeRow
+                key={`mobile-${trade.id}`}
+                trade={trade}
+                openTime={getOpenTime(trade)}
+                onOpenDetail={(t) => onOpenDetail(t, paginated)}
+                customSetups={customSetups}
+                onCustomSetupsChanged={reloadCustomSetups}
+                mobile
+              />
+            ))
+          )}
+        </div>
+
 
         <div className="trade-view-pagination">
           <span className="text-muted" style={{ fontSize: 13 }}>
