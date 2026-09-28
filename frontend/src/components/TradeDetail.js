@@ -891,6 +891,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [analysis, setAnalysis] = useState(null);
   const [tags, setTags] = useState([]);
   const [mobileTab, setMobileTab] = useState('Overview');
+  const [mobileAdvanced, setMobileAdvanced] = useState(false);
 
   useEffect(() => {
     try {
@@ -1666,12 +1667,25 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   </label>
                 )}
               </section>
+
+              <button
+                type="button"
+                className="tdm-advanced-toggle"
+                aria-expanded={mobileAdvanced}
+                onClick={() => setMobileAdvanced(value => !value)}
+              >
+                <span>
+                  <b>Advanced trade editor</b>
+                  <small>Executions, full review templates, chart review and detailed fields</small>
+                </span>
+                <ChevronRight size={17} />
+              </button>
             </div>
           )}
         </section>
       </div>
 
-      <div className="td-desktop-view">
+      <div className={`td-desktop-view${mobileAdvanced ? ' mobile-open' : ''}`}>
       {/* Back nav + prev/next */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <button type="button" onClick={onBack} className="btn btn-ghost" style={{ paddingLeft: 8 }}>
