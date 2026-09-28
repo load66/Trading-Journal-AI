@@ -12,7 +12,11 @@ class FakeRows:
 
 
 class FakeConn:
+    def __init__(self):
+        self.calls = []
+
     def execute(self, sql, params=()):
+        self.calls.append((sql, tuple(params)))
         if "FROM trades t" in sql:
             return FakeRows([
                 {
@@ -84,7 +88,8 @@ class FakeConn:
 
 
 def test_brain_context_is_question_aware_and_uses_full_journal_aggregates():
-    raw = ai_analysis.build_brain_context(FakeConn(), account_id=4, question="How did I do on SPY?")
+    conn = FakeConn()
+    raw = ai_analysis.build_brain_context(conn, account_id=4, question="How did I do on SPY?")
     context = json.loads(raw)
 
     assert context["overall"]["trades"] == 2
@@ -95,6 +100,37 @@ def test_brain_context_is_question_aware_and_uses_full_journal_aggregates():
     assert context["targeted_matches"][0]["strategy"] == "VWAP Reclaim"
     assert context["by_ticker"][0]["name"] == "SPY"
     assert context["management"]["mfe_coverage"]["pct"] == 100.0
+
+    trade_sql, trade_params = next((sql, params) for sql, params in conn.calls if "FROM trades t" in sql)
+    diary_sql, diary_params = next((sql, params) for sql, params in conn.calls if "FROM diary_entries" in sql)
+    assert "t.account_id = ?" in trade_sql
+    assert trade_params == (4,)
+    assert "account_id = ?" in diary_sql
+    assert diary_params == (4,)
+
+
+def test_brain_all_accounts_avoids_ambiguous_null_parameters_for_postgres():
+    conn = FakeConn()
+
+    raw = ai_analysis.build_brain_context(
+        conn,
+        account_id=None,
+        question="How's my trade last Friday?",
+    )
+    context = json.loads(raw)
+
+    assert context["overall"]["trades"] == 2
+    trade_sql, trade_params = next((sql, params) for sql, params in conn.calls if "FROM trades t" in sql)
+    diary_sql, diary_params = next((sql, params) for sql, params in conn.calls if "FROM diary_entries" in sql)
+
+    # PostgreSQL cannot infer the type of a NULL bind used only as "? IS NULL".
+    # All-accounts mode therefore must omit the account predicate entirely.
+    assert "IS NULL OR" not in trade_sql
+    assert "account_id = ?" not in trade_sql
+    assert trade_params == ()
+    assert "IS NULL OR" not in diary_sql
+    assert "account_id = ?" not in diary_sql
+    assert diary_params == ()
 
 
 def test_brain_prefers_groq_when_production_key_is_available(monkeypatch):

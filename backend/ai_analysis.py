@@ -741,7 +741,13 @@ def _brain_extract_targets(question: str, trades: list[dict]) -> dict:
 
 def build_brain_context(conn, account_id, question: str = "") -> str:
     """Build a deterministic, question-aware journal snapshot for Brain."""
-    rows = conn.execute("""
+    trade_params = []
+    trade_account_filter = ""
+    if account_id is not None:
+        trade_account_filter = "WHERE t.account_id = ?"
+        trade_params.append(account_id)
+
+    rows = conn.execute(f"""
         SELECT t.id, t.trade_group, t.date, t.ticker, t.side, t.instrument_type,
                t.net_pnl, t.gross_pnl, t.commissions, t.executions,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
@@ -750,9 +756,9 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
                ta.entry_reason, ta.exit_reason, ta.ai_feedback, ta.idea_source
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
-        WHERE (? IS NULL OR t.account_id = ?)
+        {trade_account_filter}
         ORDER BY t.date DESC, t.id DESC
-    """, (account_id, account_id)).fetchall()
+    """, trade_params).fetchall()
 
     trades = []
     for row in rows:
@@ -840,13 +846,20 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
             "execution_count": len(executions),
         }
 
-    diary_rows = conn.execute("""
+    diary_params = []
+    diary_account_filter = ""
+    if account_id is not None:
+        diary_account_filter = "AND account_id = ?"
+        diary_params.append(account_id)
+
+    diary_rows = conn.execute(f"""
         SELECT entry_date, ai_analysis
         FROM diary_entries
-        WHERE (? IS NULL OR account_id = ?) AND ai_analysis IS NOT NULL
+        WHERE ai_analysis IS NOT NULL
+        {diary_account_filter}
         ORDER BY entry_date DESC
         LIMIT 20
-    """, (account_id, account_id)).fetchall()
+    """, diary_params).fetchall()
     diary = []
     for row in diary_rows:
         data = dict(row)
