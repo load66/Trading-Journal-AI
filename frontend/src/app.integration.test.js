@@ -177,6 +177,7 @@ jest.mock('./api', () => {
       getChartScreenshot: fn(() => ok(new Blob(['image'], { type: 'image/png' }))),
       deleteChartScreenshot: fn(() => ok({ deleted: true })),
       getLeReview: fn(() => ok({ available: false, reason: 'No LE review in tests', data_warnings: [] })),
+      refreshLeCompliance: fn(() => ok({ available: false, reason: 'No LE review in tests', data_warnings: [] })),
       getLeLevels: fn(() => ok({ available: true, levels: {}, feed: 'sip', warnings: [] })),
       getAnalysisOptions: fn(() => ok({ strategies: [], idea_sources: [] })),
       listCustomSetups: fn(() => ok([])),
@@ -798,7 +799,7 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
   expect(within(nav()).getByRole('button', { name: 'Trade View' })).toHaveAttribute('aria-current', 'page');
 
   fireEvent.click(within(tablist).getByRole('tab', { name: 'LE Review' }));
-  await waitFor(() => expect(tradesApi.getLeReview).toHaveBeenCalled());
+  await waitFor(() => expect(tradesApi.refreshLeCompliance).toHaveBeenCalled());
   expect(screen.getByText(/LE chart evidence is unavailable/)).toBeInTheDocument();
 
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Executions' }));
