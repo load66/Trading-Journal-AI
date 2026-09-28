@@ -254,6 +254,34 @@ def test_qmark_translation_preserves_question_marks_inside_quoted_literals():
         "SELECT '?' AS marker, \"still ?\" AS quoted_identifier, id FROM trades WHERE id=%s"
     )
 
+def test_qmark_translation_escapes_literal_percent_for_psycopg():
+    sql = "SELECT value FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'"
+    assert database.translate_qmark_sql(sql) == (
+        "SELECT value FROM settings WHERE account_id=%s AND key LIKE 'le_compliance:%%'"
+    )
+
+
+def test_postgres_adapter_safely_forwards_like_wildcard_with_parameters():
+    fake = _FakePostgresConnection()
+    conn = database.PostgresConnectionAdapter(fake)
+
+    conn.execute(
+        "SELECT value FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
+        (4,),
+    )
+
+    assert fake.calls[-1] == (
+        "SELECT value FROM settings WHERE account_id=%s AND key LIKE 'le_compliance:%%'",
+        (4,),
+    )
+
+
+def test_qmark_translation_escapes_postgres_modulo_operator():
+    sql = "SELECT id FROM trades WHERE id % 2 = 0 AND ticker=?"
+    assert database.translate_qmark_sql(sql) == (
+        "SELECT id FROM trades WHERE id %% 2 = 0 AND ticker=%s"
+    )
+
 
 def test_postgres_insert_and_get_id_uses_returning_not_lastval():
     fake = _FakePostgresConnection()
