@@ -42,9 +42,11 @@ function FindingCard({ item }) {
     ? <TriangleAlert size={17} />
     : item.kind === 'coverage'
       ? <Database size={17} />
-      : item.kind === 'quality'
-        ? <Activity size={17} />
-        : <TrendingUp size={17} />;
+      : item.kind === 'manual'
+        ? <ShieldCheck size={17} />
+        : item.kind === 'quality'
+          ? <Activity size={17} />
+          : <TrendingUp size={17} />;
 
   return (
     <div className="card" style={{ padding: 16, minHeight: 132 }}>
@@ -112,6 +114,8 @@ function RuleMatrix({ rows }) {
             <th className="num">Fail P&amp;L</th>
             <th className="num">Unknown</th>
             <th className="num">Fail PF</th>
+            <th className="num">User-backed</th>
+            <th className="num">Conflicts</th>
           </tr>
         </thead>
         <tbody>
@@ -125,6 +129,8 @@ function RuleMatrix({ rows }) {
               <td className={`num ${tone(row.fail.net_pnl)}`}>{fmtMoney(row.fail.net_pnl)}</td>
               <td className="num text-muted">{row.unknown.trades}</td>
               <td className="num">{fmtPf(row.fail.profit_factor)}</td>
+              <td className="num">{row.user_backed_trades ?? 0}</td>
+              <td className="num">{row.user_system_conflicts ?? 0}</td>
             </tr>
           ))}
         </tbody>
@@ -168,6 +174,13 @@ function RecentAudit({ rows }) {
                 {(row.failed_rule_ids || []).length
                   ? row.failed_rule_ids.map(x => x.replaceAll('_', ' ')).join(', ')
                   : 'None verified'}
+                {(row.manual_le_evidence?.override_count || 0) > 0 && (
+                  <div style={{ marginTop: 4 }}>
+                    <span className="status-pill pos">
+                      User-backed {row.manual_le_evidence.override_count}
+                    </span>
+                  </div>
+                )}
               </td>
             </tr>
           ))}
@@ -250,6 +263,7 @@ export default function LEDiagnosisReport({ accountId, dateFrom, dateTo }) {
   const overall = data.overall || {};
   const edge = data.most_profitable_cohort;
   const leak = data.biggest_verified_leak;
+  const manualEvidence = data.manual_evidence || {};
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
@@ -267,8 +281,9 @@ export default function LEDiagnosisReport({ accountId, dateFrom, dateTo }) {
             </div>
             <h2 style={{ margin: '5px 0 6px' }}>Journal-wide LE Smart Diagnosis</h2>
             <p className="text-muted" style={{ margin: 0, maxWidth: 760, lineHeight: 1.55 }}>
-              Every closed trade is graded from the same deterministic LE rules. Missing evidence stays Unknown.
-              New broker imports and new manual trades are audited automatically.
+              Every closed trade is graded from deterministic LE evidence plus recognized manual LE tags.
+              A user-confirmed LE tag is authoritative for the exact concept it asserts; the prior system result is preserved for audit.
+              Missing evidence stays Unknown, and new trades are audited automatically.
             </p>
           </div>
           <button
@@ -309,6 +324,12 @@ export default function LEDiagnosisReport({ accountId, dateFrom, dateTo }) {
             read: `${overall.trades || 0} closed trades · ${overall.win_rate || 0}% win rate`,
           },
           {
+            label: 'User-backed LE evidence',
+            value: `${manualEvidence.trades || 0} trades`,
+            met: (manualEvidence.trades || 0) > 0,
+            read: `${manualEvidence.override_count || 0} authoritative result(s) · ${manualEvidence.conflict_count || 0} conflict(s) preserved`,
+          },
+          {
             label: 'Most profitable cohort',
             value: edge ? fmtMoney(edge.net_pnl) : '—',
             met: Boolean(edge),
@@ -342,10 +363,19 @@ export default function LEDiagnosisReport({ accountId, dateFrom, dateTo }) {
         <CohortTable rows={data.cohorts} />
       </section>
 
+
+      <section className="card">
+        <PanelHead
+          title="User-Confirmed LE Setups"
+          sub="Manual setup tags are treated as authoritative user evidence. Performance is grouped exactly by the setup label you applied."
+        />
+        <CohortTable rows={data.user_confirmed_setups} />
+      </section>
+
       <section className="card">
         <PanelHead
           title="Rule Performance Matrix"
-          sub="Pass / Fail / Unknown for every LE rule. Unknown never counts as either Pass or Fail."
+          sub="Pass / Fail / Unknown for every LE rule. User-backed shows manual authoritative overrides; conflicts preserve where the automated system originally disagreed."
         />
         <RuleMatrix rows={data.rules} />
       </section>
