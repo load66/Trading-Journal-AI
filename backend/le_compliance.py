@@ -9,7 +9,7 @@ from trade_metrics import entry_market_minutes
 from le_manual_evidence import apply_manual_le_evidence, build_manual_le_evidence
 
 
-LE_COMPLIANCE_VERSION = "LE_PLAYBOOK_2026_09_v3"
+LE_COMPLIANCE_VERSION = "LE_PLAYBOOK_2026_09_v4"
 
 LE_PLAYBOOK_REFERENCE = {
     "name": "The LE Trading System — Guide Series",
@@ -447,6 +447,46 @@ def build_le_compliance(
         manual_evidence,
     )
 
+    final_by_id = {item.get("id"): item for item in checks}
+    flag_status = (final_by_id.get("flag_forming") or {}).get("status", "unknown")
+    line_status = (final_by_id.get("ema_aligned") or {}).get("status", "unknown")
+    sign_status = (final_by_id.get("market_sign") or {}).get("status", "unknown")
+    level_gate_status = (final_by_id.get("level_broken") or {}).get("status", "unknown")
+    fls_parts = {
+        "flag": flag_status,
+        "line_10m_8ema": line_status,
+        "sign_spy_qqq": sign_status,
+        "level_break": level_gate_status,
+    }
+    if "fail" in {flag_status, line_status, sign_status, level_gate_status}:
+        fls_status = "fail"
+        failed_parts = [name for name, value in fls_parts.items() if value == "fail"]
+        fls_detail = (
+            "Low-probability LE structure: " + ", ".join(failed_parts)
+            + " failed. No Flag / Line / Sign alignment means the setup is not worth the risk."
+        )
+    elif all(value == "pass" for value in fls_parts.values()):
+        fls_status = "pass"
+        fls_detail = (
+            "High-probability LE structure confirmed: level break + Flag + 10m 8 EMA Line + SPY/QQQ Sign all align."
+        )
+    else:
+        fls_status = "unknown"
+        unknown_parts = [name for name, value in fls_parts.items() if value == "unknown"]
+        fls_detail = (
+            "Flag / Line / Sign gate is incomplete because "
+            + ", ".join(unknown_parts)
+            + " is not yet proven."
+        )
+    extra_findings.append(_check(
+        "flag_line_sign_gate",
+        "Flag + Line + Sign Gate",
+        fls_status,
+        fls_detail,
+        evidence=fls_parts,
+        source_pages=[15, 18, 50, 52],
+    ))
+
     passed = sum(c["status"] == "pass" for c in checks)
     failed = sum(c["status"] == "fail" for c in checks)
     unknown = sum(c["status"] == "unknown" for c in checks)
@@ -478,6 +518,7 @@ def build_le_compliance(
         "day_context": day_context,
         "risk_plan": risk_plan,
         "manual_le_evidence": manual_evidence_summary,
+        "flag_line_sign_gate": fls_parts,
         "compliance_version": LE_COMPLIANCE_VERSION,
     }
 
