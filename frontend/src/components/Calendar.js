@@ -51,21 +51,49 @@ const escapeXml = (value) => String(value ?? '')
   .replace(/'/g, '&apos;');
 
 const metricHelp = {
-  pnl: 'Money made or lost after trading results',
-  win: 'Percent of closed trades that finished profitable',
-  pf: 'Gross profit divided by gross loss',
-  ratio: 'Average winner compared with average loser',
-  days: 'Number of days with at least one trade',
+  pnl: 'Your total net trading result',
+  win: 'How often a closed trade finished profitable',
+  pf: 'Gross profits compared with gross losses',
+  ratio: 'Size of the average winner vs. average loser',
+  days: 'Sessions with at least one recorded trade',
 };
+
+const shareSvgStyle = `
+  text { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
+  .tabular { font-variant-numeric: tabular-nums; }
+`;
+
+function fmtShareDayPnl(value) {
+  const n = Number(value || 0);
+  const sign = n > 0 ? '+' : n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(abs >= 10000 ? 0 : 1).replace(/\.0$/, '')}K`;
+  return `${sign}${Math.round(abs).toLocaleString('en-US')}`;
+}
+
+function localDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
 
 function shareMetricCard(x, y, width, label, value, help, tone = 'neutral') {
   const valueColor = tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.text;
   return `
     <g transform="translate(${x} ${y})">
-      <rect width="${width}" height="112" rx="14" fill="${SHARE_PALETTE.panel}" stroke="${SHARE_PALETTE.border}" />
-      <text x="18" y="26" fill="${SHARE_PALETTE.muted}" font-size="13" font-weight="700" letter-spacing=".8">${escapeXml(label)}</text>
-      <text x="18" y="62" fill="${valueColor}" font-size="26" font-weight="750">${escapeXml(value)}</text>
-      <text x="18" y="88" fill="${SHARE_PALETTE.dim}" font-size="10.5">${escapeXml(help)}</text>
+      <rect width="${width}" height="96" rx="14" fill="${SHARE_PALETTE.panel}" stroke="${SHARE_PALETTE.border}" />
+      <text x="16" y="23" fill="${SHARE_PALETTE.muted}" font-size="11.5" font-weight="750" letter-spacing=".75">${escapeXml(label)}</text>
+      <text class="tabular" x="16" y="55" fill="${valueColor}" font-size="25" font-weight="780">${escapeXml(value)}</text>
+      <text x="16" y="78" fill="${SHARE_PALETTE.dim}" font-size="9.5" font-weight="500">${escapeXml(help)}</text>
+    </g>`;
+}
+
+function shareInsightCard(x, y, width, label, value, note, tone = 'neutral') {
+  const valueColor = tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : tone === 'blue' ? SHARE_PALETTE.blue : SHARE_PALETTE.text;
+  return `
+    <g transform="translate(${x} ${y})">
+      <rect width="${width}" height="62" rx="12" fill="${SHARE_PALETTE.panel2}" stroke="${SHARE_PALETTE.border}" />
+      <text x="14" y="19" fill="${SHARE_PALETTE.dim}" font-size="9.5" font-weight="750" letter-spacing=".8">${escapeXml(label)}</text>
+      <text class="tabular" x="14" y="42" fill="${valueColor}" font-size="17" font-weight="780">${escapeXml(value)}</text>
+      <text x="${width - 14}" y="42" text-anchor="end" fill="${SHARE_PALETTE.muted}" font-size="9.5">${escapeXml(note)}</text>
     </g>`;
 }
 
