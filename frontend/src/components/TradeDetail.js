@@ -5,7 +5,7 @@ import { tradesApi, libraryApi } from '../api';
 import TradingChart from './TradingChart';
 import LEReview from './LEReview';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
-import { executionMarketParts, tradeStats as canonicalTradeStats } from '../tradeMetrics';
+import { executionInstant, executionMarketParts, tradeStats as canonicalTradeStats } from '../tradeMetrics';
 
 const fmt$ = (v) => {
   if (v == null) return '—';
@@ -772,15 +772,26 @@ function getDayTradeRange(t) {
   return openT || closeT || 'Time unavailable';
 }
 
+function dayTradeEntryTime(trade) {
+  const stats = canonicalTradeStats(trade);
+  const firstEntry = stats.entryFills[0];
+  const instant = executionInstant(firstEntry, trade?.date);
+  if (instant) return instant.getTime();
+
+  const fallback = Number(trade?.id);
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
 export function groupDayTradesByTicker(trades = []) {
   const groups = [];
   const byTicker = new Map();
+  const newestFirst = [...trades].sort((a, b) => dayTradeEntryTime(b) - dayTradeEntryTime(a));
 
-  trades.forEach(trade => {
+  newestFirst.forEach(trade => {
     const ticker = String(trade?.ticker || '—').trim().toUpperCase() || '—';
     let group = byTicker.get(ticker);
     if (!group) {
-      group = { ticker, trades: [], netPnl: 0 };
+      group = { ticker, trades: [], netPnl: 0, latestEntryTime: dayTradeEntryTime(trade) };
       byTicker.set(ticker, group);
       groups.push(group);
     }
@@ -788,7 +799,7 @@ export function groupDayTradesByTicker(trades = []) {
     if (!trade?.is_open) group.netPnl += Number(trade?.net_pnl) || 0;
   });
 
-  return groups;
+  return groups.sort((a, b) => b.latestEntryTime - a.latestEntryTime);
 }
 
 function DaySidebar({ currentTrade, onOpenDetail }) {
