@@ -229,12 +229,12 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
   if (mobile) {
     const mfe = Number(trade.mfe_pct);
     const mae = Number(trade.mae_pct);
-    const hasMfe = Number.isFinite(mfe);
-    const hasMae = Number.isFinite(mae);
+    const hasMfe = trade.mfe_pct != null && Number.isFinite(mfe);
+    const hasMae = trade.mae_pct != null && Number.isFinite(mae);
     const exitEfficiency = Number(trade.exit_efficiency);
-    const hasExitEfficiency = Number.isFinite(exitEfficiency) && pnl > 0;
+    const hasExitEfficiency = trade.exit_efficiency != null && Number.isFinite(exitEfficiency) && pnl > 0;
     const plPct = Number(trade.pl_pct);
-    const hasPlPct = Number.isFinite(plPct);
+    const hasPlPct = trade.pl_pct != null && Number.isFinite(plPct);
     const setupLabel = trade.setup && trade.setup !== 'NONE'
       ? trade.setup
       : trade.strategy || 'Not tagged';
