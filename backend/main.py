@@ -4052,7 +4052,8 @@ async def brain_chat(
         raise HTTPException(status_code=400, detail="No messages provided")
 
     try:
-        context = build_brain_context(conn, account_id)
+        current_question = str(messages[-1].get("content") or "") if messages else ""
+        context = build_brain_context(conn, account_id, current_question)
         response_text = generate_brain_response(messages, context)
         return {"response": response_text}
     except Exception as e:

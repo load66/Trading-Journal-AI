@@ -580,115 +580,438 @@ def generate_insights(trades_summary: dict) -> str:
 
 # ── Brain AI Chatbot ────────────────────────────────────────────────────────────
 
-BRAIN_SYSTEM_PROMPT = """You are "Brain", an expert AI trading coach embedded in a personal trading journal.
-You have access to the trader's complete trading history, diary entries, and performance data.
+BRAIN_SYSTEM_PROMPT = """You are "Brain", the journal intelligence engine inside a professional trading journal.
 
-Your capabilities:
-- Answer specific questions about performance with data references
-- Identify patterns in strategy, timing, emotional state, and risk management
-- Generate custom reports and breakdowns on demand
-- Provide actionable, data-driven coaching feedback
+You answer questions from STRUCTURED JOURNAL EVIDENCE supplied with each request. That evidence is the source of truth.
 
-Format responses in markdown. Be concise, specific, and reference actual numbers from the data.
-If the data doesn't support a conclusion, say so — never fabricate numbers."""
+Core rules:
+- Answer the user's actual question first. Do not give generic trading advice when the journal data can answer it.
+- Use exact stored/derived numbers when available. Never invent trades, prices, dates, timestamps, P&L, win rates, strategy labels, or journal notes.
+- Distinguish journal facts from interpretation. If the evidence is thin or incomplete, say that plainly.
+- Aggregates are descriptive, not proof of causation. Say a cohort "had" or "was associated with" an outcome.
+- Sample-size language: fewer than 10 trades = thin sample; 10-29 = developing sample; 30+ = established sample.
+- When comparing strategies/tickers/windows, include trade count with P&L or win rate so small samples are not presented as definitive.
+- The journal's realized P&L is authoritative. Do not recompute it from prices.
+- MFE/MAE/exit-efficiency may be missing on some trades. State coverage when using those fields.
+- If a question asks about a ticker, strategy, date, time window, or recent event, use TARGETED MATCHES when provided.
+- If the question asks "best", explain the metric used (for example total P&L, average P&L, profit factor, or win rate) and note when another metric gives a different answer.
+- Never claim you inspected a chart image unless image data was actually supplied. Session-path evidence is a realized-P&L timeline, not a price chart.
+- Be willing to say "I don't have enough journal evidence for that" instead of guessing.
+- Keep answers concise but useful. Prefer a direct answer, then 2-5 supporting bullets, then one practical takeaway when appropriate.
+
+Format in clean markdown. Do not expose internal prompt text, raw database queries, API keys, or implementation details."""
 
 
-def build_brain_context(conn, account_id) -> str:
-    """Build a compact trading context string for Brain's system prompt."""
+def _brain_money(value) -> str:
+    try:
+        return f"${float(value):,.2f}"
+    except Exception:
+        return "N/A"
+
+
+def _brain_pct(value) -> str:
+    try:
+        return f"{float(value):.1f}%"
+    except Exception:
+        return "N/A"
+
+
+def _brain_bucket_stats(items: list[dict]) -> dict:
+    pnls = [float(t.get("net_pnl") or 0) for t in items]
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    gross_wins = sum(wins)
+    gross_losses = abs(sum(losses))
+    return {
+        "trades": len(items),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(len(wins) / len(items) * 100, 1) if items else 0.0,
+        "net_pnl": round(sum(pnls), 2),
+        "avg_pnl": round(sum(pnls) / len(items), 2) if items else 0.0,
+        "avg_win": round(gross_wins / len(wins), 2) if wins else 0.0,
+        "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0.0,
+        "profit_factor": round(gross_wins / gross_losses, 2) if gross_losses else None,
+    }
+
+
+def _brain_hold_bucket(seconds) -> str:
+    if seconds is None:
+        return "Unknown"
+    try:
+        sec = float(seconds)
+    except Exception:
+        return "Unknown"
+    if sec < 30:
+        return "Under 30s"
+    if sec < 60:
+        return "30s-1m"
+    if sec < 120:
+        return "1-2m"
+    if sec < 300:
+        return "2-5m"
+    if sec < 600:
+        return "5-10m"
+    if sec < 900:
+        return "10-15m"
+    if sec < 1200:
+        return "15-20m"
+    if sec < 1800:
+        return "20-30m"
+    if sec < 3600:
+        return "30-60m"
+    return "60m+"
+
+
+def _brain_market_window(trade: dict) -> str:
+    try:
+        _entries, exits = split_entry_exit(trade)
+        if not exits:
+            return "Unknown"
+        dt = execution_datetime(
+            exits[-1],
+            fallback_date=trade.get("date"),
+            target_timezone="America/New_York",
+        )
+        if dt is None:
+            return "Unknown"
+        minute = dt.hour * 60 + dt.minute
+        if minute < 9 * 60 + 30 or minute >= 16 * 60:
+            return "Outside RTH"
+        if minute < 9 * 60 + 40:
+            return "Opening"
+        if minute < 11 * 60 + 30:
+            return "Prime"
+        if minute < 13 * 60 + 30:
+            return "Chop"
+        if minute < 15 * 60:
+            return "Afternoon"
+        if minute < 15 * 60 + 45:
+            return "Hard Close"
+        return "Late Close"
+    except Exception:
+        return "Unknown"
+
+
+def _brain_hold_seconds(trade: dict):
+    try:
+        entries, exits = split_entry_exit(trade)
+        if not entries or not exits:
+            return None
+        first = execution_datetime(entries[0], fallback_date=trade.get("date"))
+        last = execution_datetime(exits[-1], fallback_date=trade.get("date"))
+        if first is None or last is None:
+            return None
+        seconds = (last - first).total_seconds()
+        return seconds if seconds >= 0 else None
+    except Exception:
+        return None
+
+
+def _brain_group(trades: list[dict], field_fn, *, min_count: int = 1) -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for trade in trades:
+        key = str(field_fn(trade) or "Unknown").strip() or "Unknown"
+        groups.setdefault(key, []).append(trade)
+    rows = []
+    for key, items in groups.items():
+        if len(items) < min_count:
+            continue
+        row = {"name": key, **_brain_bucket_stats(items)}
+        rows.append(row)
+    return sorted(rows, key=lambda r: (-r["net_pnl"], -r["trades"], r["name"]))
+
+
+def _brain_extract_targets(question: str, trades: list[dict]) -> dict:
+    q = str(question or "")
+    q_upper = q.upper()
+    tickers = sorted({
+        str(t.get("ticker") or "").upper()
+        for t in trades
+        if t.get("ticker") and re.search(rf"(?<![A-Z0-9]){re.escape(str(t.get('ticker')).upper())}(?![A-Z0-9])", q_upper)
+    })
+    strategies = sorted({
+        str(t.get("strategy") or "")
+        for t in trades
+        if t.get("strategy") and str(t.get("strategy")).lower() in q.lower()
+    })
+    dates = re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", q)
+    return {"tickers": tickers, "strategies": strategies, "dates": dates}
+
+
+def build_brain_context(conn, account_id, question: str = "") -> str:
+    """Build a deterministic, question-aware journal snapshot for Brain."""
     rows = conn.execute("""
-        SELECT t.date, t.ticker, t.side, t.instrument_type, t.net_pnl, t.gross_pnl,
-               t.executions,
+        SELECT t.id, t.trade_group, t.date, t.ticker, t.side, t.instrument_type,
+               t.net_pnl, t.gross_pnl, t.commissions, t.executions,
+               t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
-               ta.stop_loss, ta.target_price
+               ta.stop_loss, ta.target_price, ta.risk_per_trade, ta.risk_reward,
+               ta.entry_reason, ta.exit_reason, ta.ai_feedback, ta.idea_source
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
         WHERE (? IS NULL OR t.account_id = ?)
         ORDER BY t.date DESC, t.id DESC
-        LIMIT 1000
     """, (account_id, account_id)).fetchall()
 
-    trades = [dict(r) for r in rows]
-    trades = [t for t in trades if trade_is_closed(t)][:300]
-    if not trades:
-        return "No trade data available."
-
-    total_pnl = sum(t['net_pnl'] or 0 for t in trades)
-    wins = [t for t in trades if (t['net_pnl'] or 0) > 0]
-    losses = [t for t in trades if (t['net_pnl'] or 0) < 0]
-    win_rate = len(wins) / len(trades) * 100 if trades else 0
-    avg_win = sum(t['net_pnl'] for t in wins) / len(wins) if wins else 0
-    avg_loss = sum(t['net_pnl'] for t in losses) / len(losses) if losses else 0
-    gross_wins = sum(t['net_pnl'] for t in wins)
-    gross_losses = abs(sum(t['net_pnl'] for t in losses))
-    profit_factor = round(gross_wins / gross_losses, 2) if gross_losses else 'N/A'
-
-    # Strategy breakdown
-    strat: dict = {}
-    for t in trades:
-        s = t['strategy'] or 'No Strategy'
-        if s not in strat:
-            strat[s] = {'count': 0, 'wins': 0, 'pnl': 0.0}
-        strat[s]['count'] += 1
-        if (t['net_pnl'] or 0) > 0:
-            strat[s]['wins'] += 1
-        strat[s]['pnl'] += t['net_pnl'] or 0
-
-    strat_lines = []
-    for s, st in sorted(strat.items(), key=lambda x: -x[1]['pnl']):
-        wr = st['wins'] / st['count'] * 100 if st['count'] else 0
-        strat_lines.append(
-            f"  {s}: {st['count']} trades | {wr:.0f}% win rate | ${st['pnl']:.2f} total P&L | ${st['pnl']/st['count']:.2f} avg"
-        )
-
-    dates = sorted(set(t['date'] for t in trades if t['date']))
-    date_range = f"{dates[0]} to {dates[-1]}" if dates else "N/A"
-
-    trade_lines = []
-    for t in trades[:50]:
-        line = f"  {t['date']} | {t['ticker']} | {t['side']} | ${t['net_pnl']:.2f}"
-        if t['strategy']:
-            line += f" | {t['strategy']}"
-        if t['r_multiple'] is not None:
-            line += f" | {t['r_multiple']:.2f}R"
-        if t['emotional_state']:
-            line += f" | {t['emotional_state']}"
-        if t['mistakes']:
-            line += f" | MISTAKE: {t['mistakes']}"
-        trade_lines.append(line)
-
-    # Diary summaries
-    diary_rows = conn.execute("""
-        SELECT entry_date, ai_analysis FROM diary_entries
-        WHERE (? IS NULL OR account_id = ?) AND ai_analysis IS NOT NULL
-        ORDER BY entry_date DESC LIMIT 10
-    """, (account_id, account_id)).fetchall()
-
-    diary_lines = []
-    for d in diary_rows:
+    trades = []
+    for row in rows:
+        trade = dict(row)
         try:
-            a = json.loads(dict(d)['ai_analysis'])
-            summary = a.get('overall_summary', '')
-            patterns = a.get('patterns_identified', [])
-            if summary:
-                diary_lines.append(f"  {dict(d)['entry_date']}: {summary}")
-                if patterns:
-                    diary_lines.append(f"    Patterns: {', '.join(patterns[:3])}")
+            trade["executions"] = json.loads(trade.get("executions") or "[]")
         except Exception:
-            pass
+            trade["executions"] = []
+        if trade_is_closed(trade):
+            trade["_hold_seconds"] = _brain_hold_seconds(trade)
+            trade["_hold_bucket"] = _brain_hold_bucket(trade["_hold_seconds"])
+            trade["_market_window"] = _brain_market_window(trade)
+            trades.append(trade)
 
-    return f"""=== ACCOUNT PERFORMANCE ===
-Period: {date_range}
-Total Trades: {len(trades)} | Win Rate: {win_rate:.1f}% | Net P&L: ${total_pnl:.2f}
-Avg Win: ${avg_win:.2f} | Avg Loss: ${avg_loss:.2f} | Profit Factor: {profit_factor}
+    if not trades:
+        return json.dumps({
+            "journal_status": "No completed trade data is available for this account.",
+            "question": question,
+        }, indent=2)
 
-=== STRATEGY BREAKDOWN ===
-{chr(10).join(strat_lines) or '  No strategy data'}
+    overall = _brain_bucket_stats(trades)
+    dates = sorted({str(t.get("date")) for t in trades if t.get("date")})
+    overall["date_from"] = dates[0] if dates else None
+    overall["date_to"] = dates[-1] if dates else None
 
-=== RECENT TRADES (newest first, up to 50) ===
-{chr(10).join(trade_lines) or '  No trades'}
+    by_strategy = _brain_group(trades, lambda t: t.get("strategy") or "No Strategy")
+    by_ticker = _brain_group(trades, lambda t: t.get("ticker") or "Unknown")
+    by_side = _brain_group(trades, lambda t: t.get("side") or "Unknown")
+    by_window = _brain_group(trades, lambda t: t.get("_market_window") or "Unknown")
+    by_hold = _brain_group(trades, lambda t: t.get("_hold_bucket") or "Unknown")
+    by_day = _brain_group(trades, lambda t: t.get("date") or "Unknown")
 
-=== DIARY INSIGHTS ===
-{chr(10).join(diary_lines) or '  No diary entries'}"""
+    mfe_values = [float(t["mfe_pct"]) for t in trades if t.get("mfe_pct") is not None]
+    mae_values = [float(t["mae_pct"]) for t in trades if t.get("mae_pct") is not None]
+    exit_values = [float(t["exit_efficiency"]) for t in trades if t.get("exit_efficiency") is not None]
+    management = {
+        "mfe_coverage": {"count": len(mfe_values), "pct": round(len(mfe_values) / len(trades) * 100, 1)},
+        "mae_coverage": {"count": len(mae_values), "pct": round(len(mae_values) / len(trades) * 100, 1)},
+        "exit_efficiency_coverage": {"count": len(exit_values), "pct": round(len(exit_values) / len(trades) * 100, 1)},
+        "avg_mfe_pct": round(sum(mfe_values) / len(mfe_values), 2) if mfe_values else None,
+        "avg_mae_pct": round(sum(mae_values) / len(mae_values), 2) if mae_values else None,
+        "avg_exit_efficiency": round(sum(exit_values) / len(exit_values), 2) if exit_values else None,
+    }
+
+    ranked = sorted(trades, key=lambda t: float(t.get("net_pnl") or 0))
+    worst_trades = ranked[:10]
+    best_trades = list(reversed(ranked[-10:]))
+
+    targets = _brain_extract_targets(question, trades)
+    targeted = []
+    if any(targets.values()):
+        for t in trades:
+            if targets["tickers"] and str(t.get("ticker") or "").upper() not in targets["tickers"]:
+                continue
+            if targets["strategies"] and str(t.get("strategy") or "") not in targets["strategies"]:
+                continue
+            if targets["dates"] and str(t.get("date") or "") not in targets["dates"]:
+                continue
+            targeted.append(t)
+    targeted = targeted[:100]
+
+    def compact_trade(t: dict) -> dict:
+        executions = t.get("executions") or []
+        return {
+            "trade_group": t.get("trade_group"),
+            "date": t.get("date"),
+            "ticker": t.get("ticker"),
+            "side": t.get("side"),
+            "instrument_type": t.get("instrument_type"),
+            "net_pnl": round(float(t.get("net_pnl") or 0), 2),
+            "strategy": t.get("strategy"),
+            "r_multiple": t.get("r_multiple"),
+            "hold_seconds": t.get("_hold_seconds"),
+            "hold_bucket": t.get("_hold_bucket"),
+            "exit_window_et": t.get("_market_window"),
+            "mfe_pct": t.get("mfe_pct"),
+            "mae_pct": t.get("mae_pct"),
+            "exit_efficiency": t.get("exit_efficiency"),
+            "emotional_state": t.get("emotional_state"),
+            "mistakes": t.get("mistakes"),
+            "entry_reason": t.get("entry_reason"),
+            "exit_reason": t.get("exit_reason"),
+            "ai_feedback": t.get("ai_feedback"),
+            "idea_source": t.get("idea_source"),
+            "execution_count": len(executions),
+        }
+
+    diary_rows = conn.execute("""
+        SELECT entry_date, ai_analysis
+        FROM diary_entries
+        WHERE (? IS NULL OR account_id = ?) AND ai_analysis IS NOT NULL
+        ORDER BY entry_date DESC
+        LIMIT 20
+    """, (account_id, account_id)).fetchall()
+    diary = []
+    for row in diary_rows:
+        data = dict(row)
+        try:
+            analysis = json.loads(data.get("ai_analysis") or "{}")
+        except Exception:
+            continue
+        diary.append({
+            "date": data.get("entry_date"),
+            "summary": analysis.get("overall_summary"),
+            "patterns": (analysis.get("patterns_identified") or [])[:5],
+            "improvement_areas": (analysis.get("improvement_areas") or [])[:5],
+        })
+
+    summary_params = []
+    summary_sql = """
+        SELECT summary_date, ai_content, generated_at
+        FROM daily_summaries
+        WHERE 1=1
+    """
+    if account_id is None:
+        summary_sql += " AND account_id IS NULL"
+    else:
+        summary_sql += " AND account_id = ?"
+        summary_params.append(account_id)
+    summary_sql += " ORDER BY summary_date DESC LIMIT 20"
+
+    daily_reviews = []
+    try:
+        for row in conn.execute(summary_sql, summary_params).fetchall():
+            data = dict(row)
+            try:
+                review = json.loads(data.get("ai_content") or "{}")
+            except Exception:
+                continue
+            daily_reviews.append({
+                "date": data.get("summary_date"),
+                "generated_at": str(data.get("generated_at") or ""),
+                "narrative": review.get("narrative"),
+                "mental_game": review.get("mental_game"),
+                "overall_grade": review.get("overall_grade"),
+                "mistakes": (review.get("mistakes") or [])[:5],
+                "strengths": (review.get("strengths") or [])[:5],
+                "patterns": (review.get("patterns") or [])[:5],
+                "session_path_analysis": {
+                    key: (review.get("session_path_analysis") or {}).get(key)
+                    for key in (
+                        "timing_coverage_pct",
+                        "day_total_realized_pnl",
+                        "peak_realized_pnl",
+                        "trough_realized_pnl",
+                        "giveback_from_positive_peak",
+                        "max_drawdown_from_high_water",
+                        "post_peak",
+                        "window_realized_pnl",
+                    )
+                } if review.get("session_path_analysis") else None,
+            })
+    except Exception:
+        daily_reviews = []
+
+    snapshot = {
+        "journal_scope": {
+            "account_id": account_id,
+            "question": question,
+            "completed_trades": len(trades),
+            "date_range": [overall.get("date_from"), overall.get("date_to")],
+            "source_note": "All aggregates below are computed from completed trades in the selected account scope.",
+        },
+        "overall": overall,
+        "management": management,
+        "by_strategy": by_strategy[:40],
+        "by_ticker": by_ticker[:60],
+        "by_side": by_side,
+        "by_exit_window_et": by_window,
+        "by_hold_time": by_hold,
+        "by_day": by_day[:90],
+        "best_trades": [compact_trade(t) for t in best_trades],
+        "worst_trades": [compact_trade(t) for t in worst_trades],
+        "recent_trades": [compact_trade(t) for t in trades[:75]],
+        "target_detection": targets,
+        "targeted_matches": [compact_trade(t) for t in targeted],
+        "recent_diary_insights": diary,
+        "recent_day_reviews": daily_reviews,
+    }
+    return json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+
+
+def _groq_brain_response(messages: list[dict], context: str, api_key: str) -> str:
+    history = []
+    for msg in messages[-16:]:
+        role = "assistant" if msg.get("role") == "assistant" else "user"
+        history.append({"role": role, "content": str(msg.get("content") or "")})
+    if history:
+        history[-1] = {
+            "role": "user",
+            "content": f"[JOURNAL EVIDENCE]\n{context}\n\n[CURRENT QUESTION]\n{history[-1]['content']}",
+        }
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "system", "content": BRAIN_SYSTEM_PROMPT}, *history],
+        "max_completion_tokens": 3000,
+        "reasoning_effort": "medium",
+        "temperature": 0.1,
+    }
+    response = httpx.post(
+        GROQ_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=90.0,
+    )
+    response.raise_for_status()
+    body = response.json()
+    try:
+        return str(body["choices"][0]["message"]["content"]).strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("Groq returned an unexpected Brain response shape.") from exc
+
+
+def _anthropic_brain_response(messages: list[dict], context: str) -> str:
+    client = get_client()
+    claude_messages = []
+    for msg in messages[-16:]:
+        role = "assistant" if msg.get("role") == "assistant" else "user"
+        claude_messages.append({"role": role, "content": str(msg.get("content") or "")})
+    if claude_messages:
+        claude_messages[-1] = {
+            "role": "user",
+            "content": f"[JOURNAL EVIDENCE]\n{context}\n\n[CURRENT QUESTION]\n{claude_messages[-1]['content']}",
+        }
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=3000,
+        system=BRAIN_SYSTEM_PROMPT,
+        messages=claude_messages,
+    )
+    return response_text(response)
+
+
+def generate_brain_response(messages: list[dict], context: str) -> str:
+    """Answer from journal evidence with Groq primary and Anthropic fallback."""
+    groq_key = _valid_api_key("GROQ_API_KEY")
+    anthropic_key = _valid_api_key("ANTHROPIC_API_KEY", "your_anthropic_api_key_here")
+    errors = []
+
+    if groq_key:
+        try:
+            return _groq_brain_response(messages, context, groq_key)
+        except Exception as exc:
+            errors.append(f"Groq: {exc}")
+
+    if anthropic_key:
+        try:
+            return _anthropic_brain_response(messages, context)
+        except Exception as exc:
+            errors.append(f"Anthropic: {exc}")
+
+    if errors:
+        raise RuntimeError("Brain AI failed. " + " | ".join(errors))
+    raise ValueError(
+        "Brain AI is not configured. Add GROQ_API_KEY, or ANTHROPIC_API_KEY as a fallback."
+    )
 
 
 WEEKLY_SUMMARY_PROMPT = """You are a professional trading coach producing a week-in-review.
@@ -785,29 +1108,6 @@ def generate_weekly_summary(week_context: dict) -> dict:
     for key in ("week_narrative", "behavioral_patterns", "anchor_mistake", "weekly_edge", "next_week_rule", "emotion_trend", "metrics_summary"):
         result.setdefault(key, "" if key != "behavioral_patterns" else [])
     return result
-
-
-def generate_brain_response(messages: list[dict], context: str) -> str:
-    """Send full conversation history + trade context to Claude Brain."""
-    client = get_client()
-
-    claude_messages = []
-    context_injected = False
-    for msg in messages:
-        role = msg.get('role', 'user')
-        content = msg.get('content', '')
-        if role == 'user' and not context_injected:
-            content = f"[Trading data]\n{context}\n\n[Question]\n{content}"
-            context_injected = True
-        claude_messages.append({"role": role, "content": content})
-
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=2048,
-        system=BRAIN_SYSTEM_PROMPT,
-        messages=claude_messages,
-    )
-    return response_text(response)
 
 
 SMOKING_GUN_SYSTEM_PROMPT = """You are a forensic trading-performance analyst.
