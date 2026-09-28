@@ -128,6 +128,8 @@ def build_le_diagnosis(
     classification_groups: dict[str, list[dict]] = defaultdict(list)
     rule_groups: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     rule_labels: dict[str, str] = {}
+    rule_manual_counts: dict[str, int] = defaultdict(int)
+    rule_conflict_counts: dict[str, int] = defaultdict(int)
     cohort_groups: dict[str, list[dict]] = defaultdict(list)
     user_setup_groups: dict[str, list[dict]] = defaultdict(list)
     manual_evidence_trades = 0
@@ -144,6 +146,10 @@ def build_le_diagnosis(
             status = str(check.get('status') or 'unknown')
             rule_labels[rule_id] = str(check.get('label') or rule_id)
             rule_groups[rule_id][status].append(row)
+            if check.get('manual_override'):
+                rule_manual_counts[rule_id] += 1
+            if check.get('conflict_with_system'):
+                rule_conflict_counts[rule_id] += 1
 
         flags = _cohort_flags(snapshot)
         for cohort_id, _label in COHORTS:
@@ -198,6 +204,8 @@ def build_le_diagnosis(
             'unknown': unknown,
             'evaluated_trades': evaluated,
             'coverage_pct': round(evaluated / audited * 100, 1) if audited else 0.0,
+            'user_backed_trades': rule_manual_counts.get(rule_id, 0),
+            'user_system_conflicts': rule_conflict_counts.get(rule_id, 0),
         })
     rules.sort(key=lambda item: (-item['fail']['trades'], item['label']))
 
