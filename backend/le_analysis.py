@@ -1500,12 +1500,12 @@ async def build_le_levels(trade: dict) -> dict:
     }
 
 
-async def build_le_review(trade: dict) -> dict:
+async def build_le_review(trade: dict, *, include_ai: bool = True) -> dict:
     """Build a read-only LE review. No strategy or tags are persisted automatically."""
     when = entry_datetime(trade)
     if when is None:
         context = analyze_context(trade, [], [], [])
-        return {**context, "ai": await _groq_classify(context)}
+        return {**context, "ai": await _groq_classify(context) if include_ai else None}
 
     ticker = str(trade.get("ticker") or "").upper().strip()
     if not ticker:
@@ -1620,5 +1620,5 @@ async def build_le_review(trade: dict) -> dict:
             "reason": quality_reason,
         }
 
-    ai = await _groq_classify(context) if context.get("available") else None
+    ai = await _groq_classify(context) if include_ai and context.get("available") else None
     return {**context, "ai": ai}
