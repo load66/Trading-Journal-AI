@@ -69,11 +69,11 @@ export default function Brain({ accountId, open: openProp, onOpenChange }) {
   const wasOpen = useRef(false);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    bottomRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
   }, [messages, loading, error]);
 
   useEffect(() => {
-    if (open && window.matchMedia('(min-width: 601px)').matches) inputRef.current?.focus();
+    if (open && (typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 601px)').matches)) inputRef.current?.focus();
     else if (!open && wasOpen.current) launcherRef.current?.focus();
     wasOpen.current = open;
   }, [open]);
