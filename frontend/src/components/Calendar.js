@@ -555,6 +555,7 @@ function MonthCard({ data, monthIdx, year, onClick, isCurrent, isFuture }) {
 
 function YearView({ year, setYear, accountId, onMonthClick, view, setView, shareMode, onShareModeChange }) {
   const [yearData, setYearData] = useState([]);
+  const [yearKpis, setYearKpis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [shareStatus, setShareStatus] = useState('');
   const today = new Date();
@@ -564,23 +565,49 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
   useEffect(() => {
     setLoading(true);
     const params = { year };
-    if (accountId != null) params.account_id = accountId;
-    yearlyKpisApi.get(params)
-      .then(r => {
-        const months = Array.isArray(r.data) ? r.data : (Array.isArray(r.data?.months) ? r.data.months : []);
+    const kpiParams = { date_from: `${year}-01-01`, date_to: `${year}-12-31` };
+    if (accountId != null) {
+      params.account_id = accountId;
+      kpiParams.account_id = accountId;
+    }
+
+    Promise.all([yearlyKpisApi.get(params), kpisApi.get(kpiParams)])
+      .then(([yearlyResponse, kpiResponse]) => {
+        const months = Array.isArray(yearlyResponse.data)
+          ? yearlyResponse.data
+          : (Array.isArray(yearlyResponse.data?.months) ? yearlyResponse.data.months : []);
         setYearData(months);
+        setYearKpis(kpiResponse.data || null);
         setLoading(false);
       })
-      .catch(() => { setYearData([]); setLoading(false); });
+      .catch(() => {
+        setYearData([]);
+        setYearKpis(null);
+        setLoading(false);
+      });
   }, [year, accountId]);
 
   const monthsWithData = yearData.filter(m => m?.has_data);
-  const yearPnl = monthsWithData.reduce((s, m) => s + Number(m.net_pnl || 0), 0);
-  const totalTrades = monthsWithData.reduce((s, m) => s + Number(m.total_trades || 0), 0);
-  const totalWinners = monthsWithData.reduce((s, m) => s + Number(m.winning_trades || 0), 0);
-  const tradingDays = monthsWithData.reduce((s, m) => s + Number(m.trading_days || 0), 0);
+  const yearPnl = yearKpis != null
+    ? Number(yearKpis.total_net_pnl || 0)
+    : monthsWithData.reduce((s, m) => s + Number(m.net_pnl || 0), 0);
+  const totalTrades = yearKpis != null
+    ? Number(yearKpis.total_trades || 0)
+    : monthsWithData.reduce((s, m) => s + Number(m.total_trades || 0), 0);
+  const tradingDays = yearKpis != null
+    ? Number(yearKpis.trading_days || 0)
+    : monthsWithData.reduce((s, m) => s + Number(m.trading_days || 0), 0);
   const profitableMonths = monthsWithData.filter(m => Number(m.net_pnl || 0) > 0).length;
-  const yearWinRate = totalTrades > 0 ? (totalWinners / totalTrades * 100).toFixed(1) : '--';
+  const yearWinRate = yearKpis != null
+    ? Number(yearKpis.win_rate || 0).toFixed(1)
+    : '--';
+  const yearProfitFactor = yearKpis ? yearKpis.profit_factor : undefined;
+  const yearAvgWinLoss = yearKpis && Math.abs(Number(yearKpis.avg_loss || 0)) > 0
+    ? (Math.abs(Number(yearKpis.avg_win || 0)) / Math.abs(Number(yearKpis.avg_loss || 0))).toFixed(2)
+    : '--';
+  const yearWinTarget = targetLine(Number(yearWinRate), SHARE_BASELINES.winRate, '%');
+  const yearPfTarget = targetLine(Number(yearProfitFactor), SHARE_BASELINES.profitFactor);
+  const yearRatioTarget = targetLine(Number(yearAvgWinLoss), SHARE_BASELINES.avgWinLoss);
 
   const exportYearImage = async () => {
     if (loading) return;
@@ -590,6 +617,8 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
       yearData,
       yearPnl,
       yearWinRate,
+      yearProfitFactor,
+      yearAvgWinLoss,
       totalTrades,
       tradingDays,
       profitableMonths,
@@ -654,10 +683,10 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
 
           <section className="calendar-share-stats calendar-share-stats-detailed" aria-label="Year summary">
             <ShareMetric label="YTD Net P&L" value={signedPnl(yearPnl)} help="Total profit or loss for the year" tone={yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : ''} />
-            <ShareMetric label="Win Rate" value={yearWinRate === '--' ? '--' : `${yearWinRate}%`} help="Percent of closed trades that won" />
-            <ShareMetric label="Total Trades" value={totalTrades.toLocaleString('en-US')} help="Closed trades recorded this year" />
+            <ShareMetric label="Win Rate" value={yearWinRate === '--' ? '--' : `${yearWinRate}%`} help="Closed-trade win rate for this year" target={yearWinTarget} />
+            <ShareMetric label="Profit Factor" value={yearKpis ? (yearProfitFactor == null ? '∞' : Number(yearProfitFactor).toFixed(2)) : '--'} help="Year gross profit ÷ gross loss" target={yearPfTarget} />
+            <ShareMetric label="Avg Win / Loss" value={yearAvgWinLoss} help="Average year winner compared with loser" target={yearRatioTarget} />
             <ShareMetric label="Trading Days" value={tradingDays.toLocaleString('en-US')} help="Days with at least one trade" />
-            <ShareMetric label="Profitable Months" value={`${profitableMonths}/12`} help="Months that finished net positive" />
           </section>
 
           {shareStatus === 'saved' && <div className="calendar-share-status" role="status">PNG saved to your device.</div>}
@@ -685,10 +714,10 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
           {monthsWithData.length > 0 && (
             <KpiStrip label="Year summary">
               <KpiCell label="YTD Net P&L" value={<span className="num">{signedPnl(yearPnl)}</span>} tone={yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : undefined} />
-              <KpiCell label="Win Rate" value={<span className="num">{yearWinRate !== '--' ? `${yearWinRate}%` : '--'}</span>} tone={Number(yearWinRate) >= 55 ? 'pos' : undefined} />
-              <KpiCell label="Total Trades" value={<span className="num">{totalTrades.toLocaleString('en-US')}</span>} />
+              <KpiCell label="Win Rate" value={<span className="num">{yearWinRate !== '--' ? `${yearWinRate}%` : '--'}</span>} tone={Number(yearWinRate) >= SHARE_BASELINES.winRate ? 'pos' : undefined} />
+              <KpiCell label="Profit Factor" value={<span className="num">{yearKpis ? (yearProfitFactor == null ? '∞' : Number(yearProfitFactor).toFixed(2)) : '--'}</span>} tone={yearProfitFactor == null || Number(yearProfitFactor) >= SHARE_BASELINES.profitFactor ? 'pos' : undefined} />
+              <KpiCell label="Avg W/L" value={<span className="num">{yearAvgWinLoss}</span>} tone={Number(yearAvgWinLoss) >= SHARE_BASELINES.avgWinLoss ? 'pos' : undefined} />
               <KpiCell label="Trading Days" value={<span className="num">{tradingDays.toLocaleString('en-US')}</span>} />
-              <KpiCell label="Profitable Months" value={<span className="num">{profitableMonths}/12</span>} />
             </KpiStrip>
           )}
 
@@ -756,6 +785,9 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
   const avgWinLoss = monthKpis && Math.abs(monthKpis.avg_loss || 0) > 0
     ? (Math.abs(monthKpis.avg_win || 0) / Math.abs(monthKpis.avg_loss)).toFixed(2)
     : '--';
+  const monthWinTarget = targetLine(Number(winRate), SHARE_BASELINES.winRate, '%');
+  const monthPfTarget = targetLine(Number(pf), SHARE_BASELINES.profitFactor);
+  const monthRatioTarget = targetLine(Number(avgWinLoss), SHARE_BASELINES.avgWinLoss);
 
   const exportMonthImage = async () => {
     if (loading) return;
@@ -806,9 +838,9 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
 
           <section className="calendar-share-stats calendar-share-stats-detailed" aria-label="Month summary">
             <ShareMetric label="Net P&L" value={signedPnl(monthPnl)} help="Total profit or loss for this month" tone={monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : ''} />
-            <ShareMetric label="Win Rate" value={winRate === '--' ? '--' : `${winRate}%`} help="Percent of closed trades that won" />
-            <ShareMetric label="Profit Factor" value={monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'} help="Gross profit ÷ gross loss" />
-            <ShareMetric label="Avg Win / Loss" value={avgWinLoss} help="Average winner compared with loser" />
+            <ShareMetric label="Win Rate" value={winRate === '--' ? '--' : `${winRate}%`} help="Closed-trade win rate for this month" target={monthWinTarget} />
+            <ShareMetric label="Profit Factor" value={monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'} help="Month gross profit ÷ gross loss" target={monthPfTarget} />
+            <ShareMetric label="Avg Win / Loss" value={avgWinLoss} help="Average month winner compared with loser" target={monthRatioTarget} />
             <ShareMetric label="Trading Days" value={tradingDays} help="Days with at least one trade" />
           </section>
 
