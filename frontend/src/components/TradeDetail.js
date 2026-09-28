@@ -313,6 +313,14 @@ function tagLibraryItems(library, type) {
   return library?.tags?.[type] || [];
 }
 
+const MOBILE_REVIEW_STEPS = [
+  { id: 'journal', label: 'Journal', field: 'notes' },
+  { id: 'entry', label: 'Entry', field: 'entry_reason' },
+  { id: 'exit', label: 'Exit', field: 'exit_reason' },
+  { id: 'improve', label: 'Improve', field: 'mistakes' },
+  { id: 'summary', label: 'Summary', field: null },
+];
+
 const ENTRY_REVIEW_SUGGESTIONS = [
   { label: 'Key level breakout', text: 'Entered on a confirmed break of a key level with momentum and follow-through.' },
   { label: 'PDH / PMH breakout', text: 'Entered on a confirmed break of the prior-day or premarket high.' },
@@ -887,6 +895,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [editingStrategy, setEditingStrategy] = useState(false);
   const [strategyForm, setStrategyForm]       = useState({});
   const [savingStrategy, setSavingStrategy]   = useState(false);
+  const [reviewStep, setReviewStep]           = useState('summary');
 
   // Tags
   const [tagForm, setTagForm]       = useState({ tag_type: 'mistake', tag_value: '' });
@@ -929,6 +938,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
   useEffect(() => {
     plannedRiskFocusHandled.current = false;
+    setReviewStep('summary');
   }, [trade.trade_group, focusPlannedRisk]);
 
   useEffect(() => {
@@ -1043,6 +1053,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       });
       setAnalysis(res.data);
       setEditingStrategy(false);
+      setReviewStep('summary');
     } catch (e) {
       console.error(e);
     } finally {
@@ -1065,6 +1076,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       notes: analysis?.notes || '',
     });
     setEditingStrategy(true);
+    setReviewStep('entry');
   };
 
   const applyReviewTemplate = (templateId) => {
@@ -1084,6 +1096,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       notes: buildReviewTemplate(templateId, trade, analysis),
     });
     setEditingStrategy(true);
+    setReviewStep('journal');
   };
 
   // ── Tag handlers ──────────────────────────────────────────────────────────
@@ -1376,7 +1389,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             ))}
           </div>
 
-          <div style={{ padding: '6px 20px 20px' }} role="tabpanel" id="td-panel" aria-labelledby={`td-tab-${tab}`}>
+          <div className="td-panel-content" style={{ padding: '6px 20px 20px' }} role="tabpanel" id="td-panel" aria-labelledby={`td-tab-${tab}`}>
 
             {/* ── Stats tab ─────────────────────────────────────────────── */}
             {tab === 'Stats' && (
@@ -1543,37 +1556,65 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         <Pencil size={13} /> {(analysis?.notes || analysis?.entry_reason || analysis?.exit_reason || analysis?.mistakes) ? 'Edit review' : 'Start blank review'}
                       </button>
                     ) : (
-                      <>
+                      <div className="trade-review-desktop-edit-actions">
                         <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary btn-sm">
                           {savingStrategy ? 'Saving…' : 'Save review'}
                         </button>
                         <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost btn-sm">Cancel</button>
-                      </>
+                      </div>
                     )}
                   </div>
                 </div>
 
-                <ReviewTemplateShelf
-                  hasNote={Boolean((editingStrategy ? strategyForm?.notes : analysis?.notes)?.trim?.())}
-                  onUseTemplate={applyReviewTemplate}
-                />
+                <div className="trade-review-mobile-steps" role="tablist" aria-label="Quick review steps">
+                  {MOBILE_REVIEW_STEPS.map(step => {
+                    const values = editingStrategy ? strategyForm : (analysis || {});
+                    const complete = step.field
+                      ? Boolean(String(values?.[step.field] || '').trim())
+                      : reviewCompletion(values?.entry_reason, values?.exit_reason, values?.mistakes, values?.notes) === 4;
+                    return (
+                      <button
+                        key={step.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={reviewStep === step.id}
+                        className={`trade-review-mobile-step-btn ${reviewStep === step.id ? 'active' : ''} ${complete ? 'complete' : ''}`}
+                        onClick={() => setReviewStep(step.id)}
+                      >
+                        {complete && <CheckCircle2 size={12} />}
+                        <span>{step.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
 
-                <div className="trade-review-workspace-grid">
-                  <TradeJournalNote
-                    value={editingStrategy ? strategyForm?.notes : analysis?.notes}
-                    editing={editingStrategy}
-                    onChange={value => setStrategyForm(prev => ({ ...prev, notes: value }))}
-                  />
-                  <TradeReviewSummary
-                    trade={trade}
-                    notes={editingStrategy ? strategyForm?.notes : analysis?.notes}
-                    entryReason={editingStrategy ? strategyForm.entry_reason : analysis?.entry_reason}
-                    exitReason={editingStrategy ? strategyForm.exit_reason : analysis?.exit_reason}
-                    mistakes={editingStrategy ? strategyForm.mistakes : analysis?.mistakes}
+                <div className={`trade-review-mobile-step ${reviewStep === 'journal' ? 'active' : ''}`} data-review-step="journal">
+                  <ReviewTemplateShelf
+                    hasNote={Boolean((editingStrategy ? strategyForm?.notes : analysis?.notes)?.trim?.())}
+                    onUseTemplate={applyReviewTemplate}
                   />
                 </div>
 
-                <section className="trade-review-structured">
+                <div className="trade-review-workspace-grid">
+                  <div className={`trade-review-mobile-step ${reviewStep === 'journal' ? 'active' : ''}`} data-review-step="journal">
+                    <TradeJournalNote
+                      value={editingStrategy ? strategyForm?.notes : analysis?.notes}
+                      editing={editingStrategy}
+                      onChange={value => setStrategyForm(prev => ({ ...prev, notes: value }))}
+                    />
+                  </div>
+                  <div className={`trade-review-mobile-step ${reviewStep === 'summary' ? 'active' : ''}`} data-review-step="summary">
+                    <TradeReviewSummary
+                      trade={trade}
+                      notes={editingStrategy ? strategyForm?.notes : analysis?.notes}
+                      entryReason={editingStrategy ? strategyForm.entry_reason : analysis?.entry_reason}
+                      exitReason={editingStrategy ? strategyForm.exit_reason : analysis?.exit_reason}
+                      mistakes={editingStrategy ? strategyForm.mistakes : analysis?.mistakes}
+                    />
+                  </div>
+                </div>
+
+                <section className={`trade-review-structured ${['entry', 'exit', 'improve'].includes(reviewStep) ? 'mobile-review-active' : ''}`}>
                   <div className="trade-review-structured-head">
                     <div>
                       <span className="trade-review-eyebrow">Structured analytics</span>
@@ -1585,35 +1626,41 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
                   {editingStrategy ? (
                     <div className="trade-review-editor">
-                      <QuickPickGroup
-                        title="Entry"
-                        subtitle="What justified the entry?"
-                        suggestions={ENTRY_REVIEW_SUGGESTIONS}
-                        value={strategyForm.entry_reason}
-                        onToggle={item => handleReviewSuggestion('entry_reason', item)}
-                        tone="entry"
-                      />
-                      <EditTextarea label="Entry notes" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
+                      <div className={`trade-review-mobile-step ${reviewStep === 'entry' ? 'active' : ''}`} data-review-step="entry">
+                        <QuickPickGroup
+                          title="Entry"
+                          subtitle="What justified the entry?"
+                          suggestions={ENTRY_REVIEW_SUGGESTIONS}
+                          value={strategyForm.entry_reason}
+                          onToggle={item => handleReviewSuggestion('entry_reason', item)}
+                          tone="entry"
+                        />
+                        <EditTextarea label="Entry notes" value={strategyForm.entry_reason} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
+                      </div>
 
-                      <QuickPickGroup
-                        title="Exit"
-                        subtitle="How did you manage or close the trade?"
-                        suggestions={EXIT_REVIEW_SUGGESTIONS}
-                        value={strategyForm.exit_reason}
-                        onToggle={item => handleReviewSuggestion('exit_reason', item)}
-                        tone="exit"
-                      />
-                      <EditTextarea label="Exit notes" value={strategyForm.exit_reason} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
+                      <div className={`trade-review-mobile-step ${reviewStep === 'exit' ? 'active' : ''}`} data-review-step="exit">
+                        <QuickPickGroup
+                          title="Exit"
+                          subtitle="How did you manage or close the trade?"
+                          suggestions={EXIT_REVIEW_SUGGESTIONS}
+                          value={strategyForm.exit_reason}
+                          onToggle={item => handleReviewSuggestion('exit_reason', item)}
+                          tone="exit"
+                        />
+                        <EditTextarea label="Exit notes" value={strategyForm.exit_reason} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
+                      </div>
 
-                      <QuickPickGroup
-                        title="Mistake / improvement"
-                        subtitle="What should change next time?"
-                        suggestions={MISTAKE_REVIEW_SUGGESTIONS}
-                        value={strategyForm.mistakes}
-                        onToggle={item => handleReviewSuggestion('mistakes', item)}
-                        tone="mistake"
-                      />
-                      <EditTextarea label="Mistake / improvement notes" value={strategyForm.mistakes} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
+                      <div className={`trade-review-mobile-step ${reviewStep === 'improve' ? 'active' : ''}`} data-review-step="improve">
+                        <QuickPickGroup
+                          title="Mistake / improvement"
+                          subtitle="What should change next time?"
+                          suggestions={MISTAKE_REVIEW_SUGGESTIONS}
+                          value={strategyForm.mistakes}
+                          onToggle={item => handleReviewSuggestion('mistakes', item)}
+                          tone="mistake"
+                        />
+                        <EditTextarea label="Mistake / improvement notes" value={strategyForm.mistakes} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
+                      </div>
                     </div>
                   ) : (
                     <div className="trade-review-readonly">
@@ -1625,15 +1672,15 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       )}
 
                       <div className="trade-review-note-grid">
-                        <article>
+                        <article className={`trade-review-mobile-step ${reviewStep === 'entry' ? 'active' : ''}`} data-review-step="entry">
                           <div className="trade-review-note-title"><Target size={15} /> Entry</div>
                           <div className="trade-review-note-copy">{analysis?.entry_reason || 'Not documented yet.'}</div>
                         </article>
-                        <article>
+                        <article className={`trade-review-mobile-step ${reviewStep === 'exit' ? 'active' : ''}`} data-review-step="exit">
                           <div className="trade-review-note-title"><CheckCircle2 size={15} /> Exit</div>
                           <div className="trade-review-note-copy">{analysis?.exit_reason || 'Not documented yet.'}</div>
                         </article>
-                        <article className={analysis?.mistakes ? 'has-mistake' : ''}>
+                        <article className={`trade-review-mobile-step ${reviewStep === 'improve' ? 'active' : ''} ${analysis?.mistakes ? 'has-mistake' : ''}`} data-review-step="improve">
                           <div className="trade-review-note-title"><AlertTriangle size={15} /> Mistake / improvement</div>
                           <div className="trade-review-note-copy">{analysis?.mistakes || 'No improvement note documented yet.'}</div>
                         </article>
@@ -1647,6 +1694,15 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                     </div>
                   )}
                 </section>
+
+                {editingStrategy && (
+                  <div className="trade-review-mobile-savebar">
+                    <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost">Cancel</button>
+                    <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary">
+                      {savingStrategy ? 'Saving…' : 'Save review'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             {/* ── Tags tab ──────────────────────────────────────────────── */}
