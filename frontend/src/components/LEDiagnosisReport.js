@@ -139,6 +139,118 @@ function RuleMatrix({ rows }) {
   );
 }
 
+
+function stageTone(stage) {
+  if (stage === 'VALIDATED') return 'pos';
+  if (stage === 'NOT_VALIDATED') return 'neg';
+  if (stage === 'CANDIDATE') return 'caution';
+  return '';
+}
+
+function LearningEdgesTable({ rows }) {
+  if (!rows?.length) return (
+    <div className="empty">
+      No user-confirmed LE setup has enough labeled history to evaluate yet.
+    </div>
+  );
+
+  return (
+    <div className="scroll-x">
+      <table style={{ minWidth: 1080 }}>
+        <thead>
+          <tr>
+            <th>Setup</th>
+            <th>Stage</th>
+            <th className="num">Trades</th>
+            <th className="num">Days</th>
+            <th className="num">Net P&amp;L</th>
+            <th className="num">Avg</th>
+            <th className="num">PF</th>
+            <th className="num">Early P&amp;L</th>
+            <th className="num">Recent P&amp;L</th>
+            <th>Validation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => (
+            <tr key={row.id}>
+              <td style={{ fontWeight: 700 }}>{row.label}</td>
+              <td>
+                <span className={`status-pill ${stageTone(row.stage)}`}>
+                  {String(row.stage || '').replaceAll('_', ' ')}
+                </span>
+              </td>
+              <td className="num">{row.overall?.trades || 0}</td>
+              <td className="num">{row.overall?.trading_days || 0}</td>
+              <td className={`num ${tone(row.overall?.net_pnl)}`} style={{ fontWeight: 700 }}>
+                {fmtMoney(row.overall?.net_pnl)}
+              </td>
+              <td className={`num ${tone(row.overall?.avg_pnl)}`}>
+                {fmtMoney(row.overall?.avg_pnl)}
+              </td>
+              <td className="num">{fmtPf(row.overall?.profit_factor)}</td>
+              <td className={`num ${tone(row.early_sample?.net_pnl)}`}>
+                {fmtMoney(row.early_sample?.net_pnl)}
+              </td>
+              <td className={`num ${tone(row.recent_sample?.net_pnl)}`}>
+                {fmtMoney(row.recent_sample?.net_pnl)}
+              </td>
+              <td className="text-muted" style={{ minWidth: 270 }}>{row.reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DetectorCalibrationTable({ rows }) {
+  if (!rows?.length) return (
+    <div className="empty">
+      No manual rule labels are available yet for detector calibration.
+    </div>
+  );
+
+  return (
+    <div className="scroll-x">
+      <table style={{ minWidth: 980 }}>
+        <thead>
+          <tr>
+            <th>Detector</th>
+            <th>Priority</th>
+            <th className="num">Labels</th>
+            <th className="num">Agreements</th>
+            <th className="num">Conflicts</th>
+            <th className="num">Unknown resolved</th>
+            <th className="num">Agreement %</th>
+            <th>Why it matters</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => (
+            <tr key={row.id}>
+              <td style={{ fontWeight: 700 }}>{row.label}</td>
+              <td>
+                <span className={`status-pill ${row.priority === 'HIGH' ? 'neg' : row.priority === 'LOW' ? 'pos' : 'caution'}`}>
+                  {row.priority}
+                </span>
+              </td>
+              <td className="num">{row.labeled}</td>
+              <td className="num">{row.system_agreements}</td>
+              <td className="num">{row.system_conflicts}</td>
+              <td className="num">{row.system_unknown_resolved}</td>
+              <td className="num">
+                {row.agreement_rate_pct == null ? '—' : `${row.agreement_rate_pct}%`}
+              </td>
+              <td className="text-muted" style={{ minWidth: 280 }}>{row.priority_reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function RecentAudit({ rows }) {
   if (!rows?.length) return <div className="empty">No audited trades yet.</div>;
   return (
@@ -264,6 +376,7 @@ export default function LEDiagnosisReport({ accountId, dateFrom, dateTo }) {
   const edge = data.most_profitable_cohort;
   const leak = data.biggest_verified_leak;
   const manualEvidence = data.manual_evidence || {};
+  const learning = data.learning_core || {};
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
@@ -330,6 +443,12 @@ export default function LEDiagnosisReport({ accountId, dateFrom, dateTo }) {
             read: `${manualEvidence.override_count || 0} authoritative result(s) · ${manualEvidence.conflict_count || 0} conflict(s) preserved`,
           },
           {
+            label: 'Validated LE edges',
+            value: learning.validated_setup_count || 0,
+            met: (learning.validated_setup_count || 0) > 0,
+            read: `${learning.high_priority_detector_count || 0} high-priority detector gap(s)`,
+          },
+          {
             label: 'Most profitable cohort',
             value: edge ? fmtMoney(edge.net_pnl) : '—',
             met: Boolean(edge),
@@ -370,6 +489,29 @@ export default function LEDiagnosisReport({ accountId, dateFrom, dateTo }) {
           sub="Manual setup tags are treated as authoritative user evidence. Performance is grouped exactly by the setup label you applied."
         />
         <CohortTable rows={data.user_confirmed_setups} />
+      </section>
+
+
+      <section className="card">
+        <PanelHead
+          title="LE Learning Core"
+          sub="Ground-truth manual tags are used to validate edge and calibrate detectors. No rule is auto-promoted from in-sample P&L alone."
+        />
+        <div style={{ padding: '0 18px 18px' }}>
+          <div className="notice" style={{ marginBottom: 14 }}>
+            <ShieldCheck size={16} />
+            <span>{learning.headline || 'Learning core is collecting evidence.'}</span>
+          </div>
+          <LearningEdgesTable rows={learning.setup_edges} />
+        </div>
+      </section>
+
+      <section className="card">
+        <PanelHead
+          title="LE Detector Calibration"
+          sub="Where automated compliance disagrees with, or cannot resolve, your authoritative manual LE labels."
+        />
+        <DetectorCalibrationTable rows={learning.detector_calibration} />
       </section>
 
       <section className="card">
@@ -423,7 +565,7 @@ export default function LEDiagnosisReport({ accountId, dateFrom, dateTo }) {
 
       <div className="notice" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <Info size={16} />
-        <span>{data.note}</span>
+        <span>{data.note} {learning.note || ''}</span>
       </div>
     </div>
   );
