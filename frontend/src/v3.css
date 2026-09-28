@@ -368,8 +368,122 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-wk .c { font-size: 11px; color: var(--text-tertiary); }
 
 /* ---------- the session on the clock (Review) ---------- */
-.v3-session { position: relative; height: 210px; margin-top: 8px; cursor: crosshair; }
-.v3-session svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.v3-session-wrap { margin-top: 8px; }
+.v3-session-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--divider-soft);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-panel) 92%, transparent);
+}
+.v3-session-summary > span {
+  min-width: 0;
+  padding: 9px 12px 8px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-right: 1px solid var(--divider-soft);
+}
+.v3-session-summary > span:last-child { border-right: 0; }
+.v3-session-summary small {
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.v3-session-summary b {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.015em;
+}
+.v3-session {
+  position: relative;
+  height: 230px;
+  cursor: crosshair;
+  border: 1px solid var(--divider-soft);
+  border-radius: 0 0 12px 12px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-panel) 88%, transparent), transparent 72%),
+    var(--surface-page);
+}
+.v3-session svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: hidden; }
+.v3-session-zone { opacity: 0.055; }
+.v3-session-zone.prime { fill: var(--result-pos); opacity: 0.065; }
+.v3-session-zone.chop { fill: var(--caution); opacity: 0.05; }
+.v3-session-zone.afternoon { fill: var(--accent-line); opacity: 0.035; }
+.v3-session-zone.hard-close { fill: var(--result-neg); opacity: 0.045; }
+.v3-session-vgrid,
+.v3-session-hgrid {
+  stroke: var(--divider-soft);
+  stroke-width: 1;
+  opacity: 0.72;
+}
+.v3-session-zero {
+  stroke: var(--divider);
+  stroke-width: 1.2;
+  opacity: 0.95;
+}
+.v3-session-peak-line {
+  stroke: var(--text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 5 5;
+  opacity: 0.34;
+}
+.v3-session-zone-label {
+  position: absolute;
+  top: 7px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  color: var(--text-tertiary);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+.v3-session-zone-label.prime { color: var(--result-pos); }
+.v3-session-zone-label.chop { color: var(--caution); }
+.v3-session-zone-label.hard-close { color: var(--result-neg); }
+.v3-session-x-label,
+.v3-session-y-label {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.v3-session-x-label {
+  bottom: 7px;
+  transform: translateX(-50%);
+}
+.v3-session-x-label.edge { transform: translateX(-100%); padding-right: 4px; }
+.v3-session-y-label {
+  left: 5px;
+  transform: translateY(-50%);
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface-page) 82%, transparent);
+}
+.v3-session-hover-guide {
+  position: absolute;
+  z-index: 3;
+  top: 24px;
+  bottom: 30px;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--text-secondary);
+  opacity: 0.3;
+  pointer-events: none;
+}
+.v3-session-tipbox { min-width: 190px; }
 .v3-tl-lab { font-size: 10.5px; fill: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 
 /* ---------- range picker ---------- */
@@ -425,13 +539,22 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 
 /* ---------- Review ---------- */
 .v3-daymark {
-  position: absolute; border: 0; padding: 0; border-radius: 50%; cursor: pointer;
+  position: absolute;
+  z-index: 4;
+  border: 2px solid var(--surface-page);
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
   transform: translate(-50%, -50%);
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.26);
   transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.25, 1), box-shadow 0.16s ease;
 }
-.v3-daymark:hover, .v3-daymark:focus-visible {
-  transform: translate(-50%, -50%) scale(1.7);
-  box-shadow: 0 0 0 4px var(--accent-soft); outline: none;
+.v3-daymark:hover,
+.v3-daymark:focus-visible,
+.v3-daymark.is-active {
+  transform: translate(-50%, -50%) scale(1.45);
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 4px 10px rgba(0, 0, 0, 0.32);
+  outline: none;
 }
 .v3-daygrade {
   font-family: var(--font-display); font-weight: 700; font-size: 21px; line-height: 1;
@@ -6720,18 +6843,46 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     line-height: 1.45;
   }
 
+  .day-review-page .v3-session-wrap {
+    margin-top: 4px;
+  }
+  .day-review-page .v3-session-summary > span {
+    padding: 7px 8px 6px;
+    display: block;
+  }
+  .day-review-page .v3-session-summary small,
+  .day-review-page .v3-session-summary b {
+    display: block;
+  }
+  .day-review-page .v3-session-summary small {
+    font-size: 7.5px;
+    margin-bottom: 3px;
+  }
+  .day-review-page .v3-session-summary b {
+    font-size: 11.5px;
+  }
   .day-review-page .v3-session {
-    height: 154px;
-    margin-top: 2px;
+    height: 182px;
     touch-action: pan-y;
+  }
+  .day-review-page .v3-session-zone-label {
+    top: 6px;
+    font-size: 6.8px;
+    letter-spacing: 0.08em;
+  }
+  .day-review-page .v3-session-zone-label.afternoon,
+  .day-review-page .v3-session-zone-label.hard-close {
+    display: none;
+  }
+  .day-review-page .v3-session-x-label,
+  .day-review-page .v3-session-y-label {
+    font-size: 7.5px;
+  }
+  .day-review-page .v3-session-y-label {
+    left: 3px;
   }
   .day-review-page .v3-tl-lab {
     font-size: 9.5px;
-  }
-  .day-review-page .v3-hour-11,
-  .day-review-page .v3-hour-13,
-  .day-review-page .v3-hour-15 {
-    display: none;
   }
   .day-review-page .v3-daymark {
     min-width: 9px;

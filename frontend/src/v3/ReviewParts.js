@@ -46,18 +46,28 @@ export function DayCurve({ trades, onPick }) {
   }, [trades]);
 
   const W = 1000;
-  const H = 210;
-  const PAD = 26;
+  const H = 230;
+  const PLOT_TOP = 24;
+  const PLOT_BOTTOM = H - 30;
 
   const geom = useMemo(() => {
     if (!marks.length) return null;
+
     const vals = marks.map((m) => m.cum).concat([0]);
-    const lo = Math.min(...vals);
-    const hi = Math.max(...vals);
-    const span = (hi - lo) || 1;
-    const X = (hourFrac) => ((hourFrac - OPEN) / (CLOSE - OPEN)) * W;
-    const Y = (v) => H - PAD - ((v - lo) / span) * (H - PAD * 2);
-    // a step line: the balance holds until the next trade closes it
+    const rawLo = Math.min(...vals);
+    const rawHi = Math.max(...vals);
+    const rawSpan = Math.max(1, rawHi - rawLo);
+    const margin = rawSpan * 0.12;
+    const lo = rawLo < 0 ? rawLo - margin : 0;
+    const hi = rawHi > 0 ? rawHi + margin : 0;
+    const span = Math.max(1, hi - lo);
+
+    const X = (hourFrac) => {
+      const pct = (hourFrac - OPEN) / (CLOSE - OPEN);
+      return Math.max(0, Math.min(W, pct * W));
+    };
+    const Y = (v) => PLOT_BOTTOM - ((v - lo) / span) * (PLOT_BOTTOM - PLOT_TOP);
+
     let d = `M0 ${Y(0).toFixed(1)}`;
     let prev = 0;
     marks.forEach((m) => {
@@ -65,76 +75,243 @@ export function DayCurve({ trades, onPick }) {
       prev = m.cum;
     });
     d += ` L${W} ${Y(prev).toFixed(1)}`;
-    const area = `${d} L${W} ${H} L0 ${H} Z`;
-    return { X, Y, d, area, zero: Y(0), final: prev };
+    const area = `${d} L${W} ${PLOT_BOTTOM} L0 ${PLOT_BOTTOM} Z`;
+
+    const highWater = Math.max(0, ...marks.map((m) => m.cum));
+    const lowWater = Math.min(0, ...marks.map((m) => m.cum));
+    const giveback = Math.max(0, highWater - prev);
+
+    const candidateTicks = lo < 0 && hi > 0
+      ? [rawHi, 0, rawLo]
+      : hi > 0
+        ? [rawHi, rawHi / 2, 0]
+        : [0, rawLo / 2, rawLo];
+
+    const ticks = candidateTicks.filter((value, index, arr) => (
+      arr.findIndex((other) => Math.abs(other - value) < 0.01) === index
+    ));
+
+    return {
+      X,
+      Y,
+      d,
+      area,
+      zero: Y(0),
+      final: prev,
+      highWater,
+      lowWater,
+      giveback,
+      ticks,
+    };
   }, [marks]);
 
-  if (!geom) return <div className="v3-empty">No timed executions on this day, so the session cannot be drawn.</div>;
+  if (!geom) {
+    return <div className="v3-empty">No timed executions on this day, so the session cannot be drawn.</div>;
+  }
 
-  const peak = Math.max(1, ...marks.map((m) => Math.abs(m.pnl)));
+  const zones = [
+    { label: 'PRIME', start: 9 + 40 / 60, end: 11.5, tone: 'prime' },
+    { label: 'CHOP', start: 11.5, end: 13.5, tone: 'chop' },
+    { label: 'AFTERNOON', start: 13.5, end: 15, tone: 'afternoon' },
+    { label: 'HARD CLOSE', start: 15, end: 15.75, tone: 'hard-close' },
+  ];
+  const xTicks = [10, 12, 14, 16];
+  const peakTradePnl = Math.max(1, ...marks.map((m) => Math.abs(m.pnl)));
   const up = geom.final >= 0;
+  const active = hover == null ? null : marks[hover];
+
+  const clock = (hourFrac) => {
+    let hour = Math.floor(hourFrac);
+    let minute = Math.round((hourFrac - hour) * 60);
+    if (minute === 60) {
+      hour += 1;
+      minute = 0;
+    }
+    const meridiem = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = hour % 12 || 12;
+    return `${displayHour}:${String(minute).padStart(2, '0')} ${meridiem} ET`;
+  };
 
   return (
-    <div className="v3-session" onPointerLeave={() => setHover(null)}>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="v3day" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={up ? 'var(--result-pos)' : 'var(--result-neg)'} stopOpacity="0.2" />
-            <stop offset="100%" stopColor={up ? 'var(--result-pos)' : 'var(--result-neg)'} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {/* the hours */}
-        {[10, 11, 12, 13, 14, 15].map((h) => (
-          <g key={h} className={`v3-hour v3-hour-${h}`}>
-            <line x1={geom.X(h)} y1="0" x2={geom.X(h)} y2={H} stroke="var(--divider-soft)" strokeWidth="1"
-              vectorEffect="non-scaling-stroke" />
-            <text className="v3-tl-lab" x={geom.X(h) + 5} y="12">{h}:00</text>
-          </g>
-        ))}
-        <line x1="0" y1={geom.zero} x2={W} y2={geom.zero} stroke="var(--divider)" strokeWidth="1"
-          vectorEffect="non-scaling-stroke" />
-        <path d={geom.area} fill="url(#v3day)" />
-        <path d={geom.d} fill="none" stroke={up ? 'var(--result-pos)' : 'var(--result-neg)'}
-          strokeWidth="1.8" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-      </svg>
+    <div className="v3-session-wrap">
+      <div className="v3-session-summary" aria-label="Session P and L landmarks">
+        <span>
+          <small>Peak</small>
+          <b className={tone(geom.highWater)}>{money(geom.highWater)}</b>
+        </span>
+        <span>
+          <small>Giveback</small>
+          <b className={geom.giveback > 0 ? 'v3-neg' : 'v3-flat'}>
+            {geom.giveback > 0 ? money(-geom.giveback) : '$0'}
+          </b>
+        </span>
+        <span>
+          <small>Close</small>
+          <b className={tone(geom.final)}>{money2(geom.final)}</b>
+        </span>
+      </div>
 
-      {/* one mark per completed trade, booked at its final exit time */}
-      {marks.map((m, i) => {
-        const leftPct = (geom.X(m.at) / W) * 100;
-        const topPct = (geom.Y(m.cum) / H) * 100;
-        const size = 5 + (Math.abs(m.pnl) / peak) * 7;
-        return (
-          <button
-            key={i}
-            type="button"
-            className="v3-daymark"
-            style={{
-              left: `${leftPct}%`, top: `${topPct}%`, width: size, height: size,
-              background: m.pnl >= 0 ? 'var(--result-pos)' : 'var(--result-neg)',
-            }}
-            aria-label={`${m.trade.ticker} at ${m.at ? `${Math.floor(m.at)}:${String(Math.round((m.at % 1) * 60)).padStart(2, '0')}` : ''}, ${money2(m.pnl)}`}
-            onPointerEnter={() => setHover(i)}
-            onFocus={() => setHover(i)}
-            onBlur={() => setHover(null)}
-            onClick={() => onPick && onPick(m.trade)}
+      <div
+        className="v3-session"
+        aria-label="Realized P and L session chart"
+        onPointerLeave={() => setHover(null)}
+      >
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="v3day" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={up ? 'var(--result-pos)' : 'var(--result-neg)'} stopOpacity="0.22" />
+              <stop offset="100%" stopColor={up ? 'var(--result-pos)' : 'var(--result-neg)'} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+
+          {zones.map((zone) => (
+            <rect
+              key={zone.label}
+              className={`v3-session-zone ${zone.tone}`}
+              x={geom.X(zone.start)}
+              y="0"
+              width={Math.max(0, geom.X(zone.end) - geom.X(zone.start))}
+              height={H}
+            />
+          ))}
+
+          {xTicks.map((h) => (
+            <line
+              key={h}
+              className="v3-session-vgrid"
+              x1={geom.X(h)}
+              y1="0"
+              x2={geom.X(h)}
+              y2={H}
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+
+          {geom.ticks.map((tick) => (
+            <line
+              key={tick}
+              className={Math.abs(tick) < 0.01 ? 'v3-session-zero' : 'v3-session-hgrid'}
+              x1="0"
+              y1={geom.Y(tick)}
+              x2={W}
+              y2={geom.Y(tick)}
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+
+          {geom.highWater > 0 && geom.giveback > 0 && (
+            <line
+              className="v3-session-peak-line"
+              x1="0"
+              y1={geom.Y(geom.highWater)}
+              x2={W}
+              y2={geom.Y(geom.highWater)}
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+
+          <path d={geom.area} fill="url(#v3day)" />
+          <path
+            d={geom.d}
+            fill="none"
+            stroke={up ? 'var(--result-pos)' : 'var(--result-neg)'}
+            strokeWidth="2"
+            vectorEffect="non-scaling-stroke"
+            strokeLinejoin="round"
           />
-        );
-      })}
+        </svg>
 
-      {hover != null && (
-        <div
-          className="v3-tipbox"
-          style={{
-            left: (geom.X(marks[hover].at) / W) * 100 > 62 ? undefined : `calc(${(geom.X(marks[hover].at) / W) * 100}% + 14px)`,
-            right: (geom.X(marks[hover].at) / W) * 100 > 62 ? `calc(${100 - (geom.X(marks[hover].at) / W) * 100}% + 14px)` : undefined,
-            top: 8,
-          }}
-        >
-          <div className="d">{marks[hover].trade.ticker}</div>
-          <div className={`v ${tone(marks[hover].pnl)}`}>{money2(marks[hover].pnl)}</div>
-          <div className="r">running {money(marks[hover].cum)}</div>
-        </div>
-      )}
+        {zones.map((zone) => {
+          const left = ((geom.X(zone.start) + geom.X(zone.end)) / 2 / W) * 100;
+          return (
+            <span
+              key={zone.label}
+              className={`v3-session-zone-label ${zone.tone}`}
+              style={{ left: `${left}%` }}
+            >
+              {zone.label}
+            </span>
+          );
+        })}
+
+        {xTicks.map((h) => (
+          <span
+            key={h}
+            className={`v3-session-x-label${h === 16 ? ' edge' : ''}`}
+            style={{ left: `${(geom.X(h) / W) * 100}%` }}
+          >
+            {h === 16 ? '16:00' : `${h}:00`}
+          </span>
+        ))}
+
+        {geom.ticks.map((tick) => (
+          <span
+            key={`y-${tick}`}
+            className="v3-session-y-label"
+            style={{ top: `${(geom.Y(tick) / H) * 100}%` }}
+          >
+            {money(tick)}
+          </span>
+        ))}
+
+        {active && (
+          <span
+            className="v3-session-hover-guide"
+            style={{ left: `${(geom.X(active.at) / W) * 100}%` }}
+            aria-hidden="true"
+          />
+        )}
+
+        {marks.map((m, i) => {
+          const leftPct = (geom.X(m.at) / W) * 100;
+          const topPct = (geom.Y(m.cum) / H) * 100;
+          const size = 8 + (Math.abs(m.pnl) / peakTradePnl) * 8;
+          const side = m.trade.side === 'LONG' ? 'Long' : m.trade.side === 'SHORT' ? 'Short' : m.trade.side;
+          return (
+            <button
+              key={m.trade.id || m.trade.trade_group || i}
+              type="button"
+              className={`v3-daymark${hover === i ? ' is-active' : ''}`}
+              style={{
+                left: `${leftPct}%`,
+                top: `${topPct}%`,
+                width: size,
+                height: size,
+                background: m.pnl >= 0 ? 'var(--result-pos)' : 'var(--result-neg)',
+              }}
+              aria-label={`${m.trade.ticker} ${side || ''} closed ${clock(m.at)}, trade ${money2(m.pnl)}, running ${money2(m.cum)}`}
+              onPointerEnter={() => setHover(i)}
+              onFocus={() => setHover(i)}
+              onBlur={() => setHover(null)}
+              onClick={() => onPick && onPick(m.trade)}
+            />
+          );
+        })}
+
+        {active && (
+          <div
+            className="v3-tipbox v3-session-tipbox"
+            style={{
+              left: (geom.X(active.at) / W) * 100 > 62
+                ? undefined
+                : `calc(${(geom.X(active.at) / W) * 100}% + 14px)`,
+              right: (geom.X(active.at) / W) * 100 > 62
+                ? `calc(${100 - (geom.X(active.at) / W) * 100}% + 14px)`
+                : undefined,
+              top: 30,
+            }}
+          >
+            <div className="d">
+              {active.trade.ticker}
+              {active.trade.side ? ` · ${active.trade.side === 'LONG' ? 'Long' : active.trade.side === 'SHORT' ? 'Short' : active.trade.side}` : ''}
+              {' · '}{clock(active.at)}
+            </div>
+            <div className={`v ${tone(active.pnl)}`}>{money2(active.pnl)}</div>
+            <div className="r">Running {money2(active.cum)} · Held {tradeHoldLabel(active.trade)}</div>
+            {active.trade.strategy && <div className="r">{active.trade.strategy}</div>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
