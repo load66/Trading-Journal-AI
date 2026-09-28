@@ -318,6 +318,29 @@ test('refresh restores the current journal location instead of returning to Dash
   second.unmount();
 });
 
+test('Dashboard quick date ranges apply 7D, 30D, and YTD without opening the calendar', async () => {
+  await renderApp();
+
+  const quick = screen.getByRole('group', { name: 'Quick date ranges' });
+  expect(within(quick).getByRole('button', { name: 'Last 7 days' })).toBeVisible();
+  expect(within(quick).getByRole('button', { name: 'Last 30 days' })).toBeVisible();
+  expect(within(quick).getByRole('button', { name: 'Year to date' })).toBeVisible();
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const from = new Date(today);
+  from.setDate(today.getDate() - 6);
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  kpisApi.get.mockClear();
+  fireEvent.click(within(quick).getByRole('button', { name: 'Last 7 days' }));
+
+  await waitFor(() => expect(kpisApi.get).toHaveBeenCalledWith(
+    expect.objectContaining({ date_from: fmt(from), date_to: fmt(today) })
+  ));
+  expect(within(quick).getByRole('button', { name: 'Last 7 days' })).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('Brain opens from the header as a dialog and closes on Escape', async () => {
   await renderApp();
   const trigger = within(screen.getByRole('banner')).getByRole('button', { name: /Brain/ });
