@@ -275,6 +275,8 @@ beforeAll(() => {
 beforeEach(() => {
   __restoreMocks();
   sessionStorage.clear();
+  Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 1024 });
+  window.dispatchEvent(new Event('resize'));
 });
 
 async function renderApp() {
@@ -779,6 +781,36 @@ test('Stats planned risk is explicit and is sent with the saved trade analysis',
   await waitFor(() => expect(tradesApi.updateAnalysis).toHaveBeenCalled());
   const [, payload] = tradesApi.updateAnalysis.mock.calls.at(-1);
   expect(payload.risk_per_trade).toBe(150);
+});
+
+test('mobile Trade View uses compact paid-app tabs and keeps advanced tools on demand', async () => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 390 });
+
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+
+  const row = (await screen.findAllByText('TSLA'))[0].closest('tr');
+  fireEvent.click(row);
+
+  const mobile = await screen.findByLabelText('Mobile trade review');
+  const tabs = within(mobile).getByRole('tablist', { name: 'Mobile trade detail sections' });
+  expect(within(tabs).getAllByRole('tab').map(tab => tab.textContent.trim()))
+    .toEqual(['Overview', 'Review', 'Tags', 'Session']);
+  expect(within(mobile).getByText('Trade snapshot')).toBeVisible();
+  expect(within(mobile).getByText('Quality snapshot')).toBeVisible();
+
+  fireEvent.click(within(tabs).getByRole('tab', { name: 'Review' }));
+  expect(within(mobile).getByText('Strategy notes')).toBeVisible();
+  expect(within(mobile).getByText('Entry reason')).toBeVisible();
+
+  fireEvent.click(within(tabs).getByRole('tab', { name: 'Session' }));
+  expect(within(mobile).getByText('Executions')).toBeVisible();
+  const advanced = within(mobile).getByRole('button', { name: /Advanced trade editor/i });
+  expect(advanced).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.click(advanced);
+  expect(advanced).toHaveAttribute('aria-expanded', 'true');
+  expect(await screen.findByRole('tablist', { name: 'Trade review sections' })).toBeInTheDocument();
 });
 
 test('Trade View opens Trade Details with five tabs, back and previous/next', async () => {
