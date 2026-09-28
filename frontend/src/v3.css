@@ -6919,7 +6919,35 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-trade-cards { display: none; }
 .day-review-trade-sub-mobile { display: none; }
 
-@media (max-width: 600px) {
+/* Day Review owns its viewport: no child is allowed to widen the page. */
+.day-review-page {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+@supports (overflow: clip) {
+  .day-review-page { overflow-x: clip; }
+}
+.day-review-page > *,
+.day-review-page .card,
+.day-review-page .panel,
+.day-review-page .v3-hero,
+.day-review-page .v3-measures,
+.day-review-page .v3-sec-head,
+.day-review-page .v3-session-wrap,
+.day-review-page .v3-session-summary,
+.day-review-page .v3-session,
+.day-review-page .v3-cols,
+.day-review-page .v3-list,
+.day-review-page .v3-trade-cards,
+.day-review-page .v3-trade-card-shell,
+.day-review-page .v3-trade-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 768px) {
   .day-review-page {
     width: 100%;
     min-width: 0;
@@ -7102,9 +7130,12 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     column-gap: 0;
   }
   .day-review-page .v3-narr {
+    max-width: 100%;
     font-size: 14px;
     line-height: 1.7;
     margin-bottom: 13px;
+    overflow-wrap: anywhere;
+    word-break: normal;
   }
   .day-review-page .v3-narr-quiet {
     padding-top: 12px;
@@ -7119,19 +7150,38 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   }
 
   .day-review-page .v3-tabs {
-    margin: 0 -14px 16px;
-    padding: 0 14px 2px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    margin: 0 0 16px;
+    padding: 0 0 8px;
     gap: 6px;
+    overflow-x: visible;
+    flex-wrap: wrap;
+    scroll-snap-type: none;
+    overscroll-behavior-x: auto;
     border-bottom: 1px solid var(--divider-soft);
-    scroll-snap-type: x proximity;
-    overscroll-behavior-x: contain;
+  }
+  .day-review-page .v3-tabs::-webkit-scrollbar {
+    display: none;
   }
   .day-review-page .v3-tab {
+    width: 100%;
+    min-width: 0;
     min-height: 44px;
-    padding: 9px 12px;
-    border-radius: 7px 7px 0 0;
-    scroll-snap-align: start;
-    font-size: 12.5px;
+    margin: 0;
+    padding: 9px 8px;
+    border: 1px solid var(--divider-soft);
+    border-bottom-width: 2px;
+    border-radius: 7px;
+    scroll-snap-align: none;
+    white-space: normal;
+    line-height: 1.25;
+    text-align: center;
+    font-size: 12px;
+  }
+  .day-review-page .v3-tab:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
   .day-review-page .v3-list {
     column-count: 1 !important;
@@ -7237,8 +7287,8 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   }
   .day-review-page .v3-trade-card-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
     margin-top: 12px;
     padding-top: 10px;
     border-top: 1px solid var(--divider-soft);
@@ -7290,6 +7340,32 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     color: var(--text-secondary);
     font-size: 11.5px;
     line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  .day-review-page .v3-trade-card-pnl {
+    max-width: 48%;
+    overflow-wrap: anywhere;
+  }
+  .day-review-page .v3-chip,
+  .day-review-page .v3-list li,
+  .day-review-page .section-sub,
+  .day-review-page .v3-h-sub {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .day-review-page .v3-session-summary b {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .day-review-page .v3-session-tipbox {
+    min-width: 0;
+    max-width: calc(100% - 20px);
+  }
+  .day-review-page .v3-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   .day-review-page .day-review-r-chart {
