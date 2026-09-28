@@ -47,12 +47,12 @@ function Markdown({ text }) {
 }
 
 const SUGGESTIONS = [
-  'Diagnose my biggest trading leak',
+  'Audit my recent trades against the LE system',
+  'Which LE rule is costing me the most money?',
+  'Am I trading during Chop Hour?',
+  'Am I selling LE runners too early?',
   'Where am I losing the most money?',
   'What is my best performing strategy?',
-  'What time of day do I trade best?',
-  'Compare my longs vs shorts',
-  'Review my last 30 trading days',
 ];
 
 export default function Brain({ accountId, open: openProp, onOpenChange }) {
@@ -162,7 +162,7 @@ export default function Brain({ accountId, open: openProp, onOpenChange }) {
               <div className="brain-welcome">
                 <div className="brain-welcome-title">Ask your journal, not a generic chatbot.</div>
                 <div className="brain-welcome-copy">
-                  Brain can analyze your trades, P&amp;L, tickers, strategies, timing, hold time, management metrics, diary notes, and Day Reviews.
+                  Brain can analyze your trades, P&amp;L, LE rule compliance, tickers, strategies, timing, hold time, management metrics, diary notes, and Day Reviews.
                 </div>
                 <div className="brain-suggestions">
                   {SUGGESTIONS.map((s, i) => (
