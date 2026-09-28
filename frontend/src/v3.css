@@ -7193,3 +7193,181 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     font-size: 11px;
   }
 }
+
+
+/* ---------- premium dashboard hero controls ----------
+   Keep the headline, latest-session status, and controls visually distinct.
+   This prevents the mobile hero from becoming one crowded row of unrelated UI. */
+.v3-hero-compact {
+  padding-left: var(--v3-pad);
+  padding-right: var(--v3-pad);
+}
+.v3-hero-summary {
+  align-items: stretch;
+}
+.v3-hero-primary {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.v3-last-session-card {
+  min-width: 178px;
+  margin: 0;
+  padding: 13px 15px 12px;
+  align-self: flex-start;
+  text-align: left;
+  border: 1px solid color-mix(in srgb, var(--accent-line) 24%, var(--divider));
+  border-radius: 11px;
+  background:
+    linear-gradient(155deg, color-mix(in srgb, var(--accent-line) 7%, var(--surface-panel)), var(--surface-inset));
+  box-shadow: 0 14px 34px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.018);
+}
+.v3-last-session-card dt {
+  white-space: nowrap;
+}
+.v3-last-session-card dd {
+  margin-top: 7px;
+}
+.v3-last-session-card .when {
+  margin-top: 5px;
+}
+.v3-hero-toolbar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 17px;
+  padding-top: 14px;
+  border-top: 1px solid var(--divider-soft);
+}
+.v3-goals-button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  gap: 7px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface-control) 92%, var(--accent-line) 8%);
+}
+.v3-goals-button:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent-line) 28%, var(--divider));
+}
+.v3-goals-button[aria-pressed="true"] {
+  color: var(--accent-line);
+  border-color: var(--accent-line-soft);
+  background: var(--accent-soft);
+}
+.v3-range-slot {
+  min-width: 0;
+}
+
+@media (max-width: 600px) {
+  .v3-hero-compact {
+    padding: 18px var(--v3-pad) 15px;
+  }
+  .v3-hero-compact::after {
+    inset: -10% -35% auto 32%;
+    height: 220px;
+    opacity: .58;
+  }
+  .v3-hero-summary {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 112px;
+    gap: 12px !important;
+    align-items: end;
+  }
+  .v3-hero-primary {
+    min-width: 0;
+  }
+  .v3-hero-primary .v3-acct {
+    margin-bottom: 9px;
+    font-size: 9px;
+    letter-spacing: .15em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .v3-hero-primary .v3-hero-label {
+    font-size: 9.5px;
+    letter-spacing: .14em;
+  }
+  .v3-hero-compact .v3-money {
+    font-size: clamp(43px, 12.5vw, 54px);
+    line-height: .96;
+  }
+  .v3-hero-compact .v3-money-sub {
+    margin-top: 10px;
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+  .v3-last-session-card {
+    width: 112px;
+    min-width: 0;
+    padding: 11px 10px 10px;
+    border-radius: 10px;
+  }
+  .v3-last-session-card dt {
+    font-size: 8px;
+    letter-spacing: .11em;
+  }
+  .v3-last-session-card dd {
+    margin-top: 6px;
+    font-size: 19px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .v3-last-session-card .when {
+    margin-top: 5px;
+    font-size: 9px;
+  }
+  .v3-hero-toolbar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 12px;
+    align-items: center;
+  }
+  .v3-goals-button {
+    min-height: 42px;
+    padding-inline: 11px;
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  .v3-range-slot,
+  .v3-range-slot > * {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .v3-measures-dashboard {
+    border-top-color: color-mix(in srgb, var(--accent-line) 14%, var(--divider));
+    background: color-mix(in srgb, var(--accent-line) 4%, var(--divider-soft));
+  }
+  .v3-measures-dashboard .v3-m {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--surface-page) 97%, var(--accent-line) 3%), var(--surface-page));
+  }
+}
+
+@media (max-width: 380px) {
+  .v3-hero-summary {
+    grid-template-columns: minmax(0, 1fr) 104px;
+    gap: 9px !important;
+  }
+  .v3-last-session-card {
+    width: 104px;
+    padding-inline: 9px;
+  }
+  .v3-last-session-card dd {
+    font-size: 18px;
+  }
+  .v3-hero-toolbar {
+    gap: 6px;
+  }
+  .v3-goals-button {
+    padding-inline: 9px;
+  }
+}
