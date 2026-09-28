@@ -519,11 +519,19 @@ def summarize_le_compliance_snapshots(snapshots: list[dict]) -> dict:
     valid = [s for s in snapshots if isinstance(s, dict) and s.get("checks")]
     rule_stats: dict[str, dict] = {}
     classifications: dict[str, int] = {}
+    manual_evidence_trades = 0
+    manual_override_count = 0
+    manual_conflict_count = 0
 
     for snapshot in valid:
         classification = str(snapshot.get("classification") or "UNKNOWN")
         classifications[classification] = classifications.get(classification, 0) + 1
         pnl = float(snapshot.get("net_pnl") or 0)
+        manual = snapshot.get("manual_le_evidence") or {}
+        if manual.get("recognized_tags"):
+            manual_evidence_trades += 1
+        manual_override_count += int(manual.get("override_count") or 0)
+        manual_conflict_count += int(manual.get("conflict_count") or 0)
 
         for check in snapshot.get("checks") or []:
             rule_id = str(check.get("id") or "")
@@ -538,6 +546,8 @@ def summarize_le_compliance_snapshots(snapshots: list[dict]) -> dict:
                 "evaluated": 0,
                 "fail_net_pnl": 0.0,
                 "pass_net_pnl": 0.0,
+                "user_backed": 0,
+                "user_system_conflicts": 0,
             })
             status = _normalize_status(check.get("status"))
             row[status] += 1
@@ -547,6 +557,10 @@ def summarize_le_compliance_snapshots(snapshots: list[dict]) -> dict:
                 row["fail_net_pnl"] += pnl
             elif status == "pass":
                 row["pass_net_pnl"] += pnl
+            if check.get("manual_override"):
+                row["user_backed"] += 1
+            if check.get("conflict_with_system"):
+                row["user_system_conflicts"] += 1
 
     rows = []
     for row in rule_stats.values():
@@ -562,8 +576,15 @@ def summarize_le_compliance_snapshots(snapshots: list[dict]) -> dict:
         "compliance_version": LE_COMPLIANCE_VERSION,
         "audited_trades": len(valid),
         "classification_counts": classifications,
+        "manual_evidence": {
+            "trades": manual_evidence_trades,
+            "override_count": manual_override_count,
+            "conflict_count": manual_conflict_count,
+            "authoritative_source": "USER_MANUAL",
+        },
         "rule_stats": rows,
         "note": (
-            "P&L grouped by rule status is descriptive association only. It does not prove that a rule failure caused the P&L."
+            "Final rule status may include authoritative recognized manual LE tags. "
+            "P&L grouped by rule status is descriptive association only and does not prove causation."
         ),
     }
