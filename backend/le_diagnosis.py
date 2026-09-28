@@ -57,6 +57,8 @@ def _cohort_flags(snapshot: dict) -> dict[str, bool]:
     aligned_pass = (checks.get('ema_aligned') or {}).get('status') == 'pass'
     snug_pass = (checks.get('ema_snug') or {}).get('status') == 'pass'
     sign_pass = (checks.get('market_sign') or {}).get('status') == 'pass'
+    sign_fail = (checks.get('market_sign') or {}).get('status') == 'fail'
+    flag_pass = (checks.get('flag_forming') or {}).get('status') == 'pass'
     outside_chop = (checks.get('not_chop_hour') or {}).get('status') == 'pass'
 
     outside_day = level_pass and level_detail in {'PDH, PMH', 'PDL, PML'}
@@ -72,6 +74,8 @@ def _cohort_flags(snapshot: dict) -> dict[str, bool]:
         'level_trend_ema_sign': level_pass and trend_pass and aligned_pass and snug_pass and sign_pass,
         'outside_ema_sign': outside_day and snug_pass and sign_pass,
         'outside_ema_sign_no_chop': outside_day and snug_pass and sign_pass and outside_chop,
+        'fls_confirmed': level_pass and flag_pass and aligned_pass and sign_pass,
+        'flag_line_no_sign': level_pass and flag_pass and aligned_pass and sign_fail,
     }
 
 
@@ -81,6 +85,8 @@ COHORTS = (
     ('level_trend_ema', 'Level + established trend + EMA aligned + snug'),
     ('outside_ema_sign', 'Outside Day + EMA snug + Market Sign'),
     ('outside_ema_sign_no_chop', 'Outside Day + EMA snug + Market Sign + outside Chop Hour'),
+    ('fls_confirmed', 'Flag + Line + Sign confirmed'),
+    ('flag_line_no_sign', 'Flag + Line present, Sign failed'),
     ('level_trend_ema_sign', 'Level + established trend + EMA aligned + snug + Market Sign'),
     ('premarket_only', 'Premarket-only break — PMH/PML without PDH/PDL'),
     ('previous_day_only', 'Previous-day-only break — PDH/PDL'),

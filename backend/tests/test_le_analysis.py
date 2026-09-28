@@ -384,21 +384,40 @@ def test_market_sign_requires_spy_and_qqq_to_confirm_on_10m_8ema():
     assert ("mistake", "No Market Sign") not in tag_names(review)
 
 
-def test_market_sign_fails_when_spy_and_qqq_do_not_both_agree():
+def test_market_sign_fails_when_qqq_is_structurally_opposed_like_video_example():
     underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
-    spy = minute_run((2026, 9, 25), 9, 30, 30, lambda i: 100.0 + i * 0.1)
-    qqq = minute_run((2026, 9, 25), 9, 30, 30, lambda i: 100.0 - i * 0.1)
+    spy = market_bars(pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=102.0)
+    qqq = market_bars(pdh=100.0, pdl=95.0, pmh=101.0, pml=96.0, current=94.0)
     trade = base_trade("CALL", entry="08:47:04")
 
     review = review_context(trade, underlying, spy=spy, qqq=qqq)
     sign = review["evidence"]["market_sign"]
 
     assert sign["verified"] is True
-    assert sign["status"] == "mixed"
-    assert sign["spy"]["ema_aligned"] is True
+    assert sign["status"] == "failed"
+    assert sign["spy"]["sign_state"] == "confirmed"
     assert sign["qqq"]["ema_aligned"] is False
+    assert sign["qqq"]["level_state"] == "opposed"
+    assert sign["qqq"]["opposing_level_breaks"] == ["PDL", "PML"]
     assert review["evidence"]["entry_checks"]["market_sign"]["status"] == "fail"
     assert ("mistake", "No Market Sign") in tag_names(review)
+
+
+def test_market_sign_is_weak_when_ema_agrees_but_indexes_have_no_directional_level_break():
+    underlying = market_bars(pdh=100.0, pmh=101.0, current=102.0)
+    spy = market_bars(pdh=105.0, pdl=95.0, pmh=104.0, pml=96.0, current=102.0)
+    qqq = market_bars(pdh=105.0, pdl=95.0, pmh=104.0, pml=96.0, current=102.0)
+    trade = base_trade("CALL", entry="08:47:04")
+
+    review = review_context(trade, underlying, spy=spy, qqq=qqq)
+    sign = review["evidence"]["market_sign"]
+
+    assert sign["verified"] is True
+    assert sign["spy"]["ema_aligned"] is True
+    assert sign["spy"]["level_state"] == "neutral"
+    assert sign["spy"]["sign_state"] == "weak"
+    assert sign["status"] == "mixed"
+    assert review["evidence"]["entry_checks"]["market_sign"]["status"] == "fail"
 
 
 def test_market_sign_is_unverified_on_limited_iex_data():
