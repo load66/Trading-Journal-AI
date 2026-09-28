@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from le_learning import build_le_learning_core
+
 
 MIN_STABLE_SAMPLE = 8
 
@@ -325,8 +327,11 @@ def build_le_diagnosis(
             ),
         })
 
+    learning_core = build_le_learning_core(list(current_by_group.values()))
+
     return {
         'compliance_version': compliance_version,
+        'learning_core': learning_core,
         'total_trades': total,
         'audited_trades': audited,
         'missing_trades': max(0, total - audited),
