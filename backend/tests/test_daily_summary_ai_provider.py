@@ -340,3 +340,157 @@ def test_daily_auto_generation_limit_accepts_timezone_aware_timestamp():
         "2026-09-27T09:45:00-05:00",
         now=now,
     ) is True
+
+
+def test_session_path_analysis_matches_realized_chart_sequence_and_windows():
+    trades = [
+        {
+            "trade_group": "g1",
+            "ticker": "SPY",
+            "side": "LONG",
+            "net_pnl": 100.0,
+            "date": "2026-09-25",
+            "executions": [
+                {"action": "BOT", "qty": 1, "price": 2.0, "timestamp_utc": "2026-09-25T13:45:00Z"},
+                {"action": "SOLD", "qty": 1, "price": 3.0, "timestamp_utc": "2026-09-25T14:00:00Z"},
+            ],
+        },
+        {
+            "trade_group": "g2",
+            "ticker": "QQQ",
+            "side": "LONG",
+            "net_pnl": 200.0,
+            "date": "2026-09-25",
+            "executions": [
+                {"action": "BOT", "qty": 1, "price": 4.0, "timestamp_utc": "2026-09-25T15:30:00Z"},
+                {"action": "SOLD", "qty": 1, "price": 6.0, "timestamp_utc": "2026-09-25T16:00:00Z"},
+            ],
+        },
+        {
+            "trade_group": "g3",
+            "ticker": "IWM",
+            "side": "LONG",
+            "net_pnl": -50.0,
+            "date": "2026-09-25",
+            "executions": [
+                {"action": "BOT", "qty": 1, "price": 3.0, "timestamp_utc": "2026-09-25T17:30:00Z"},
+                {"action": "SOLD", "qty": 1, "price": 2.5, "timestamp_utc": "2026-09-25T18:00:00Z"},
+            ],
+        },
+        {
+            "trade_group": "g4",
+            "ticker": "SPY",
+            "side": "LONG",
+            "net_pnl": -100.0,
+            "date": "2026-09-25",
+            "executions": [
+                {"action": "BOT", "qty": 1, "price": 2.0, "timestamp_utc": "2026-09-25T19:00:00Z"},
+                {"action": "SOLD", "qty": 1, "price": 1.0, "timestamp_utc": "2026-09-25T19:15:00Z"},
+            ],
+        },
+    ]
+
+    path = daily_summary.build_session_path_analysis(trades)
+
+    assert path["basis"] == "realized_pnl_booked_at_final_exit"
+    assert path["timed_trades"] == 4
+    assert path["timing_coverage_pct"] == 100.0
+    assert path["chart_final_realized_pnl"] == 150.0
+    assert path["peak_realized_pnl"] == 300.0
+    assert path["giveback_from_positive_peak"] == 150.0
+    assert path["max_drawdown_from_high_water"] == 150.0
+    assert path["post_peak"] == {
+        "trade_count": 2,
+        "net_pnl": -150.0,
+        "wins": 0,
+        "losses": 2,
+    }
+    assert [p["cumulative_pnl"] for p in path["trade_sequence"]] == [100.0, 300.0, 250.0, 150.0]
+    assert [p["session_window"] for p in path["trade_sequence"]] == [
+        "PRIME",
+        "CHOP",
+        "AFTERNOON",
+        "HARD_CLOSE",
+    ]
+    assert path["window_realized_pnl"]["PRIME"]["net_pnl"] == 100.0
+    assert path["window_realized_pnl"]["CHOP"]["net_pnl"] == 200.0
+    assert path["window_realized_pnl"]["AFTERNOON"]["net_pnl"] == -50.0
+    assert path["window_realized_pnl"]["HARD_CLOSE"]["net_pnl"] == -100.0
+
+
+def test_session_path_analysis_reports_partial_timing_coverage():
+    trades = [
+        {
+            "trade_group": "timed",
+            "ticker": "SPY",
+            "side": "LONG",
+            "net_pnl": 50.0,
+            "date": "2026-09-25",
+            "executions": [
+                {"action": "BOT", "qty": 1, "price": 1.0, "timestamp_utc": "2026-09-25T14:00:00Z"},
+                {"action": "SOLD", "qty": 1, "price": 1.5, "timestamp_utc": "2026-09-25T14:15:00Z"},
+            ],
+        },
+        {
+            "trade_group": "untimed",
+            "ticker": "QQQ",
+            "side": "LONG",
+            "net_pnl": -20.0,
+            "date": "2026-09-25",
+            "executions": [],
+        },
+    ]
+
+    path = daily_summary.build_session_path_analysis(trades)
+
+    assert path["total_trades"] == 2
+    assert path["timed_trades"] == 1
+    assert path["timing_coverage_pct"] == 50.0
+    assert path["day_total_realized_pnl"] == 30.0
+    assert path["chart_final_realized_pnl"] == 50.0
+    assert path["untimed_realized_pnl"] == -20.0
+
+
+def test_daily_summary_prompt_includes_session_path(monkeypatch):
+    ctx = context()
+    ctx["session_path_analysis"] = {
+        "basis": "realized_pnl_booked_at_final_exit",
+        "timing_coverage_pct": 100.0,
+        "peak_realized_pnl": 300.0,
+        "giveback_from_positive_peak": 150.0,
+        "trade_sequence": [
+            {
+                "sequence": 1,
+                "ticker": "SPY",
+                "exit_time_et": "10:00:00",
+                "session_window": "PRIME",
+                "trade_pnl": 300.0,
+                "cumulative_pnl": 300.0,
+            },
+            {
+                "sequence": 2,
+                "ticker": "QQQ",
+                "exit_time_et": "15:15:00",
+                "session_window": "HARD_CLOSE",
+                "trade_pnl": -150.0,
+                "cumulative_pnl": 150.0,
+            },
+        ],
+    }
+    seen = {}
+
+    def fake_summary(user_content, _api_key):
+        seen["prompt"] = user_content
+        return result_payload()
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(daily_summary, "_groq_daily_summary", fake_summary)
+
+    result = daily_summary.generate_daily_summary(ctx)
+
+    assert "SESSION PATH ANALYSIS" in seen["prompt"]
+    assert '"peak_realized_pnl": 300.0' in seen["prompt"]
+    assert '"session_window": "HARD_CLOSE"' in seen["prompt"]
+    assert result["session_path_analysis"] == ctx["session_path_analysis"]
+    assert result["diagnostic_input_version"] == 2
