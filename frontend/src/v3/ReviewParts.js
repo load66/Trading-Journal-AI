@@ -103,7 +103,7 @@ export function DayCurve({ trades, onPick }) {
       giveback,
       ticks,
     };
-  }, [marks]);
+  }, [marks, PLOT_BOTTOM]);
 
   if (!geom) {
     return <div className="v3-empty">No timed executions on this day, so the session cannot be drawn.</div>;
