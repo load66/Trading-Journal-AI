@@ -93,7 +93,7 @@ function ExitQuality({ trade }) {
   );
 }
 
-export default function TradeRow({ trade, openTime, onOpenDetail, customSetups = [], onCustomSetupsChanged }) {
+export default function TradeRow({ trade, openTime, onOpenDetail, customSetups = [], onCustomSetupsChanged, mobile = false }) {
   const pnl = trade.net_pnl ?? 0;
   const pnlTone = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
   const side = (trade.side || '').toUpperCase();
@@ -223,6 +223,96 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
         />
         {local.source === 'manual' && <span className="text-faint trade-manual-mark" title="Manually tagged">✎</span>}
       </button>
+    );
+  }
+
+  if (mobile) {
+    const mfe = Number(trade.mfe_pct);
+    const mae = Number(trade.mae_pct);
+    const hasMfe = trade.mfe_pct != null && Number.isFinite(mfe);
+    const hasMae = trade.mae_pct != null && Number.isFinite(mae);
+    const exitEfficiency = Number(trade.exit_efficiency);
+    const hasExitEfficiency = trade.exit_efficiency != null && Number.isFinite(exitEfficiency) && pnl > 0;
+    const plPct = Number(trade.pl_pct);
+    const hasPlPct = trade.pl_pct != null && Number.isFinite(plPct);
+    const setupLabel = trade.setup && trade.setup !== 'NONE'
+      ? trade.setup
+      : trade.strategy || 'Not tagged';
+
+    const activate = (event) => {
+      if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+      if (event.type === 'keydown') event.preventDefault();
+      handleOpen();
+    };
+
+    return (
+      <article
+        className="trade-mobile-card"
+        role="button"
+        tabIndex={0}
+        onClick={activate}
+        onKeyDown={activate}
+        aria-label={`Open ${trade.ticker} trade from ${trade.date}`}
+      >
+        <span className="trade-mobile-head">
+          <span className="trade-mobile-identity">
+            <strong className="trade-mobile-symbol">{trade.ticker}</strong>
+            <span className="trade-mobile-date num">
+              {trade.date}{openTime ? ` · ${openTime.slice(0, 5)}` : ''}
+            </span>
+          </span>
+          <span className="trade-mobile-result">
+            <strong className={`num ${pnlTone}`}>{signed$(pnl)}</strong>
+            {hasPlPct && (
+              <small className={plPct > 0 ? 'pos' : plPct < 0 ? 'neg' : 'text-muted'}>
+                {plPct > 0 ? '+' : ''}{plPct.toFixed(1)}%
+              </small>
+            )}
+          </span>
+        </span>
+
+        <span className="trade-mobile-subhead">
+          <span className={`badge badge-${trade.instrument_type?.toLowerCase()}`}>{trade.instrument_type}</span>
+          <span>{side === 'LONG' ? 'Long' : side === 'SHORT' ? 'Short' : trade.side}</span>
+          <span className="trade-mobile-setup">{setupLabel}</span>
+        </span>
+
+        <span className="trade-mobile-metrics">
+          <span className="trade-mobile-metric">
+            <small>Planned R:R</small>
+            <b className={plannedRR != null ? 'trade-r-planned' : 'text-faint'}>
+              {plannedRR != null ? `1:${plannedRR.toFixed(2)}` : 'Not set'}
+            </b>
+            {showRealizedR && (
+              <em className={realizedR > 0 ? 'pos' : realizedR < 0 ? 'neg' : 'text-muted'}>
+                {realizedR > 0 ? '+' : ''}{realizedR.toFixed(2)}R
+              </em>
+            )}
+          </span>
+
+          <span className="trade-mobile-metric">
+            <small>Best / Worst</small>
+            <b>
+              <span className="pos">{hasMfe ? `+${Math.abs(mfe).toFixed(1)}` : '—'}</span>
+              <span className="trade-excursion-sep"> / </span>
+              <span className="neg">{hasMae ? `-${Math.abs(mae).toFixed(1)}` : '—'}</span>
+            </b>
+            <em>% move</em>
+          </span>
+
+          <span className="trade-mobile-metric">
+            <small>Exit capture</small>
+            <b className={hasExitEfficiency ? (exitEfficiency >= 60 ? 'pos' : exitEfficiency >= 35 ? 'caution' : 'neg') : 'text-faint'}>
+              {hasExitEfficiency ? `${exitEfficiency.toFixed(1)}%` : '—'}
+            </b>
+            <em>{hasExitEfficiency ? 'of favorable move' : 'not available'}</em>
+          </span>
+
+          <span className="trade-mobile-open" aria-hidden="true">
+            <ChevronRight size={18} />
+          </span>
+        </span>
+      </article>
     );
   }
 
