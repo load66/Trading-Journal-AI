@@ -30,5 +30,5 @@ test('Brain exposes a compact journal-first welcome and composer', () => {
 
   expect(screen.getByText('Ask your journal, not a generic chatbot.')).toBeVisible();
   expect(screen.getByLabelText('Message Brain')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Diagnose my biggest trading leak' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Audit my recent trades against the LE system' })).toBeVisible();
 });
