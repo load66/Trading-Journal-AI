@@ -9,6 +9,7 @@ import { RMultipleDist, EmotionTable, MistakeFreq, HoldTime } from './Edge';
 import { PageHeader, PanelHead } from './ui';
 import { Measures, Seg } from '../v3/parts';
 import SmokingGunReport from './SmokingGunReport';
+import LEDiagnosisReport from './LEDiagnosisReport';
 
 const fmt$ = (v) =>
   `${v < 0 ? '-' : ''}$${Math.abs(Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -22,6 +23,7 @@ export const THIN_SAMPLE = 10;
 
 const TABS = [
   { id: 'smoking-gun', label: 'Smoking Gun' },
+  { id: 'le-diagnosis', label: 'LE Diagnosis' },
   { id: 'overview', label: 'Overview' },
   { id: 'setups', label: 'Setups & Strategy' },
   { id: 'sources-tags', label: 'Sources & Tags' },
@@ -371,7 +373,7 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
         ))}
       </div>
 
-      {tab !== 'smoking-gun' && (
+      {tab !== 'smoking-gun' && tab !== 'le-diagnosis' && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 18px' }}>
           <Seg
             label="How to show every breakdown"
@@ -385,6 +387,10 @@ export default function Reports({ accountId, initialTab = 'overview' }) {
       {tab === 'smoking-gun' ? (
         <div style={gap} role="tabpanel" id="report-panel" aria-labelledby="report-tab-smoking-gun">
           <SmokingGunReport accountId={accountId} dateFrom={dateFrom} dateTo={dateTo} />
+        </div>
+      ) : tab === 'le-diagnosis' ? (
+        <div style={gap} role="tabpanel" id="report-panel" aria-labelledby="report-tab-le-diagnosis">
+          <LEDiagnosisReport accountId={accountId} dateFrom={dateFrom} dateTo={dateTo} />
         </div>
       ) : loading ? (
         <div style={gap}>
