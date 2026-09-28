@@ -275,6 +275,8 @@ export function buildYearShareSvg({
   yearData,
   yearPnl,
   yearWinRate,
+  yearProfitFactor,
+  yearAvgWinLoss,
   totalTrades,
   tradingDays,
   profitableMonths,
@@ -304,24 +306,26 @@ export function buildYearShareSvg({
   const best = active.reduce((winner, current) => (
     !winner || Number(current.data.net_pnl || 0) > Number(winner.data.net_pnl || 0) ? current : winner
   ), null);
-  const worst = active.reduce((loser, current) => (
-    !loser || Number(current.data.net_pnl || 0) < Number(loser.data.net_pnl || 0) ? current : loser
-  ), null);
   const profitableRate = active.length ? Math.round((profitableMonths / active.length) * 100) : 0;
 
+  const yearWinTarget = targetLine(Number(yearWinRate), SHARE_BASELINES.winRate, '%');
+  const yearPfTarget = targetLine(Number(yearProfitFactor), SHARE_BASELINES.profitFactor);
+  const yearRatioTarget = targetLine(Number(yearAvgWinLoss), SHARE_BASELINES.avgWinLoss);
+
   const metrics = [
-    ['YTD NET P&L', signedPnl(yearPnl), metricHelp.pnl, yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : 'neutral'],
-    ['WIN RATE', yearWinRate === '--' ? '--' : `${yearWinRate}%`, metricHelp.win, 'neutral'],
-    ['TOTAL TRADES', totalTrades.toLocaleString('en-US'), 'Closed trades recorded this year', 'neutral'],
-    ['TRADING DAYS', tradingDays.toLocaleString('en-US'), metricHelp.days, 'neutral'],
-    ['PROFITABLE MONTHS', `${profitableMonths}/${active.length || 0}`, 'Positive months out of active months', 'neutral'],
+    ['YTD NET P&L', signedPnl(yearPnl), metricHelp.pnl, yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : 'neutral', null],
+    ['WIN RATE', yearWinRate === '--' ? '--' : `${yearWinRate}%`, metricHelp.win, 'neutral', yearWinTarget],
+    ['PROFIT FACTOR', yearProfitFactor == null ? '∞' : Number(yearProfitFactor).toFixed(2), metricHelp.pf, 'neutral', yearPfTarget],
+    ['AVG WIN / LOSS', yearAvgWinLoss, metricHelp.ratio, 'neutral', yearRatioTarget],
+    ['TRADING DAYS', tradingDays.toLocaleString('en-US'), metricHelp.days, 'neutral', null],
   ].map((m, i) => shareMetricCard(margin + i * (metricW + metricGap), 154, metricW, ...m)).join('');
 
+  const avgActiveMonth = active.length > 0 ? yearPnl / active.length : 0;
   const insights = [
     ['BEST MONTH', best ? fmtShareDayPnl(best.data.net_pnl) : '—', best ? MONTHS_SHORT[best.i] : 'No data', 'pos'],
-    ['LARGEST LOSS', worst ? fmtShareDayPnl(worst.data.net_pnl) : '—', worst ? MONTHS_SHORT[worst.i] : 'No data', worst && Number(worst.data.net_pnl || 0) < 0 ? 'neg' : 'neutral'],
+    ['AVG / ACTIVE MONTH', active.length ? fmtShareDayPnl(avgActiveMonth) : '—', 'YTD P&L ÷ active months', avgActiveMonth > 0 ? 'pos' : 'neutral'],
     ['PROFITABLE RATE', active.length ? `${profitableRate}%` : '—', `${profitableMonths} green · ${losingMonths} red`, 'blue'],
-    ['ACTIVE MONTHS', active.length.toString(), `${totalTrades.toLocaleString('en-US')} total trades`, 'neutral'],
+    ['TOTAL TRADES', totalTrades.toLocaleString('en-US'), `${active.length} active months`, 'neutral'],
   ].map((m, i) => shareInsightCard(margin + i * (insightW + insightGap), 262, insightW, ...m)).join('');
 
   const cards = months.map((data, i) => {
@@ -390,7 +394,7 @@ export function buildYearShareSvg({
       <text x="${margin}" y="${gridY - 10}" fill="${SHARE_PALETTE.text}" font-size="12" font-weight="750" letter-spacing="1.2">MONTH-BY-MONTH PERFORMANCE</text>
       ${cards}
       <line x1="${margin}" y1="${height - 54}" x2="${width - margin}" y2="${height - 54}" stroke="${SHARE_PALETTE.border}" />
-      <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Green = profitable · Red = losing · Upcoming = future month</text>
+      <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Goals: Win Rate ≥ 50% · Profit Factor ≥ 1.30 · Avg Win/Loss ≥ 1.20 · Green = profitable · Upcoming = future month</text>
       <text x="${width - margin}" y="${height - 28}" text-anchor="end" fill="${SHARE_PALETTE.dim}" font-size="10.5" font-weight="650">AI Journal</text>
     </svg>`,
   };
