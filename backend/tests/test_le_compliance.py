@@ -197,3 +197,66 @@ def test_summary_keeps_rule_pnl_association_descriptive():
     assert chop["fail"] == 1
     assert chop["fail_net_pnl"] == -125.0
     assert "does not prove" in summary["note"]
+
+
+def test_session_window_falls_back_to_broker_timestamp_when_chart_evidence_missing():
+    trade = _trade(-50)
+    trade["executions"] = [
+        {
+            "action": "BOT",
+            "qty": 1,
+            "price": 2.0,
+            "timestamp_utc": "2026-09-25T16:00:00Z",
+            "source_timezone": "America/Chicago",
+        },
+        {
+            "action": "SOLD",
+            "qty": 1,
+            "price": 1.5,
+            "timestamp_utc": "2026-09-25T16:05:00Z",
+            "source_timezone": "America/Chicago",
+        },
+    ]
+
+    result = build_le_compliance(
+        trade,
+        _review(session_window=""),
+        analysis={},
+        day_context={"sequence": 1, "prior_results": [], "day_trade_count": 1},
+        risk_plan=None,
+    )
+
+    check = _by_id(result)["not_chop_hour"]
+    assert check["status"] == "fail"
+    assert check["evidence"]["session_window"] == "chop_hour"
+    assert "11:30 AM-1:30 PM ET" in check["detail"]
+
+
+def test_session_window_fallback_marks_prime_trade_outside_chop():
+    trade = _trade(75)
+    trade["executions"] = [
+        {
+            "action": "BOT",
+            "qty": 1,
+            "price": 2.0,
+            "timestamp_utc": "2026-09-25T14:15:00Z",
+        },
+        {
+            "action": "SOLD",
+            "qty": 1,
+            "price": 2.75,
+            "timestamp_utc": "2026-09-25T14:25:00Z",
+        },
+    ]
+
+    result = build_le_compliance(
+        trade,
+        _review(session_window=""),
+        analysis={},
+        day_context={"sequence": 1, "prior_results": [], "day_trade_count": 1},
+        risk_plan=None,
+    )
+
+    check = _by_id(result)["not_chop_hour"]
+    assert check["status"] == "pass"
+    assert check["evidence"]["session_window"] == "prime"
