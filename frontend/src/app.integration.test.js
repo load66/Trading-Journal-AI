@@ -803,6 +803,11 @@ test('mobile Trade View uses compact paid-app tabs and keeps advanced tools on d
   fireEvent.click(within(tabs).getByRole('tab', { name: 'Review' }));
   expect(within(mobile).getByText('Strategy notes')).toBeVisible();
   expect(within(mobile).getByText('Entry reason')).toBeVisible();
+  expect(within(mobile).getByText('Exit reason')).toBeVisible();
+  expect(within(mobile).getByText('Mistakes')).toBeVisible();
+  expect(within(mobile).queryByRole('group')).not.toBeInTheDocument();
+  expect(mobile.querySelectorAll('details.tdm-note-block')).toHaveLength(0);
+  expect(mobile.querySelectorAll('.tdm-note-block.static').length).toBeGreaterThanOrEqual(3);
 
   fireEvent.click(within(tabs).getByRole('tab', { name: 'Session' }));
   expect(within(mobile).getByText('Executions')).toBeVisible();
