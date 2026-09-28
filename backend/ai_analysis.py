@@ -14,6 +14,7 @@ from le_compliance import (
     LE_PLAYBOOK_REFERENCE,
     summarize_le_compliance_snapshots,
 )
+from le_learning import build_le_learning_core
 
 from trade_metrics import (
     execution_datetime,
@@ -613,6 +614,8 @@ Core rules:
 - LE_COMPLIANCE final statuses combine deterministic system evidence with recognized source='manual' LE tags. Manual LE tags are authoritative user evidence for the exact concept they assert and win the final status when mapped. The prior automated result is preserved as system_result/conflict metadata. Never second-guess or reverse a USER_MANUAL override. A status of Unknown means neither system evidence nor a recognized manual tag proved the condition.
 - When citing a compliance percentage, distinguish evaluated-pass percentage from evidence coverage. Do not present a high pass percentage as strong proof when coverage is low.
 - P&L grouped by an LE rule failure is descriptive association, not proof that the violation caused the result.
+- LE_LEARNING_CORE is a research/validation layer, not an automatic rule writer. Treat VALIDATED setup edges as stronger evidence than DISCOVERY/DEVELOPING/CANDIDATE stages, but never claim future profitability is guaranteed.
+- Do not promote a setup merely because it has high in-sample P&L. Respect the chronological early/recent validation gate and sample thresholds in LE_LEARNING_CORE.
 - If the user asks whether a specific trade followed LE and no compliance snapshot exists for it, say the trade is unaudited rather than guessing from generic stats.
 - Be willing to say "I don't have enough journal evidence for that" instead of guessing.
 - Keep answers concise but useful. Prefer a direct answer, then 2-5 supporting bullets, then one practical takeaway when appropriate.
@@ -1129,6 +1132,7 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
         }
         snapshot["le_compliance"] = {
             "summary": le_summary,
+            "learning_core": build_le_learning_core(le_snapshots),
             "audited_trades": [
                 {
                     "trade_group": item.get("trade_group"),

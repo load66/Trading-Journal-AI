@@ -79,6 +79,44 @@ const REPORT = {
     conflict_count: 1,
     authoritative_source: 'USER_MANUAL',
   },
+  learning_core: {
+    learning_version: 'LE_LEARNING_2026_09_v1',
+    headline: 'Manual setup evidence is being learned, but no setup has enough stable out-of-sample evidence for promotion yet.',
+    validated_setup_count: 0,
+    high_priority_detector_count: 1,
+    setup_edges: [
+      {
+        id: 'outside_day',
+        label: 'Outside Day',
+        stage: 'DISCOVERY',
+        reason: 'Need at least 8 trades before the setup leaves discovery.',
+        promotion_ready: false,
+        overall: {
+          trades: 2,
+          trading_days: 2,
+          net_pnl: 648.63,
+          avg_pnl: 324.32,
+          profit_factor: null,
+        },
+        early_sample: { net_pnl: 300 },
+        recent_sample: { net_pnl: 348.63 },
+      },
+    ],
+    detector_calibration: [
+      {
+        id: 'market_sign',
+        label: 'Market Sign?',
+        priority: 'HIGH',
+        labeled: 5,
+        system_agreements: 0,
+        system_conflicts: 5,
+        system_unknown_resolved: 0,
+        agreement_rate_pct: 0,
+        priority_reason: 'Repeated user-vs-system disagreements indicate a detector gap.',
+      },
+    ],
+    note: 'Manual LE tags are treated as ground truth labels.',
+  },
   user_confirmed_setups: [
     {
       id: 'outside_day',
@@ -140,9 +178,13 @@ test('renders journal-wide LE diagnosis and automation status', async () => {
   expect(screen.getByText('191 / 191')).toBeVisible();
   expect(screen.getByText('Outside Day — both directional levels broken')).toBeVisible();
   expect(screen.getByText('Rule Performance Matrix')).toBeVisible();
+  expect(screen.getByText('LE Learning Core')).toBeVisible();
+  expect(screen.getByText('LE Detector Calibration')).toBeVisible();
+  expect(screen.getByText('DISCOVERY')).toBeVisible();
+  expect(screen.getByText('HIGH')).toBeVisible();
   expect(screen.getByText('User-Confirmed LE Setups')).toBeVisible();
   expect(screen.getByText('User-backed LE evidence')).toBeVisible();
-  expect(screen.getByText('Outside Day')).toBeVisible();
+  expect(screen.getAllByText('Outside Day').length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText('VIX Checked?')).toBeVisible();
 });
 
