@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from behavior_rules import detect_daily_flags, deterministic_strengths, recorded_observations
-from trade_metrics import trade_is_closed
+from trade_metrics import MARKET_TIMEZONE, trade_entry_exit_datetimes, trade_is_closed
 from smoking_gun_library import ANALYTICS_ENGINE_VERSION
 
 from ai_analysis import (
@@ -21,6 +21,173 @@ from ai_analysis import (
 )
 
 DAY_REVIEW_TIMEZONE = os.getenv("DAY_REVIEW_TIMEZONE", "America/Chicago")
+
+SESSION_WINDOWS = (
+    ("OPENING", 9 * 60 + 30, 9 * 60 + 40),
+    ("PRIME", 9 * 60 + 40, 11 * 60 + 30),
+    ("CHOP", 11 * 60 + 30, 13 * 60 + 30),
+    ("AFTERNOON", 13 * 60 + 30, 15 * 60),
+    ("HARD_CLOSE", 15 * 60, 15 * 60 + 45),
+    ("LATE_CLOSE", 15 * 60 + 45, 16 * 60),
+)
+
+
+def _session_window_label(exit_dt: datetime) -> str:
+    minute = exit_dt.hour * 60 + exit_dt.minute
+    for label, start, end in SESSION_WINDOWS:
+        if start <= minute < end:
+            return label
+    return "OUTSIDE_RTH"
+
+
+def build_session_path_analysis(trades: list[dict]) -> dict:
+    """Build the deterministic evidence represented by the Day Review P&L chart.
+
+    The chart is a realized-P&L timeline: each completed trade's full net P&L is
+    booked at its final exit time. It is not a price chart and it does not
+    estimate unrealized P&L between fills.
+    """
+    total_trades = len(trades or [])
+    day_total = round(sum(float(t.get("net_pnl") or 0) for t in (trades or [])), 2)
+    timed = []
+
+    for trade in trades or []:
+        entry_dt, exit_dt = trade_entry_exit_datetimes(
+            trade,
+            target_timezone=MARKET_TIMEZONE,
+        )
+        if exit_dt is None:
+            continue
+        timed.append((exit_dt, entry_dt, trade))
+
+    timed.sort(key=lambda item: (item[0], str(item[2].get("trade_group") or "")))
+
+    window_stats = {
+        label: {"trade_count": 0, "wins": 0, "losses": 0, "net_pnl": 0.0}
+        for label, _start, _end in SESSION_WINDOWS
+    }
+    window_stats["OUTSIDE_RTH"] = {
+        "trade_count": 0,
+        "wins": 0,
+        "losses": 0,
+        "net_pnl": 0.0,
+    }
+
+    points = []
+    cumulative = 0.0
+    peak = 0.0
+    peak_index = None
+    trough = 0.0
+    trough_index = None
+    running_peak = 0.0
+    running_peak_index = None
+    max_drawdown = 0.0
+    max_drawdown_from_index = None
+    max_drawdown_to_index = None
+
+    for index, (exit_dt, entry_dt, trade) in enumerate(timed):
+        pnl = round(float(trade.get("net_pnl") or 0), 2)
+        cumulative = round(cumulative + pnl, 2)
+        window = _session_window_label(exit_dt)
+        stats = window_stats[window]
+        stats["trade_count"] += 1
+        stats["net_pnl"] = round(stats["net_pnl"] + pnl, 2)
+        if pnl > 0:
+            stats["wins"] += 1
+        elif pnl < 0:
+            stats["losses"] += 1
+
+        point = {
+            "sequence": index + 1,
+            "trade_group": trade.get("trade_group"),
+            "ticker": trade.get("ticker"),
+            "side": trade.get("side"),
+            "entry_time_et": entry_dt.strftime("%H:%M:%S") if entry_dt else None,
+            "exit_time_et": exit_dt.strftime("%H:%M:%S"),
+            "session_window": window,
+            "trade_pnl": pnl,
+            "cumulative_pnl": cumulative,
+        }
+        points.append(point)
+
+        if cumulative > peak:
+            peak = cumulative
+            peak_index = index
+        if cumulative < trough:
+            trough = cumulative
+            trough_index = index
+
+        if cumulative > running_peak:
+            running_peak = cumulative
+            running_peak_index = index
+        drawdown = round(running_peak - cumulative, 2)
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+            max_drawdown_from_index = running_peak_index
+            max_drawdown_to_index = index
+
+    chart_final = round(cumulative, 2)
+    timed_count = len(points)
+    coverage_pct = round(timed_count / total_trades * 100, 1) if total_trades else 0.0
+
+    def point_ref(index):
+        if index is None or index < 0 or index >= len(points):
+            return None
+        p = points[index]
+        return {
+            "trade_group": p["trade_group"],
+            "ticker": p["ticker"],
+            "exit_time_et": p["exit_time_et"],
+            "cumulative_pnl": p["cumulative_pnl"],
+        }
+
+    post_peak = points[peak_index + 1:] if peak_index is not None else []
+    post_peak_net = round(sum(float(p["trade_pnl"]) for p in post_peak), 2)
+
+    largest_winner = max(points, key=lambda p: p["trade_pnl"], default=None)
+    if largest_winner and largest_winner["trade_pnl"] <= 0:
+        largest_winner = None
+    largest_loser = min(points, key=lambda p: p["trade_pnl"], default=None)
+    if largest_loser and largest_loser["trade_pnl"] >= 0:
+        largest_loser = None
+
+    return {
+        "basis": "realized_pnl_booked_at_final_exit",
+        "timezone": MARKET_TIMEZONE,
+        "total_trades": total_trades,
+        "timed_trades": timed_count,
+        "timing_coverage_pct": coverage_pct,
+        "day_total_realized_pnl": day_total,
+        "chart_final_realized_pnl": chart_final,
+        "untimed_realized_pnl": round(day_total - chart_final, 2),
+        "peak_realized_pnl": round(peak, 2),
+        "peak_point": point_ref(peak_index),
+        "trough_realized_pnl": round(trough, 2),
+        "trough_point": point_ref(trough_index),
+        "giveback_from_positive_peak": round(max(0.0, peak - chart_final), 2) if peak > 0 else 0.0,
+        "max_drawdown_from_high_water": round(max_drawdown, 2),
+        "max_drawdown_from": point_ref(max_drawdown_from_index),
+        "max_drawdown_to": point_ref(max_drawdown_to_index),
+        "post_peak": {
+            "trade_count": len(post_peak),
+            "net_pnl": post_peak_net,
+            "wins": sum(1 for p in post_peak if p["trade_pnl"] > 0),
+            "losses": sum(1 for p in post_peak if p["trade_pnl"] < 0),
+        },
+        "largest_winner": largest_winner,
+        "largest_loser": largest_loser,
+        "window_realized_pnl": window_stats,
+        "trade_sequence": points,
+        "window_definitions_et": {
+            "OPENING": "09:30-09:40",
+            "PRIME": "09:40-11:30",
+            "CHOP": "11:30-13:30",
+            "AFTERNOON": "13:30-15:00",
+            "HARD_CLOSE": "15:00-15:45",
+            "LATE_CLOSE": "15:45-16:00",
+            "OUTSIDE_RTH": "outside 09:30-16:00",
+        },
+    }
 
 
 DAILY_SUMMARY_PROMPT = """You are a professional trading coach producing an end-of-day performance review for a day trader.
@@ -37,6 +204,9 @@ Rules:
 - mistakes should include the most important trading mistakes you identify, even when they were not manually recorded in the diary.
 - mental_game should give your best professional read of the trader's decision-making/behavior during the session. Do not replace it with a generic "insufficient evidence" message.
 - Deterministic behavior_flags are reliable execution observations and should be incorporated where useful, but they do not limit what else you may diagnose.
+- session_path_analysis is deterministic evidence from the Day Review realized-P&L chart. Use its trade sequence, peak, trough, drawdown/giveback, post-peak results, and session-window clustering when they materially improve the diagnosis.
+- The session path books each trade's full realized P&L only at its final exit. It is NOT a price chart, unrealized/mark-to-market equity curve, or evidence of what happened inside a trade. Never infer intratrade price action from the session path alone.
+- Respect timing_coverage_pct. If some completed trades lack usable timestamps, do not present session-path timing conclusions as complete-day facts.
 - highlights.good and highlights.bad are presentation cues, not extra conclusions. Each item MUST be an exact verbatim substring copied from either narrative or mental_game.
 - highlights.good should mark only concise phrases describing clearly positive execution, discipline, edge, or effective decisions.
 - highlights.bad should mark only concise phrases describing mistakes, process lapses, behavioral flags, weak risk control, or poor decisions.
@@ -86,6 +256,7 @@ def daily_context_signature(context: dict) -> str:
         "behavior_flags": context.get("behavior_flags") or [],
         "verified_strengths": context.get("verified_strengths") or [],
         "recorded_observations": context.get("recorded_observations") or [],
+        "session_path_analysis": context.get("session_path_analysis") or {},
     }
     canonical = json.dumps(
         material,
@@ -257,6 +428,7 @@ def build_daily_context(conn, date: str, account_id) -> dict:
             "evidence": "VERIFIED",
         })
     recorded = recorded_observations(trades, diary_summary)
+    session_path_analysis = build_session_path_analysis(trades)
 
     return {
         "date": date,
@@ -267,6 +439,7 @@ def build_daily_context(conn, date: str, account_id) -> dict:
         "behavior_flags": behavior_flags,
         "verified_strengths": verified_strengths,
         "recorded_observations": recorded,
+        "session_path_analysis": session_path_analysis,
     }
 
 
@@ -353,6 +526,7 @@ def generate_daily_summary(context: dict) -> dict:
     kpis = context["day_kpis"]
     alltime = context["alltime_kpis"]
     diary = context.get("diary_summary")
+    session_path = context.get("session_path_analysis") or {}
 
     # Format trades for the prompt
     trade_lines = []
@@ -421,6 +595,9 @@ VERIFIED deterministic strengths:
 
 VERIFIED deterministic behavior flags:
 {flag_section}
+
+SESSION PATH ANALYSIS — deterministic data behind the Day Review realized-P&L chart:
+{json.dumps(session_path, indent=2, sort_keys=True) if session_path else "  No usable timed session path."}
 {diary_section}
 
 Generate the daily coaching summary JSON."""
@@ -472,6 +649,8 @@ Generate the daily coaching summary JSON."""
     # context so the UI can show them without suppressing the model's diagnosis.
     result["behavior_flags"] = context.get("behavior_flags") or []
     result["recorded_observations"] = context.get("recorded_observations") or []
+    result["session_path_analysis"] = session_path
+    result["diagnostic_input_version"] = 2
     result["diagnostic_mode"] = "unfiltered"
     result["analytics_engine_version"] = ANALYTICS_ENGINE_VERSION
     return result
