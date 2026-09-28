@@ -325,6 +325,7 @@ test('Dashboard quick date ranges apply 7D, 30D, and YTD without opening the cal
   expect(within(quick).getByRole('button', { name: 'Last 7 days' })).toBeVisible();
   expect(within(quick).getByRole('button', { name: 'Last 30 days' })).toBeVisible();
   expect(within(quick).getByRole('button', { name: 'Year to date' })).toBeVisible();
+  expect(within(quick).getByRole('button', { name: 'All time' })).toBeVisible();
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -338,7 +339,28 @@ test('Dashboard quick date ranges apply 7D, 30D, and YTD without opening the cal
   await waitFor(() => expect(kpisApi.get).toHaveBeenCalledWith(
     expect.objectContaining({ date_from: fmt(from), date_to: fmt(today) })
   ));
-  expect(within(quick).getByRole('button', { name: 'Last 7 days' })).toHaveAttribute('aria-pressed', 'true');
+  await waitFor(() => expect(
+    within(screen.getByRole('group', { name: 'Quick date ranges' }))
+      .getByRole('button', { name: 'Last 7 days' })
+  ).toHaveAttribute('aria-pressed', 'true'));
+
+  const customTrigger = screen.getByRole('button', { expanded: false, name: /Custom/i });
+  expect(customTrigger.querySelector('.date-range-label-mobile')).toHaveTextContent('Custom');
+
+  fireEvent.click(customTrigger);
+  expect(screen.getByRole('dialog', { name: 'Choose a date range' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Close date picker' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Close date picker' }));
+  expect(screen.queryByRole('dialog', { name: 'Choose a date range' })).not.toBeInTheDocument();
+
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Quick date ranges' }))
+      .getByRole('button', { name: 'All time' })
+  );
+  await waitFor(() => expect(
+    within(screen.getByRole('group', { name: 'Quick date ranges' }))
+      .getByRole('button', { name: 'All time' })
+  ).toHaveAttribute('aria-pressed', 'true'));
 });
 
 test('Brain opens from the header as a dialog and closes on Escape', async () => {
@@ -1268,7 +1290,7 @@ test('A failed dashboard load keeps the page and offers Retry', async () => {
   expect(alert).toHaveTextContent(/Could not load the dashboard: Network Error/);
   // The shell stays: title and the date filter are still there.
   expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
-  expect(within(screen.getByRole('main')).getByRole('button', { name: /All time/ })).toBeInTheDocument();
+  expect(within(screen.getByRole('group', { name: 'Quick date ranges' })).getByRole('button', { name: 'All time' })).toBeInTheDocument();
 
   kpisApi.get.mockImplementation(() => Promise.resolve({ data: { total_net_pnl: 100, daily_pnl: [], by_strategy: [] } }));
   fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));

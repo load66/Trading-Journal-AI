@@ -1397,14 +1397,16 @@ button.month-card:active { transform: translateY(1px); }
 .preset-btn.active { background: var(--accent-soft); color: var(--accent-line); font-weight: 600; }
 
 
-/* Date-range toolbar: visible quick views plus the full custom picker. */
-.date-range-picker { max-width: 100%; }
+/* Date-range toolbar: premium quick views plus a full custom picker. */
+.date-range-picker {
+  max-width: 100%;
+}
 .date-range-toolbar {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 8px;
+  flex-wrap: nowrap;
   max-width: 100%;
 }
 .date-range-quick {
@@ -1413,90 +1415,181 @@ button.month-card:active { transform: translateY(1px); }
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--divider);
-  border-radius: var(--radius-md);
-  background: var(--surface-inset);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-inset) 92%, var(--accent-line) 8%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.018);
 }
 .date-range-quick-btn {
-  min-width: 38px;
-  min-height: 30px;
-  padding: 5px 8px;
+  min-width: 42px;
+  min-height: 32px;
+  padding: 5px 9px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 6px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: .01em;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .055em;
   cursor: pointer;
+  transition: color .14s ease, background-color .14s ease, box-shadow .14s ease, transform .14s ease;
 }
 .date-range-quick-btn:hover {
   background: var(--surface-hover);
   color: var(--text-primary);
 }
+.date-range-quick-btn:active {
+  transform: translateY(1px);
+}
 .date-range-quick-btn.active {
-  background: var(--accent-line);
   color: var(--surface-page);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-line) 90%, white 10%), var(--accent-line));
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--accent-line) 18%, transparent);
 }
-.date-range-main { min-width: 0; }
+.date-range-main {
+  min-width: 0;
+}
 .date-range-main > .btn:first-child {
-  max-width: min(320px, 100%);
+  min-height: 40px;
+  max-width: min(330px, 100%);
+  padding-inline: 12px;
   white-space: nowrap;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-control) 92%, var(--accent-line) 8%);
 }
-.date-range-popover { box-sizing: border-box; }
-.date-range-calendars { min-width: 0; }
-.date-range-month { box-sizing: border-box; }
+.date-range-label-mobile {
+  display: none;
+}
+.date-range-backdrop {
+  display: none;
+}
+.date-range-popover {
+  box-sizing: border-box;
+}
+.date-range-calendars {
+  min-width: 0;
+}
+.date-range-month {
+  box-sizing: border-box;
+}
 
 @media (max-width: 600px) {
-  .v3-heroside .v3-acts {
-    width: 100%;
-  }
   .date-range-picker {
     width: 100%;
-    flex: 1 1 100%;
+    min-width: 0;
   }
   .date-range-toolbar {
     width: 100%;
-    justify-content: flex-start;
-    gap: 7px;
+    gap: 8px;
+    justify-content: stretch;
   }
   .date-range-quick {
-    order: 1;
-    flex: 0 0 auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 3px;
+  }
+  .date-range-quick-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 36px;
+    padding-inline: 6px;
+    font-size: 10.5px;
+    letter-spacing: .045em;
   }
   .date-range-main {
-    order: 2;
-    flex: 1 1 145px;
+    flex: 0 1 112px;
+    display: flex !important;
+    min-width: 88px;
   }
   .date-range-main > .btn:first-child {
     width: 100%;
     min-width: 0;
+    min-height: 42px;
     justify-content: center;
+    gap: 6px;
+    padding-inline: 9px;
+    overflow: hidden;
+  }
+  .date-range-main > .btn:first-child svg {
+    flex: 0 0 auto;
+  }
+  .date-range-label-desktop {
+    display: none;
+  }
+  .date-range-label-mobile {
+    display: block;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    font-size: 11px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  /* ALL is the mobile reset, so the extra X would only add clutter. */
+  .date-range-main > .btn-icon {
+    display: none;
   }
 
+  .date-range-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 490;
+    border: 0;
+    padding: 0;
+    background: rgba(1, 7, 13, .72);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+  }
   .date-range-popover {
     position: fixed !important;
     left: 12px !important;
     right: 12px !important;
     top: auto !important;
     bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+    z-index: 500 !important;
     width: auto !important;
     max-width: none !important;
-    max-height: min(78dvh, 620px) !important;
+    max-height: min(82dvh, 650px) !important;
     overflow-x: hidden !important;
     overflow-y: auto !important;
+    overscroll-behavior: contain;
     display: flex !important;
     flex-direction: column !important;
     flex-wrap: nowrap !important;
-    border-radius: var(--radius-lg) !important;
+    border-radius: 16px !important;
+    border-color: color-mix(in srgb, var(--accent-line) 18%, var(--divider)) !important;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--surface-panel) 96%, var(--accent-line) 4%), var(--surface-panel)) !important;
+    box-shadow: 0 32px 90px rgba(0,0,0,.62), inset 0 1px 0 rgba(255,255,255,.025) !important;
+  }
+  .date-range-popover::before {
+    content: "";
+    display: block;
+    width: 38px;
+    height: 4px;
+    margin: 9px auto 0;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-tertiary) 48%, transparent);
   }
   .date-range-calendars-section {
     width: 100%;
     min-width: 0;
     box-sizing: border-box;
     padding: 14px 12px 10px !important;
+  }
+  .date-range-calendars-section > div:first-child {
+    gap: 8px !important;
+    margin-bottom: 14px !important;
+  }
+  .date-range-calendars-section > div:first-child > div {
+    min-width: 0;
+    padding: 8px 9px !important;
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .date-range-calendars {
     flex: 1 1 auto;
@@ -1507,7 +1600,7 @@ button.month-card:active { transform: translateY(1px); }
     justify-content: center !important;
   }
   .date-range-month {
-    width: min(100%, 270px);
+    width: min(100%, 282px);
     min-width: 0 !important;
   }
   .date-range-secondary-month {
@@ -1515,6 +1608,12 @@ button.month-card:active { transform: translateY(1px); }
   }
   .date-range-calendars-section .cal-nav {
     flex: 0 0 34px;
+    border-color: var(--divider);
+    background: var(--surface-inset);
+  }
+  .date-range-popover .rng-day {
+    min-height: 34px;
+    border-radius: 7px;
   }
   .date-range-presets {
     width: 100%;
@@ -1522,23 +1621,32 @@ button.month-card:active { transform: translateY(1px); }
     flex: none !important;
     border-left: 0 !important;
     border-top: 1px solid var(--divider) !important;
-    padding: 10px 0 !important;
+    padding: 10px 0 12px !important;
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    background: color-mix(in srgb, var(--surface-inset) 72%, transparent);
   }
   .date-range-presets .eyebrow {
     grid-column: 1 / -1;
+    padding-top: 2px !important;
   }
   .date-range-presets .preset-btn {
-    padding: 9px 14px;
+    padding: 10px 14px;
+    font-size: 12px;
   }
 }
 
-@media (max-width: 360px) {
+@media (max-width: 380px) {
+  .date-range-toolbar {
+    gap: 6px;
+  }
   .date-range-quick-btn {
-    min-width: 34px;
-    padding-inline: 6px;
-    font-size: 11px;
+    min-height: 34px;
+    padding-inline: 4px;
+    font-size: 10px;
+  }
+  .date-range-main {
+    flex-basis: 98px;
   }
   .date-range-popover {
     left: 8px !important;
@@ -3213,5 +3321,44 @@ button.month-card:active { transform: translateY(1px); }
     padding: 0 0 8px;
     border-right: 0;
     border-bottom: 1px solid var(--divider-soft);
+  }
+}
+
+
+/* Compact AI utility on phones: keep it reachable without covering KPI cards. */
+@media (max-width: 600px) {
+  .brain-launcher {
+    right: 14px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    width: 48px;
+    height: 48px;
+    min-height: 48px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    border-radius: 15px;
+    background:
+      linear-gradient(155deg, color-mix(in srgb, var(--surface-panel) 88%, var(--accent-line) 12%), var(--surface-control));
+    border-color: color-mix(in srgb, var(--accent-line) 28%, var(--divider));
+    box-shadow: 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.025);
+  }
+  .brain-launcher .brain-launcher-label {
+    display: none;
+  }
+  .brain-launcher svg {
+    width: 20px;
+    height: 20px;
+  }
+  .brain-panel {
+    left: 10px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    width: auto;
+    max-width: none;
+    height: min(680px, calc(100dvh - 20px - env(safe-area-inset-bottom)));
+    max-height: calc(100dvh - 20px - env(safe-area-inset-bottom));
+    border-radius: 16px;
+    border-color: color-mix(in srgb, var(--accent-line) 20%, var(--divider));
+    box-shadow: 0 32px 90px rgba(0,0,0,.58);
   }
 }

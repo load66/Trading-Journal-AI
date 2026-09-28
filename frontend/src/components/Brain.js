@@ -201,7 +201,7 @@ export default function Brain({ accountId, open: openProp, onOpenChange }) {
           title="Open Brain, AI Trading Coach"
         >
           <BrainIcon size={18} className="text-purple" aria-hidden="true" />
-          Brain
+          <span className="brain-launcher-label">Brain</span>
         </button>
       )}
     </>

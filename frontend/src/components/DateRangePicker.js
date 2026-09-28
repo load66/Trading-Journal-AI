@@ -16,6 +16,12 @@ function fmtLabel(s) {
   return `${MONTHS[Number(m) - 1].slice(0, 3)} ${d}, ${y}`;
 }
 
+function fmtCompactLabel(s) {
+  if (!s) return '';
+  const [, m, d] = s.split('-');
+  return `${Number(m)}/${Number(d)}`;
+}
+
 function getQuickPresets() {
   const t = new Date(); t.setHours(0, 0, 0, 0);
   const l7 = new Date(t); l7.setDate(t.getDate() - 6);
@@ -202,12 +208,22 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
   }
 
   const quickPresets = getQuickPresets();
-  const hasRange = dateFrom || dateTo;
+  const hasRange = Boolean(dateFrom || dateTo);
+  const activeQuick = quickPresets.find((preset) =>
+    dateFrom === toStr(preset.from) && dateTo === toStr(preset.to)
+  ) || null;
   const displayText = selecting
     ? `${fmtLabel(selecting)} → ...`
     : hasRange
     ? `${fmtLabel(dateFrom)}  →  ${fmtLabel(dateTo)}`
     : 'All time';
+  const mobileDisplayText = selecting
+    ? `${fmtCompactLabel(selecting)} → …`
+    : activeQuick
+    ? 'Custom'
+    : hasRange
+    ? `${fmtCompactLabel(dateFrom)} → ${fmtCompactLabel(dateTo)}`
+    : 'Custom';
 
   return (
     <div ref={ref} className="date-range-picker" style={{ position: 'relative' }}>
@@ -230,6 +246,15 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
               </button>
             );
           })}
+          <button
+            type="button"
+            className={`date-range-quick-btn${!hasRange ? ' active' : ''}`}
+            aria-label="All time"
+            aria-pressed={!hasRange}
+            onClick={clearRange}
+          >
+            ALL
+          </button>
         </div>
 
         {/* Trigger button + separate clear control (no nested interactive elements) */}
@@ -243,7 +268,8 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
           style={{ color: hasRange ? 'var(--text-primary)' : 'var(--text-secondary)', borderColor: open ? 'var(--accent-line)' : undefined }}
         >
           <Calendar size={15} aria-hidden="true" />
-          {displayText}
+          <span className="date-range-label-desktop">{displayText}</span>
+          <span className="date-range-label-mobile">{mobileDisplayText}</span>
           <ChevronDown size={14} aria-hidden="true" />
         </button>
         {hasRange && (
@@ -256,7 +282,14 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
 
       {/* Dropdown panel */}
       {open && (
-        <div className="date-range-popover" role="dialog" aria-label="Choose a date range" style={{
+        <>
+          <button
+            type="button"
+            className="date-range-backdrop"
+            aria-label="Close date picker"
+            onClick={() => { setOpen(false); setSelecting(null); setHover(null); }}
+          />
+          <div className="date-range-popover" role="dialog" aria-label="Choose a date range" style={{
           position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 500,
           background: 'var(--surface-panel)', border: '1px solid var(--divider)',
           borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-dropdown)',
@@ -336,6 +369,7 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
             })}
           </div>
         </div>
+        </>
       )}
     </div>
   );
