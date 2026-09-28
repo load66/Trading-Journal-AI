@@ -51,40 +51,101 @@ const escapeXml = (value) => String(value ?? '')
   .replace(/'/g, '&apos;');
 
 const metricHelp = {
-  pnl: 'Money made or lost after trading results',
-  win: 'Percent of closed trades that finished profitable',
-  pf: 'Gross profit divided by gross loss',
-  ratio: 'Average winner compared with average loser',
-  days: 'Number of days with at least one trade',
+  pnl: 'Your total net trading result',
+  win: 'How often a closed trade finished profitable',
+  pf: 'Gross profits compared with gross losses',
+  ratio: 'Size of the average winner vs. average loser',
+  days: 'Sessions with at least one recorded trade',
 };
+
+const shareSvgStyle = `
+  text { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
+  .tabular { font-variant-numeric: tabular-nums; }
+`;
+
+function fmtShareDayPnl(value) {
+  const n = Number(value || 0);
+  const sign = n > 0 ? '+' : n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  const currency = String.fromCharCode(36);
+  if (abs >= 1000) {
+    return sign + currency + (abs / 1000).toFixed(abs >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'K';
+  }
+  return sign + currency + Math.round(abs).toLocaleString('en-US');
+}
+
+function localDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
 
 function shareMetricCard(x, y, width, label, value, help, tone = 'neutral') {
   const valueColor = tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.text;
   return `
     <g transform="translate(${x} ${y})">
-      <rect width="${width}" height="112" rx="14" fill="${SHARE_PALETTE.panel}" stroke="${SHARE_PALETTE.border}" />
-      <text x="18" y="26" fill="${SHARE_PALETTE.muted}" font-size="13" font-weight="700" letter-spacing=".8">${escapeXml(label)}</text>
-      <text x="18" y="62" fill="${valueColor}" font-size="26" font-weight="750">${escapeXml(value)}</text>
-      <text x="18" y="88" fill="${SHARE_PALETTE.dim}" font-size="10.5">${escapeXml(help)}</text>
+      <rect width="${width}" height="96" rx="14" fill="${SHARE_PALETTE.panel}" stroke="${SHARE_PALETTE.border}" />
+      <text x="16" y="23" fill="${SHARE_PALETTE.muted}" font-size="11.5" font-weight="750" letter-spacing=".75">${escapeXml(label)}</text>
+      <text class="tabular" x="16" y="55" fill="${valueColor}" font-size="25" font-weight="780">${escapeXml(value)}</text>
+      <text x="16" y="78" fill="${SHARE_PALETTE.dim}" font-size="9.5" font-weight="500">${escapeXml(help)}</text>
     </g>`;
 }
 
-export function buildMonthShareSvg({ year, month, weeks, dayData, monthPnl, winRate, profitFactor, avgWinLoss, tradingDays }) {
+function shareInsightCard(x, y, width, label, value, note, tone = 'neutral') {
+  const valueColor = tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : tone === 'blue' ? SHARE_PALETTE.blue : SHARE_PALETTE.text;
+  return `
+    <g transform="translate(${x} ${y})">
+      <rect width="${width}" height="62" rx="12" fill="${SHARE_PALETTE.panel2}" stroke="${SHARE_PALETTE.border}" />
+      <text x="14" y="19" fill="${SHARE_PALETTE.dim}" font-size="9.5" font-weight="750" letter-spacing=".8">${escapeXml(label)}</text>
+      <text class="tabular" x="14" y="42" fill="${valueColor}" font-size="17" font-weight="780">${escapeXml(value)}</text>
+      <text x="${width - 14}" y="42" text-anchor="end" fill="${SHARE_PALETTE.muted}" font-size="9.5">${escapeXml(note)}</text>
+    </g>`;
+}
+
+export function buildMonthShareSvg({
+  year,
+  month,
+  weeks,
+  dayData,
+  monthPnl,
+  winRate,
+  profitFactor,
+  avgWinLoss,
+  tradingDays,
+  asOfDate,
+}) {
   const width = 1200;
-  const margin = 54;
+  const margin = 50;
   const inner = width - margin * 2;
   const metricGap = 10;
   const metricW = (inner - metricGap * 4) / 5;
+  const insightGap = 10;
+  const insightW = (inner - insightGap * 3) / 4;
   const gridY = 366;
-  const headerH = 44;
-  const cellGap = 8;
+  const headerH = 34;
+  const cellGap = 7;
   const cellW = (inner - cellGap * 4) / 5;
-  const cellH = 112;
+  const cellH = 100;
   const rows = Math.max(1, weeks.length);
-  const height = gridY + headerH + rows * cellH + Math.max(0, rows - 1) * cellGap + 108;
+  const height = gridY + headerH + rows * cellH + Math.max(0, rows - 1) * cellGap + 78;
   const pfValue = profitFactor == null ? '∞' : Number(profitFactor).toFixed(2);
   const winValue = winRate === '--' ? '--' : `${winRate}%`;
   const monthName = MONTHS[month - 1];
+  const monthShort = MONTHS_SHORT[month - 1];
+  const entries = Object.entries(dayData || {}).filter(([, data]) => data && Number(data.trade_count || 0) > 0);
+  const greenDays = entries.filter(([, data]) => Number(data.net_pnl || 0) > 0).length;
+  const redDays = entries.filter(([, data]) => Number(data.net_pnl || 0) < 0).length;
+  const flatDays = Math.max(0, entries.length - greenDays - redDays);
+  const totalTrades = entries.reduce((sum, [, data]) => sum + Number(data.trade_count || 0), 0);
+  const best = entries.reduce((winner, current) => (
+    !winner || Number(current[1].net_pnl || 0) > Number(winner[1].net_pnl || 0) ? current : winner
+  ), null);
+  const worst = entries.reduce((loser, current) => (
+    !loser || Number(current[1].net_pnl || 0) < Number(loser[1].net_pnl || 0) ? current : loser
+  ), null);
+  const dayLabel = entry => entry ? `${monthShort} ${Number(entry[0].slice(-2))}` : '—';
+  const asOfCandidate = asOfDate instanceof Date ? asOfDate : new Date(asOfDate || Date.now());
+  const asOf = Number.isNaN(asOfCandidate.getTime()) ? new Date() : asOfCandidate;
+  const todayKey = localDateKey(asOf);
+  const greenRate = tradingDays > 0 ? Math.round((greenDays / tradingDays) * 100) : 0;
 
   const metrics = [
     ['NET P&L', signedPnl(monthPnl), metricHelp.pnl, monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : 'neutral'],
@@ -92,33 +153,58 @@ export function buildMonthShareSvg({ year, month, weeks, dayData, monthPnl, winR
     ['PROFIT FACTOR', pfValue, metricHelp.pf, 'neutral'],
     ['AVG WIN / LOSS', avgWinLoss, metricHelp.ratio, 'neutral'],
     ['TRADING DAYS', tradingDays, metricHelp.days, 'neutral'],
-  ].map((m, i) => shareMetricCard(margin + i * (metricW + metricGap), 204, metricW, ...m)).join('');
+  ].map((m, i) => shareMetricCard(margin + i * (metricW + metricGap), 154, metricW, ...m)).join('');
+
+  const insights = [
+    ['BEST DAY', best ? fmtShareDayPnl(best[1].net_pnl) : '—', dayLabel(best), 'pos'],
+    ['LARGEST LOSS', worst ? fmtShareDayPnl(worst[1].net_pnl) : '—', dayLabel(worst), worst && Number(worst[1].net_pnl || 0) < 0 ? 'neg' : 'neutral'],
+    ['GREEN DAYS', `${greenDays}/${tradingDays || 0}`, tradingDays ? `${greenRate}% of sessions` : 'No sessions yet', 'blue'],
+    ['TOTAL TRADES', totalTrades.toLocaleString('en-US'), `${redDays} red · ${flatDays} flat`, 'neutral'],
+  ].map((m, i) => shareInsightCard(margin + i * (insightW + insightGap), 262, insightW, ...m)).join('');
 
   const weekdayHeaders = ['MON', 'TUE', 'WED', 'THU', 'FRI'].map((d, i) =>
-    `<text x="${margin + i * (cellW + cellGap) + cellW / 2}" y="${gridY + 28}" text-anchor="middle" fill="${SHARE_PALETTE.muted}" font-size="13" font-weight="700" letter-spacing="1.4">${d}</text>`
+    `<text x="${margin + i * (cellW + cellGap) + cellW / 2}" y="${gridY + 22}" text-anchor="middle" fill="${SHARE_PALETTE.muted}" font-size="11.5" font-weight="750" letter-spacing="1.5">${d}</text>`
   ).join('');
 
   const cells = weeks.map((week, wi) => week.slice(0, 5).map((day, di) => {
     const x = margin + di * (cellW + cellGap);
     const y = gridY + headerH + wi * (cellH + cellGap);
-    if (!day) return `<rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" rx="12" fill="${SHARE_PALETTE.panel}" opacity=".28"/>`;
+    if (!day) {
+      return `<rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" rx="12" fill="${SHARE_PALETTE.panel}" opacity=".18"/>`;
+    }
+
     const key = `${year}-${pad(month)}-${pad(day)}`;
     const data = dayData[key];
+    const isFuture = key > todayKey;
+    const isToday = key === todayKey;
     const pnl = Number(data?.net_pnl || 0);
     const tone = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'neutral';
-    const fill = tone === 'pos' ? '#0d3028' : tone === 'neg' ? '#32171e' : SHARE_PALETTE.panel;
-    const accent = tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.border;
-    const pnlText = data ? signedPnl(pnl) : '';
-    const tradeText = data ? `${data.trade_count} trade${data.trade_count === 1 ? '' : 's'}` : 'No trades';
+    const fill = data
+      ? (tone === 'pos' ? '#0d3028' : tone === 'neg' ? '#32171e' : SHARE_PALETTE.panel)
+      : (isFuture ? '#081722' : '#091923');
+    const accent = data
+      ? (tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.border)
+      : (isFuture ? '#24465b' : '#173246');
+    const pnlText = data ? fmtShareDayPnl(pnl) : (isFuture ? 'UPCOMING' : '—');
+    const winDetail = data && data.win_rate != null ? ` · ${Number(data.win_rate).toFixed(0)}% win` : '';
+    const tradeText = data
+      ? `${data.trade_count} trade${data.trade_count === 1 ? '' : 's'}${winDetail}`
+      : (isFuture ? 'Future session' : 'No trades recorded');
+    const valueColor = data
+      ? (tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.text)
+      : (isFuture ? SHARE_PALETTE.muted : SHARE_PALETTE.dim);
+
     return `
       <g>
-        <rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" rx="12" fill="${fill}" stroke="${SHARE_PALETTE.border}" />
+        <rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" rx="12" fill="${fill}" stroke="${isToday ? SHARE_PALETTE.blue : SHARE_PALETTE.border}" stroke-width="${isToday ? 2 : 1}" />
         <rect x="${x}" y="${y}" width="4" height="${cellH}" rx="2" fill="${accent}" />
-        <text x="${x + 16}" y="${y + 26}" fill="${SHARE_PALETTE.muted}" font-size="13" font-weight="700">${day}</text>
-        <text x="${x + 16}" y="${y + 65}" fill="${tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.text}" font-size="22" font-weight="750">${escapeXml(pnlText)}</text>
-        <text x="${x + 16}" y="${y + 91}" fill="${SHARE_PALETTE.dim}" font-size="11.5">${escapeXml(tradeText)}</text>
+        <text class="tabular" x="${x + 15}" y="${y + 23}" fill="${SHARE_PALETTE.muted}" font-size="11.5" font-weight="750">${day}</text>
+        <text class="tabular" x="${x + 15}" y="${y + 59}" fill="${valueColor}" font-size="${data ? 20 : 11}" font-weight="${data ? 780 : 750}" letter-spacing="${data ? '-.2' : '1'}">${escapeXml(pnlText)}</text>
+        <text x="${x + 15}" y="${y + 82}" fill="${SHARE_PALETTE.dim}" font-size="9.7" font-weight="500">${escapeXml(tradeText)}</text>
       </g>`;
   }).join('')).join('');
+
+  const activitySummary = `${tradingDays} trading day${tradingDays === 1 ? '' : 's'} · ${totalTrades} trade${totalTrades === 1 ? '' : 's'} · ${greenDays} green / ${redDays} red day${redDays === 1 ? '' : 's'}`;
 
   return {
     width,
@@ -126,62 +212,126 @@ export function buildMonthShareSvg({ year, month, weeks, dayData, monthPnl, winR
     filename: `trading-calendar-${year}-${pad(month)}.png`,
     title: `${monthName} ${year} Trading Calendar`,
     svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-      <rect width="100%" height="100%" fill="${SHARE_PALETTE.bg}" />
-      <text x="${margin}" y="72" fill="${SHARE_PALETTE.blue}" font-size="13" font-weight="750" letter-spacing="2">TRADING PERFORMANCE SNAPSHOT</text>
-      <text x="${margin}" y="124" fill="${SHARE_PALETTE.text}" font-size="48" font-weight="780">${escapeXml(monthName)} ${year}</text>
-      <text x="${margin}" y="158" fill="${SHARE_PALETTE.muted}" font-size="16">A simple view of your monthly results, consistency, and trading activity.</text>
+      <defs>
+        <linearGradient id="shareBg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#071722" />
+          <stop offset="58%" stop-color="${SHARE_PALETTE.bg}" />
+          <stop offset="100%" stop-color="#041019" />
+        </linearGradient>
+      </defs>
+      <style>${shareSvgStyle}</style>
+      <rect width="100%" height="100%" fill="url(#shareBg)" />
+      <rect x="${margin}" y="38" width="5" height="48" rx="2.5" fill="${SHARE_PALETTE.blue}" />
+      <text x="${margin + 18}" y="50" fill="${SHARE_PALETTE.blue}" font-size="11.5" font-weight="780" letter-spacing="2">AI JOURNAL · MONTHLY PERFORMANCE</text>
+      <text x="${margin + 18}" y="94" fill="${SHARE_PALETTE.text}" font-size="43" font-weight="800" letter-spacing="-1">${escapeXml(monthName)} ${year}</text>
+      <text x="${margin + 18}" y="123" fill="${SHARE_PALETTE.muted}" font-size="14.5" font-weight="500">${escapeXml(activitySummary)}</text>
+      <rect x="${width - 176}" y="46" width="126" height="30" rx="15" fill="${SHARE_PALETTE.panel2}" stroke="${SHARE_PALETTE.border}" />
+      <text x="${width - 113}" y="66" text-anchor="middle" fill="${SHARE_PALETTE.muted}" font-size="10.5" font-weight="750" letter-spacing="1.2">MONTHLY SNAPSHOT</text>
       ${metrics}
+      ${insights}
+      <text x="${margin}" y="${gridY - 10}" fill="${SHARE_PALETTE.text}" font-size="12" font-weight="750" letter-spacing="1.2">DAILY PERFORMANCE</text>
       ${weekdayHeaders}
       ${cells}
-      <text x="${margin}" y="${height - 44}" fill="${SHARE_PALETTE.dim}" font-size="12">Green = profitable day   •   Red = losing day   •   Trade count shows how active the session was</text>
-      <text x="${width - margin}" y="${height - 44}" text-anchor="end" fill="${SHARE_PALETTE.dim}" font-size="12">AI Journal</text>
+      <line x1="${margin}" y1="${height - 54}" x2="${width - margin}" y2="${height - 54}" stroke="${SHARE_PALETTE.border}" />
+      <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Green = profitable · Red = losing · Upcoming = future market session</text>
+      <text x="${width - margin}" y="${height - 28}" text-anchor="end" fill="${SHARE_PALETTE.dim}" font-size="10.5" font-weight="650">AI Journal</text>
     </svg>`,
   };
 }
 
-export function buildYearShareSvg({ year, yearData, yearPnl, yearWinRate, totalTrades, tradingDays, profitableMonths }) {
+export function buildYearShareSvg({
+  year,
+  yearData,
+  yearPnl,
+  yearWinRate,
+  totalTrades,
+  tradingDays,
+  profitableMonths,
+  asOfDate,
+}) {
   const width = 1200;
-  const height = 1460;
-  const margin = 54;
+  const margin = 50;
   const inner = width - margin * 2;
   const metricGap = 10;
   const metricW = (inner - metricGap * 4) / 5;
+  const insightGap = 10;
+  const insightW = (inner - insightGap * 3) / 4;
+  const gridY = 356;
+  const cardGap = 14;
+  const cardW = (inner - cardGap * 2) / 3;
+  const cardH = 204;
+  const height = gridY + cardH * 4 + cardGap * 3 + 78;
+  const asOfCandidate = asOfDate instanceof Date ? asOfDate : new Date(asOfDate || Date.now());
+  const asOf = Number.isNaN(asOfCandidate.getTime()) ? new Date() : asOfCandidate;
+  const currentYear = asOf.getFullYear();
+  const currentMonth = asOf.getMonth() + 1;
+  const months = Array.from({ length: 12 }, (_, i) => yearData?.[i] || null);
+  const active = months
+    .map((data, i) => ({ data, i }))
+    .filter(({ data }) => Boolean(data?.has_data));
+  const losingMonths = active.filter(({ data }) => Number(data.net_pnl || 0) < 0).length;
+  const best = active.reduce((winner, current) => (
+    !winner || Number(current.data.net_pnl || 0) > Number(winner.data.net_pnl || 0) ? current : winner
+  ), null);
+  const worst = active.reduce((loser, current) => (
+    !loser || Number(current.data.net_pnl || 0) < Number(loser.data.net_pnl || 0) ? current : loser
+  ), null);
+  const profitableRate = active.length ? Math.round((profitableMonths / active.length) * 100) : 0;
+
   const metrics = [
     ['YTD NET P&L', signedPnl(yearPnl), metricHelp.pnl, yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : 'neutral'],
     ['WIN RATE', yearWinRate === '--' ? '--' : `${yearWinRate}%`, metricHelp.win, 'neutral'],
-    ['TRADES', totalTrades.toLocaleString('en-US'), 'Total closed trades recorded this year', 'neutral'],
+    ['TOTAL TRADES', totalTrades.toLocaleString('en-US'), 'Closed trades recorded this year', 'neutral'],
     ['TRADING DAYS', tradingDays.toLocaleString('en-US'), metricHelp.days, 'neutral'],
-    ['PROFITABLE MONTHS', `${profitableMonths}/12`, 'Months that finished with positive net P&L', 'neutral'],
-  ].map((m, i) => shareMetricCard(margin + i * (metricW + metricGap), 204, metricW, ...m)).join('');
+    ['PROFITABLE MONTHS', `${profitableMonths}/${active.length || 0}`, 'Positive months out of active months', 'neutral'],
+  ].map((m, i) => shareMetricCard(margin + i * (metricW + metricGap), 154, metricW, ...m)).join('');
 
-  const cardGap = 16;
-  const cardW = (inner - cardGap * 2) / 3;
-  const cardH = 225;
-  const gridY = 360;
-  const cards = Array.from({ length: 12 }, (_, i) => {
-    const data = yearData?.[i];
+  const insights = [
+    ['BEST MONTH', best ? fmtShareDayPnl(best.data.net_pnl) : '—', best ? MONTHS_SHORT[best.i] : 'No data', 'pos'],
+    ['LARGEST LOSS', worst ? fmtShareDayPnl(worst.data.net_pnl) : '—', worst ? MONTHS_SHORT[worst.i] : 'No data', worst && Number(worst.data.net_pnl || 0) < 0 ? 'neg' : 'neutral'],
+    ['PROFITABLE RATE', active.length ? `${profitableRate}%` : '—', `${profitableMonths} green · ${losingMonths} red`, 'blue'],
+    ['ACTIVE MONTHS', active.length.toString(), `${totalTrades.toLocaleString('en-US')} total trades`, 'neutral'],
+  ].map((m, i) => shareInsightCard(margin + i * (insightW + insightGap), 262, insightW, ...m)).join('');
+
+  const cards = months.map((data, i) => {
     const x = margin + (i % 3) * (cardW + cardGap);
     const y = gridY + Math.floor(i / 3) * (cardH + cardGap);
+    const isFuture = year > currentYear || (year === currentYear && i + 1 > currentMonth);
     const has = Boolean(data?.has_data);
     const pnl = Number(data?.net_pnl || 0);
     const tone = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'neutral';
-    const fill = tone === 'pos' ? '#0d3028' : tone === 'neg' ? '#32171e' : SHARE_PALETTE.panel;
-    const accent = tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.border;
-    const win = has ? `${Number(data.win_rate || 0).toFixed(1)}%` : '--';
-    const pf = has ? (data.profit_factor == null ? '∞' : Number(data.profit_factor).toFixed(2)) : '--';
+    const fill = has
+      ? (tone === 'pos' ? '#0d3028' : tone === 'neg' ? '#32171e' : SHARE_PALETTE.panel)
+      : (isFuture ? '#081722' : '#091923');
+    const accent = has
+      ? (tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.border)
+      : (isFuture ? '#24465b' : '#173246');
+    const valueColor = has
+      ? (tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.text)
+      : SHARE_PALETTE.muted;
+    const primary = has ? fmtShareDayPnl(pnl) : (isFuture ? 'UPCOMING' : 'NO TRADES');
+    const win = has ? `${Number(data.win_rate || 0).toFixed(1)}%` : '—';
+    const pf = has ? (data.profit_factor == null ? '∞' : Number(data.profit_factor).toFixed(2)) : '—';
+    const activity = has
+      ? `${data.total_trades} trades · ${data.trading_days} trading days`
+      : (isFuture ? 'Future month' : 'No trading activity recorded');
+
     return `
       <g>
-        <rect x="${x}" y="${y}" width="${cardW}" height="${cardH}" rx="16" fill="${fill}" stroke="${SHARE_PALETTE.border}" />
-        <rect x="${x}" y="${y}" width="5" height="${cardH}" rx="3" fill="${accent}" />
-        <text x="${x + 22}" y="${y + 34}" fill="${SHARE_PALETTE.muted}" font-size="15" font-weight="750">${MONTHS_SHORT[i].toUpperCase()}</text>
-        <text x="${x + 22}" y="${y + 87}" fill="${tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.text}" font-size="34" font-weight="780">${has ? escapeXml(signedPnl(pnl)) : 'No trades'}</text>
-        <text x="${x + 22}" y="${y + 132}" fill="${SHARE_PALETTE.muted}" font-size="12">Win Rate</text>
-        <text x="${x + 22}" y="${y + 157}" fill="${SHARE_PALETTE.text}" font-size="18" font-weight="700">${win}</text>
-        <text x="${x + 150}" y="${y + 132}" fill="${SHARE_PALETTE.muted}" font-size="12">Profit Factor</text>
-        <text x="${x + 150}" y="${y + 157}" fill="${SHARE_PALETTE.text}" font-size="18" font-weight="700">${pf}</text>
-        <text x="${x + 22}" y="${y + 196}" fill="${SHARE_PALETTE.dim}" font-size="11.5">${has ? `${data.total_trades} trades · ${data.trading_days} trading days` : 'No trading activity recorded'}</text>
+        <rect x="${x}" y="${y}" width="${cardW}" height="${cardH}" rx="15" fill="${fill}" stroke="${SHARE_PALETTE.border}" />
+        <rect x="${x}" y="${y}" width="5" height="${cardH}" rx="2.5" fill="${accent}" />
+        <text x="${x + 20}" y="${y + 31}" fill="${SHARE_PALETTE.muted}" font-size="12" font-weight="780" letter-spacing="1.1">${MONTHS[i].toUpperCase()}</text>
+        <text class="tabular" x="${x + 20}" y="${y + 78}" fill="${valueColor}" font-size="${has ? 31 : 15}" font-weight="800" letter-spacing="${has ? '-.5' : '1'}">${escapeXml(primary)}</text>
+        <line x1="${x + 20}" y1="${y + 102}" x2="${x + cardW - 20}" y2="${y + 102}" stroke="${SHARE_PALETTE.border}" />
+        <text x="${x + 20}" y="${y + 129}" fill="${SHARE_PALETTE.dim}" font-size="10">WIN RATE</text>
+        <text class="tabular" x="${x + 20}" y="${y + 153}" fill="${SHARE_PALETTE.text}" font-size="17" font-weight="750">${win}</text>
+        <text x="${x + 142}" y="${y + 129}" fill="${SHARE_PALETTE.dim}" font-size="10">PROFIT FACTOR</text>
+        <text class="tabular" x="${x + 142}" y="${y + 153}" fill="${SHARE_PALETTE.text}" font-size="17" font-weight="750">${pf}</text>
+        <text x="${x + 20}" y="${y + 183}" fill="${SHARE_PALETTE.muted}" font-size="10.5">${escapeXml(activity)}</text>
       </g>`;
   }).join('');
+
+  const yearlySummary = `${active.length} active month${active.length === 1 ? '' : 's'} · ${tradingDays} trading day${tradingDays === 1 ? '' : 's'} · ${totalTrades.toLocaleString('en-US')} total trades`;
 
   return {
     width,
@@ -189,14 +339,28 @@ export function buildYearShareSvg({ year, yearData, yearPnl, yearWinRate, totalT
     filename: `trading-calendar-${year}.png`,
     title: `${year} Trading Calendar`,
     svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-      <rect width="100%" height="100%" fill="${SHARE_PALETTE.bg}" />
-      <text x="${margin}" y="72" fill="${SHARE_PALETTE.blue}" font-size="13" font-weight="750" letter-spacing="2">YEARLY TRADING PERFORMANCE</text>
-      <text x="${margin}" y="124" fill="${SHARE_PALETTE.text}" font-size="48" font-weight="780">${year}</text>
-      <text x="${margin}" y="158" fill="${SHARE_PALETTE.muted}" font-size="16">A beginner-friendly look at your year: results, consistency, activity, and month-to-month progress.</text>
+      <defs>
+        <linearGradient id="yearShareBg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#071722" />
+          <stop offset="58%" stop-color="${SHARE_PALETTE.bg}" />
+          <stop offset="100%" stop-color="#041019" />
+        </linearGradient>
+      </defs>
+      <style>${shareSvgStyle}</style>
+      <rect width="100%" height="100%" fill="url(#yearShareBg)" />
+      <rect x="${margin}" y="38" width="5" height="48" rx="2.5" fill="${SHARE_PALETTE.blue}" />
+      <text x="${margin + 18}" y="50" fill="${SHARE_PALETTE.blue}" font-size="11.5" font-weight="780" letter-spacing="2">AI JOURNAL · YEARLY PERFORMANCE</text>
+      <text x="${margin + 18}" y="94" fill="${SHARE_PALETTE.text}" font-size="43" font-weight="800" letter-spacing="-1">${year} Trading Year</text>
+      <text x="${margin + 18}" y="123" fill="${SHARE_PALETTE.muted}" font-size="14.5" font-weight="500">${escapeXml(yearlySummary)}</text>
+      <rect x="${width - 168}" y="46" width="118" height="30" rx="15" fill="${SHARE_PALETTE.panel2}" stroke="${SHARE_PALETTE.border}" />
+      <text x="${width - 109}" y="66" text-anchor="middle" fill="${SHARE_PALETTE.muted}" font-size="10.5" font-weight="750" letter-spacing="1.2">YEAR SNAPSHOT</text>
       ${metrics}
+      ${insights}
+      <text x="${margin}" y="${gridY - 10}" fill="${SHARE_PALETTE.text}" font-size="12" font-weight="750" letter-spacing="1.2">MONTH-BY-MONTH PERFORMANCE</text>
       ${cards}
-      <text x="${margin}" y="${height - 40}" fill="${SHARE_PALETTE.dim}" font-size="12">Green = profitable month   •   Red = losing month   •   Profit Factor above 1.00 means gross wins exceeded gross losses</text>
-      <text x="${width - margin}" y="${height - 40}" text-anchor="end" fill="${SHARE_PALETTE.dim}" font-size="12">AI Journal</text>
+      <line x1="${margin}" y1="${height - 54}" x2="${width - margin}" y2="${height - 54}" stroke="${SHARE_PALETTE.border}" />
+      <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Green = profitable · Red = losing · Upcoming = future month</text>
+      <text x="${width - margin}" y="${height - 28}" text-anchor="end" fill="${SHARE_PALETTE.dim}" font-size="10.5" font-weight="650">AI Journal</text>
     </svg>`,
   };
 }

@@ -18,10 +18,11 @@ describe('Calendar share image documents', () => {
       profitFactor: 1.33,
       avgWinLoss: '1.26',
       tradingDays: 18,
+      asOfDate: new Date('2026-09-27T12:00:00'),
     });
 
     expect(spec.filename).toBe('trading-calendar-2026-09.png');
-    expect(spec.svg).toContain('TRADING PERFORMANCE SNAPSHOT');
+    expect(spec.svg).toContain('AI JOURNAL · MONTHLY PERFORMANCE');
     expect(spec.svg).toContain('NET P&amp;L');
     expect(spec.svg).toContain('WIN RATE');
     expect(spec.svg).toContain('PROFIT FACTOR');
@@ -30,8 +31,14 @@ describe('Calendar share image documents', () => {
     expect(spec.svg).toContain('+$446');
     expect(spec.svg).toContain('-$1.6K');
     expect(spec.svg).toContain('3 trades');
+    expect(spec.svg).toContain('BEST DAY');
+    expect(spec.svg).toContain('LARGEST LOSS');
+    expect(spec.svg).toContain('GREEN DAYS');
+    expect(spec.svg).toContain('TOTAL TRADES');
+    expect(spec.svg).toContain('system-ui');
     expect(spec.width).toBe(1200);
     expect(spec.height).toBeGreaterThan(500);
+    expect(spec.height).toBeLessThan(1110);
   });
 
   test('year image contains all twelve months and plain-English yearly metrics', () => {
@@ -55,16 +62,24 @@ describe('Calendar share image documents', () => {
       totalTrades: 30,
       tradingDays: 15,
       profitableMonths: 2,
+      asOfDate: new Date('2026-09-27T12:00:00'),
     });
 
     expect(spec.filename).toBe('trading-calendar-2026.png');
-    expect(spec.svg).toContain('YEARLY TRADING PERFORMANCE');
+    expect(spec.svg).toContain('AI JOURNAL · YEARLY PERFORMANCE');
     expect(spec.svg).toContain('YTD NET P&amp;L');
     expect(spec.svg).toContain('PROFITABLE MONTHS');
     expect(spec.svg).toContain('JAN');
     expect(spec.svg).toContain('DEC');
-    expect(spec.svg).toContain('2/12');
+    expect(spec.svg).toContain('2/3');
+    expect(spec.svg).toContain('BEST MONTH');
+    expect(spec.svg).toContain('LARGEST LOSS');
+    expect(spec.svg).toContain('PROFITABLE RATE');
+    expect(spec.svg).toContain('ACTIVE MONTHS');
+    expect(spec.svg).toContain('UPCOMING');
+    expect(spec.svg).toContain('system-ui');
     expect(spec.width).toBe(1200);
-    expect(spec.height).toBe(1460);
+    expect(spec.height).toBeLessThan(1460);
+    expect(spec.height).toBeGreaterThan(1100);
   });
 });
