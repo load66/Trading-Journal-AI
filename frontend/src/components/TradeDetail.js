@@ -763,6 +763,34 @@ function getDayTradeTime(t, which) {
   return execution ? formatExecutionObjectET(execution, t.date) : null;
 }
 
+function getDayTradeRange(t) {
+  const openT = getDayTradeTime(t, 'open');
+  const closeT = getDayTradeTime(t, 'close');
+  if (openT && closeT && openT !== closeT) {
+    return `${openT.replace(/\s+ET$/, '')}–${closeT}`;
+  }
+  return openT || closeT || 'Time unavailable';
+}
+
+export function groupDayTradesByTicker(trades = []) {
+  const groups = [];
+  const byTicker = new Map();
+
+  trades.forEach(trade => {
+    const ticker = String(trade?.ticker || '—').trim().toUpperCase() || '—';
+    let group = byTicker.get(ticker);
+    if (!group) {
+      group = { ticker, trades: [], netPnl: 0 };
+      byTicker.set(ticker, group);
+      groups.push(group);
+    }
+    group.trades.push(trade);
+    if (!trade?.is_open) group.netPnl += Number(trade?.net_pnl) || 0;
+  });
+
+  return groups;
+}
+
 function DaySidebar({ currentTrade, onOpenDetail }) {
   const [dayTrades, setDayTrades] = useState([]);
 
@@ -773,40 +801,59 @@ function DaySidebar({ currentTrade, onOpenDetail }) {
   }, [currentTrade.date, currentTrade.account_id]);
 
   const dayPnl = dayTrades.filter(t => !t.is_open).reduce((s, t) => s + (t.net_pnl || 0), 0);
+  const tickerGroups = groupDayTradesByTicker(dayTrades);
+  const formatPnl = value => {
+    const pnl = Number(value) || 0;
+    return `${pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  };
+
+  const renderTradeRow = (t, repeated = false) => {
+    const pnl = Number(t.net_pnl) || 0;
+    const isActive = t.id === currentTrade.id;
+    return (
+      <button
+        type="button"
+        key={t.id}
+        className={`td-session-trade${repeated ? ' td-session-trade-nested' : ''}${isActive ? ' active' : ''}`}
+        aria-current={isActive ? 'true' : undefined}
+        onClick={() => onOpenDetail && onOpenDetail(t)}
+      >
+        {!repeated && <strong className="td-session-ticker">{t.ticker}</strong>}
+        <span className="td-session-time">{getDayTradeRange(t)}</span>
+        {isActive && <span className="td-session-selected">Selected</span>}
+        <span className={`td-session-pnl num ${pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : ''}`}>
+          {formatPnl(pnl)}
+        </span>
+      </button>
+    );
+  };
 
   return (
-    <section className="card panel-flush" aria-label="This session">
-      <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid var(--divider-soft)' }}>
-        <h2 className="section-title" style={{ fontSize: 17 }}>This session</h2>
-        <div className="num text-muted" style={{ fontSize: 13, marginTop: 2 }}>{currentTrade.date}</div>
+    <section className="card panel-flush td-session-card" aria-label="This session">
+      <div className="td-session-head">
+        <h2 className="section-title">This session</h2>
+        <div className="num text-muted">{currentTrade.date}</div>
       </div>
-      <div style={{ overflowY: 'auto', maxHeight: 560 }}>
-        {dayTrades.map(t => {
-          const pnl = t.net_pnl ?? 0;
-          const isActive = t.id === currentTrade.id;
-          const openT = getDayTradeTime(t, 'open');
-          const closeT = getDayTradeTime(t, 'close');
+      <div className="td-session-list">
+        {tickerGroups.map(group => {
+          if (group.trades.length === 1) return renderTradeRow(group.trades[0]);
+
+          const hasActive = group.trades.some(t => t.id === currentTrade.id);
           return (
-            <button
-              type="button"
-              key={t.id}
-              className={`list-row${isActive ? ' active' : ''}`}
-              aria-current={isActive ? 'true' : undefined}
-              onClick={() => onOpenDetail && onOpenDetail(t)}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                <span style={{ fontWeight: 600, fontSize: 15 }}>{t.ticker}</span>
-                <span className={`num ${pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : ''}`} style={{ fontSize: 14, fontWeight: 600 }}>
-                  {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+            <section className={`td-session-group${hasActive ? ' has-active' : ''}`} key={group.ticker} aria-label={`${group.ticker} trades`}>
+              <div className="td-session-group-head">
+                <div className="td-session-group-title">
+                  <strong>{group.ticker}</strong>
+                  <span>{group.trades.length} trades</span>
+                </div>
+                <span className={`num td-session-group-pnl ${group.netPnl > 0 ? 'pos' : group.netPnl < 0 ? 'neg' : ''}`}>
+                  {formatPnl(group.netPnl)}
                 </span>
               </div>
-              {(openT || closeT) && (
-                <div className="num text-muted" style={{ fontSize: 12.5, marginTop: 2 }}>
-                  {openT}{closeT && openT !== closeT ? ` to ${closeT}` : ''}
-                  {isActive && <span className="text-purple" style={{ marginLeft: 6 }}>Selected</span>}
-                </div>
-              )}
-            </button>
+              <div className="td-session-group-trades">
+                {group.trades.map(t => renderTradeRow(t, true))}
+              </div>
+            </section>
           );
         })}
       </div>
