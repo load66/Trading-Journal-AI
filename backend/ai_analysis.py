@@ -1110,29 +1110,6 @@ def generate_weekly_summary(week_context: dict) -> dict:
     return result
 
 
-def generate_brain_response(messages: list[dict], context: str) -> str:
-    """Send full conversation history + trade context to Claude Brain."""
-    client = get_client()
-
-    claude_messages = []
-    context_injected = False
-    for msg in messages:
-        role = msg.get('role', 'user')
-        content = msg.get('content', '')
-        if role == 'user' and not context_injected:
-            content = f"[Trading data]\n{context}\n\n[Question]\n{content}"
-            context_injected = True
-        claude_messages.append({"role": role, "content": content})
-
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=2048,
-        system=BRAIN_SYSTEM_PROMPT,
-        messages=claude_messages,
-    )
-    return response_text(response)
-
-
 SMOKING_GUN_SYSTEM_PROMPT = """You are a forensic trading-performance analyst.
 
 You receive a deterministic JSON report calculated from the trader's stored executions.
