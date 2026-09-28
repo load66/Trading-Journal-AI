@@ -405,3 +405,91 @@ def test_brain_provider_failure_returns_safe_journal_fallback_without_raw_provid
     assert "Journal analysis" in answer
     assert "413" not in answer
     assert "api.groq.com" not in answer
+
+
+def _cohort_context():
+    return json.dumps({
+        "journal_scope": {"completed_trades": 191},
+        "overall": {
+            "trades": 191,
+            "net_pnl": 4340.34,
+            "win_rate": 52.9,
+            "profit_factor": 1.36,
+        },
+        "le_diagnosis": {
+            "cohort_glossary": [
+                {
+                    "id": "level_ema_snug",
+                    "label": "Level break + EMA snug",
+                    "definition": (
+                        "The trade had a verified directional LE level break before entry and price was snug to the "
+                        "last completed 10-minute 8 EMA at entry. In the current detector, snug means within 1.0% of that EMA; "
+                        "more than 1.0% is treated as airgapped."
+                    ),
+                    "requirements": ["level_broken=pass", "ema_snug=pass"],
+                    "aliases": ["level break + ema snug"],
+                }
+            ],
+            "cohorts": [
+                {
+                    "id": "level_ema_snug",
+                    "label": "Level break + EMA snug",
+                    "trades": 70,
+                    "wins": 44,
+                    "losses": 26,
+                    "win_rate": 62.9,
+                    "net_pnl": 3662.38,
+                    "avg_pnl": 52.32,
+                    "profit_factor": 2.11,
+                    "stable_sample": True,
+                }
+            ],
+        },
+        "le_compliance": {
+            "summary": {
+                "audited_trades": 191,
+                "journal_completed_trades": 191,
+                "audit_coverage_pct": 100.0,
+                "classification_counts": {},
+                "rule_stats": [],
+            },
+            "audited_trades": [],
+        },
+    })
+
+
+def test_brain_recognizes_level_break_ema_snug_as_le_question():
+    assert ai_analysis._brain_question_needs_le("What is Level break + EMA snug?") is True
+
+
+def test_brain_answers_exact_level_break_ema_snug_question_without_provider(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setattr(
+        ai_analysis,
+        "_groq_brain_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("provider should not be called")),
+    )
+
+    answer = ai_analysis.generate_brain_response(
+        [{"role": "user", "content": "What is Level break + EMA snug?"}],
+        _cohort_context(),
+    )
+
+    assert "Level break + EMA snug" in answer
+    assert "verified directional LE level break" in answer
+    assert "within 1.0%" in answer
+    assert "Trades: **70**" in answer
+    assert "Win rate: **62.9%**" in answer
+    assert "Net P&L: **$3,662.38**" in answer
+    assert "Profit factor: **2.11**" in answer
+
+
+def test_brain_provider_context_includes_le_cohort_glossary_and_stats():
+    compact = ai_analysis._brain_provider_context(
+        _cohort_context(),
+        ai_analysis.BRAIN_PROVIDER_CONTEXT_CHARS,
+    )
+    parsed = json.loads(compact)
+
+    assert parsed["le_diagnosis"]["cohort_glossary"][0]["id"] == "level_ema_snug"
+    assert parsed["le_diagnosis"]["cohorts"][0]["trades"] == 70
