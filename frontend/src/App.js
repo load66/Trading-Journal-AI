@@ -79,6 +79,7 @@ function JournalApp({ onSignOut }) {
       .catch(() => {});
   }, []);
   const [brainOpen, setBrainOpen] = useState(false);
+  const [calendarShareMode, setCalendarShareMode] = useState(false);
   const [reportsInitialTab, setReportsInitialTab] = useState(initialNavState.reportsInitialTab || 'overview');
 
   const loadAccounts = useCallback(async () => {
@@ -111,11 +112,13 @@ function JournalApp({ onSignOut }) {
   };
 
   const handleCalendarDayClick = (date) => {
+    setCalendarShareMode(false);
     setSelectedDate(date);
     setPage('day-review');
   };
 
   const navigate = (p, options = {}) => {
+    if (p !== 'calendar') setCalendarShareMode(false);
     if (p !== 'trades') setTradesFilter({ dateFrom: '', dateTo: '' });
     if (p !== 'trade-detail') {
       setSelectedTrade(null);
@@ -133,19 +136,21 @@ function JournalApp({ onSignOut }) {
   };
 
   return (
-    <div className="app-shell">
-      <AppHeader
-        page={page}
-        onNavigate={navigate}
-        accounts={accounts}
-        selectedAccountId={selectedAccountId}
-        onSelectAccount={setSelectedAccountId}
-        onAddTrade={() => setShowAddTrade(true)}
-        onAccountCreated={loadAccounts}
-        brainOpen={brainOpen}
-        onToggleBrain={() => setBrainOpen(v => !v)}
-        onSignOut={onSignOut}
-      />
+    <div className={`app-shell${page === 'calendar' && calendarShareMode ? ' calendar-share-shell' : ''}`}>
+      {!(page === 'calendar' && calendarShareMode) && (
+        <AppHeader
+          page={page}
+          onNavigate={navigate}
+          accounts={accounts}
+          selectedAccountId={selectedAccountId}
+          onSelectAccount={setSelectedAccountId}
+          onAddTrade={() => setShowAddTrade(true)}
+          onAccountCreated={loadAccounts}
+          brainOpen={brainOpen}
+          onToggleBrain={() => setBrainOpen(v => !v)}
+          onSignOut={onSignOut}
+        />
+      )}
 
       <main className="app-main" id="main">
         {page === 'dashboard' && (
@@ -186,6 +191,11 @@ function JournalApp({ onSignOut }) {
           <Calendar
             accountId={selectedAccountId}
             onDayClick={handleCalendarDayClick}
+            shareMode={calendarShareMode}
+            onShareModeChange={(enabled) => {
+              setCalendarShareMode(Boolean(enabled));
+              if (enabled) setBrainOpen(false);
+            }}
           />
         )}
         {page === 'import' && (
@@ -209,7 +219,9 @@ function JournalApp({ onSignOut }) {
         {page === 'settings' && <Settings accounts={accounts} onAccountsChanged={loadAccounts} />}
       </main>
 
-      <Brain accountId={selectedAccountId} open={brainOpen} onOpenChange={setBrainOpen} />
+      {!(page === 'calendar' && calendarShareMode) && (
+        <Brain accountId={selectedAccountId} open={brainOpen} onOpenChange={setBrainOpen} />
+      )}
 
       {showAddTrade && (
         <AddTradeModal
