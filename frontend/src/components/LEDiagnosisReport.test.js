@@ -184,7 +184,7 @@ test('renders journal-wide LE diagnosis and automation status', async () => {
   expect(screen.getByText('HIGH')).toBeVisible();
   expect(screen.getByText('User-Confirmed LE Setups')).toBeVisible();
   expect(screen.getByText('User-backed LE evidence')).toBeVisible();
-  expect(screen.getByText('Outside Day')).toBeVisible();
+  expect(screen.getAllByText('Outside Day').length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText('VIX Checked?')).toBeVisible();
 });
 
