@@ -908,6 +908,13 @@ async def import_csv(
             except Exception as e:
                 errors.append({"trade_group": trade.get('trade_group'), "error": str(e)})
 
+        # A broker import can regroup fills, change trade dates/outcomes, or alter
+        # same-day sequence. All cached LE compliance for this account is derived
+        # data, so invalidate it atomically and rebuild lazily from broker truth.
+        conn.execute(
+            "DELETE FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
+            (account_id,),
+        )
         conn.commit()
     except Exception as e:
         conn.rollback()
