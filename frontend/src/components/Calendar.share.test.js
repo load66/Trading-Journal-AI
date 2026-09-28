@@ -78,7 +78,8 @@ describe('Calendar share image documents', () => {
     expect(spec.svg).toContain('AVG WIN / LOSS');
     expect(spec.svg).toContain('JAN');
     expect(spec.svg).toContain('DEC');
-    expect(spec.svg).toContain('2/3');
+    expect(spec.svg).toContain('67%');
+    expect(spec.svg).toContain('2 green · 1 red');
     expect(spec.svg).toContain('BEST MONTH');
     expect(spec.svg).toContain('AVG / ACTIVE MONTH');
     expect(spec.svg).not.toContain('LARGEST LOSS');
