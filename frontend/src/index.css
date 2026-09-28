@@ -1684,27 +1684,240 @@ button.month-card:active { transform: translateY(1px); }
   right: var(--space-6);
   bottom: var(--space-6);
   z-index: 900;
-  width: 420px;
+  width: 430px;
   max-width: calc(100vw - 32px);
-  height: 580px;
-  max-height: calc(100vh - 120px);
+  height: 620px;
+  max-height: calc(100dvh - 96px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: var(--surface-panel);
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-modal);
+  border: 1px solid color-mix(in srgb, var(--accent-line) 20%, var(--divider));
+  border-radius: 18px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.48);
 }
-.brain-suggestion {
-  text-align: left;
-  padding: 9px 12px;
-  border-radius: var(--radius-md);
-  font-size: var(--fs-small);
-  background: var(--surface-control);
-  border: 1px solid transparent;
+.brain-sheet-handle { display: none; }
+.brain-header {
+  min-height: 64px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--divider-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+.brain-title-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brain-icon-wrap {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent-line) 12%, var(--surface-control));
+  border: 1px solid color-mix(in srgb, var(--accent-line) 22%, var(--divider-soft));
+}
+.brain-title {
+  font-family: var(--font-display);
+  font-weight: 750;
+  font-size: 16px;
+  line-height: 1.1;
   color: var(--text-primary);
 }
-.brain-suggestion:hover { border-color: var(--divider); }
+.brain-subtitle {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.brain-live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 4px 1px 6px;
+  border-radius: 50%;
+  background: var(--result-pos);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--result-pos) 12%, transparent);
+}
+.brain-header-actions { display: flex; align-items: center; gap: 4px; }
+.brain-clear { color: var(--text-secondary); }
+
+.brain-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scrollbar-width: thin;
+}
+.brain-welcome {
+  padding: 4px 0 8px;
+}
+.brain-welcome-title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 720;
+  color: var(--text-primary);
+  line-height: 1.25;
+}
+.brain-welcome-copy {
+  max-width: 380px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.48;
+}
+.brain-suggestions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 13px;
+}
+.brain-suggestion {
+  min-height: 42px;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.3;
+  background: var(--surface-control);
+  border: 1px solid var(--divider-soft);
+  color: var(--text-primary);
+  transition: border-color .15s ease, background .15s ease, transform .15s ease;
+}
+.brain-suggestion:hover {
+  border-color: color-mix(in srgb, var(--accent-line) 35%, var(--divider));
+  background: color-mix(in srgb, var(--surface-control) 90%, var(--accent-line) 10%);
+}
+.brain-suggestion:active { transform: scale(.985); }
+
+.brain-message-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.brain-message-row.is-user { align-items: flex-end; }
+.brain-message-row.is-ai { align-items: flex-start; }
+.brain-bubble {
+  max-width: 91%;
+  padding: 9px 11px;
+  border: 1px solid var(--divider-soft);
+  color: var(--text-primary);
+}
+.brain-bubble.is-user {
+  border-radius: 12px 12px 4px 12px;
+  background: color-mix(in srgb, var(--surface-selected) 90%, var(--accent-line) 10%);
+}
+.brain-bubble.is-ai {
+  border-radius: 12px 12px 12px 4px;
+  background: var(--surface-inset);
+}
+.brain-user-text { font-size: 13px; line-height: 1.45; }
+.brain-markdown { font-size: 13px; line-height: 1.52; overflow-wrap: anywhere; }
+.brain-md-h1, .brain-md-h2, .brain-md-h3 { font-weight: 750; color: var(--text-primary); }
+.brain-md-h1 { font-size: 14.5px; margin-top: 10px; margin-bottom: 4px; }
+.brain-md-h2 { font-size: 14px; margin-top: 10px; margin-bottom: 4px; color: var(--accent-line); }
+.brain-md-h3 { font-size: 13.5px; margin-top: 8px; margin-bottom: 3px; }
+.brain-md-list { padding-left: 10px; margin-top: 3px; }
+.brain-md-line { margin-top: 2px; }
+.brain-md-spacer { height: 6px; }
+.brain-inline-code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-control);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.brain-thinking {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--divider-soft);
+  border-radius: 10px 10px 10px 4px;
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+.brain-thinking-dots { display: inline-flex; gap: 3px; align-items: center; }
+.brain-thinking-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent-line);
+  animation: brainPulse 1s infinite;
+}
+@keyframes brainPulse {
+  0%, 80%, 100% { opacity: .25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+.brain-error {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--result-neg) 28%, var(--divider-soft));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--result-neg) 7%, var(--surface-inset));
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.brain-error strong { color: var(--result-neg); }
+.brain-error button {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-line);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.brain-composer {
+  flex: 0 0 auto;
+  padding: 9px 10px 10px;
+  border-top: 1px solid var(--divider-soft);
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  background: color-mix(in srgb, var(--surface-panel) 96%, transparent);
+}
+.brain-composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  max-height: 108px;
+  resize: none;
+  padding: 10px 11px;
+  border: 1px solid var(--divider);
+  border-radius: 11px;
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  outline: none;
+}
+.brain-composer textarea:focus {
+  border-color: color-mix(in srgb, var(--accent-line) 50%, var(--divider));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-line) 10%, transparent);
+}
+.brain-composer textarea::placeholder { color: var(--text-tertiary); }
+.brain-send {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 11px;
+}
 
 /* ============================================================
    Motion preferences
@@ -3325,40 +3538,111 @@ button.month-card:active { transform: translateY(1px); }
 }
 
 
-/* Compact AI utility on phones: keep it reachable without covering KPI cards. */
+/* Compact AI utility on phones: bottom-sheet chat, not a full-screen takeover. */
 @media (max-width: 600px) {
   .brain-launcher {
-    right: 14px;
-    bottom: calc(16px + env(safe-area-inset-bottom));
-    width: 48px;
-    height: 48px;
-    min-height: 48px;
+    right: 12px;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    width: 46px;
+    height: 46px;
+    min-height: 46px;
     padding: 0;
     justify-content: center;
     gap: 0;
-    border-radius: 15px;
+    border-radius: 14px;
     background:
       linear-gradient(155deg, color-mix(in srgb, var(--surface-panel) 88%, var(--accent-line) 12%), var(--surface-control));
     border-color: color-mix(in srgb, var(--accent-line) 28%, var(--divider));
     box-shadow: 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.025);
   }
-  .brain-launcher .brain-launcher-label {
-    display: none;
-  }
-  .brain-launcher svg {
-    width: 20px;
-    height: 20px;
-  }
+  .brain-launcher .brain-launcher-label { display: none; }
+  .brain-launcher svg { width: 19px; height: 19px; }
+
   .brain-panel {
-    left: 10px;
-    right: 10px;
-    bottom: calc(10px + env(safe-area-inset-bottom));
+    left: 6px;
+    right: 6px;
+    bottom: calc(6px + env(safe-area-inset-bottom));
     width: auto;
     max-width: none;
-    height: min(680px, calc(100dvh - 20px - env(safe-area-inset-bottom)));
-    max-height: calc(100dvh - 20px - env(safe-area-inset-bottom));
-    border-radius: 16px;
-    border-color: color-mix(in srgb, var(--accent-line) 20%, var(--divider));
-    box-shadow: 0 32px 90px rgba(0,0,0,.58);
+    height: min(72dvh, 610px);
+    max-height: calc(100dvh - 104px - env(safe-area-inset-bottom));
+    border-radius: 18px;
+    box-shadow: 0 28px 82px rgba(0,0,0,.58);
+  }
+  .brain-sheet-handle {
+    display: block;
+    width: 34px;
+    height: 4px;
+    margin: 7px auto 0;
+    border-radius: 99px;
+    background: color-mix(in srgb, var(--text-tertiary) 38%, transparent);
+    flex: 0 0 auto;
+  }
+  .brain-header {
+    min-height: 52px;
+    padding: 7px 10px 8px;
+  }
+  .brain-icon-wrap {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+  }
+  .brain-title { font-size: 15px; }
+  .brain-subtitle { font-size: 10px; margin-top: 2px; }
+  .brain-header .btn-icon {
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
+  }
+  .brain-messages {
+    padding: 10px;
+    gap: 8px;
+  }
+  .brain-welcome { padding-top: 0; }
+  .brain-welcome-title { font-size: 14px; }
+  .brain-welcome-copy {
+    margin-top: 4px;
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+  .brain-suggestions {
+    display: flex;
+    overflow-x: auto;
+    gap: 6px;
+    margin: 10px -10px 0;
+    padding: 0 10px 3px;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+  .brain-suggestions::-webkit-scrollbar { display: none; }
+  .brain-suggestion {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 210px;
+    min-height: 36px;
+    padding: 7px 9px;
+    font-size: 11px;
+    white-space: nowrap;
+    scroll-snap-align: start;
+  }
+  .brain-bubble { max-width: 94%; padding: 8px 9px; }
+  .brain-markdown,
+  .brain-user-text { font-size: 12px; }
+  .brain-markdown { line-height: 1.48; }
+  .brain-composer {
+    padding: 7px 8px calc(8px + env(safe-area-inset-bottom));
+  }
+  .brain-composer textarea {
+    min-height: 38px;
+    max-height: 88px;
+    padding: 9px 10px;
+    font-size: 12px;
+  }
+  .brain-send {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
   }
 }
+
