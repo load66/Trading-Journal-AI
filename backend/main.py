@@ -62,6 +62,7 @@ from le_compliance import (
     summarize_le_compliance_snapshots,
 )
 from le_diagnosis import build_le_diagnosis
+from le_manual_evidence import is_manual_le_tag
 from smoking_gun_library import ANALYTICS_ENGINE_VERSION
 from trade_metrics import (
     trade_is_closed,
@@ -1771,12 +1772,23 @@ async def _build_trade_le_compliance(
     analysis = _load_trade_analysis_dict(conn, trade_group)
     day_context = _load_le_day_context(conn, trade)
     risk_plan = _load_le_risk_plan_for_trade(conn, trade)
+    manual_tags = [
+        row_to_dict(row)
+        for row in conn.execute(
+            """SELECT id, trade_group, tag_type, tag_value, source
+               FROM trade_tags
+               WHERE trade_group=? AND lower(source)='manual'
+               ORDER BY id""",
+            (trade_group,),
+        ).fetchall()
+    ]
     compliance = build_le_compliance(
         trade,
         review,
         analysis=analysis,
         day_context=day_context,
         risk_plan=risk_plan,
+        manual_tags=manual_tags,
     )
     review["compliance"] = compliance
 
@@ -2177,7 +2189,7 @@ class TagCreate(BaseModel):
 
 
 @app.post("/api/trades/{trade_group:path}/tags", status_code=201)
-def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = Depends(get_connection)):
+async def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = Depends(get_connection)):
     trade = conn.execute("SELECT trade_group FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
@@ -2206,7 +2218,27 @@ def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = 
     )
     conn.commit()
     row = conn.execute("SELECT * FROM trade_tags WHERE id=?", (tag_id,)).fetchone()
-    return row_to_dict(row)
+    result = row_to_dict(row)
+
+    if is_manual_le_tag(tag_type, tag_value, "manual"):
+        try:
+            review = await _build_trade_le_compliance(
+                conn,
+                trade_group,
+                include_ai=False,
+                persist=True,
+            )
+            result["le_compliance_updated"] = True
+            result["le_compliance_version"] = (review.get("compliance") or {}).get("compliance_version")
+        except Exception:
+            logger.warning(
+                "Manual LE tag saved but compliance refresh failed for %s",
+                trade_group,
+                exc_info=True,
+            )
+            result["le_compliance_updated"] = False
+
+    return result
 
 
 @app.get("/api/storage/health")
@@ -2232,13 +2264,38 @@ def get_analysis_options(conn: sqlite3.Connection = Depends(get_connection)):
 
 
 @app.delete("/api/trade-tags/{tag_id}")
-def delete_trade_tag(tag_id: int, conn: sqlite3.Connection = Depends(get_connection)):
-    row = conn.execute("SELECT id FROM trade_tags WHERE id=?", (tag_id,)).fetchone()
+async def delete_trade_tag(tag_id: int, conn: sqlite3.Connection = Depends(get_connection)):
+    row = conn.execute(
+        "SELECT id, trade_group, tag_type, tag_value, source FROM trade_tags WHERE id=?",
+        (tag_id,),
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Tag not found")
+
+    tag = row_to_dict(row)
     conn.execute("DELETE FROM trade_tags WHERE id=?", (tag_id,))
     conn.commit()
-    return {"deleted": True, "id": tag_id}
+
+    result = {"deleted": True, "id": tag_id}
+    if is_manual_le_tag(tag.get("tag_type"), tag.get("tag_value"), tag.get("source")):
+        try:
+            review = await _build_trade_le_compliance(
+                conn,
+                str(tag.get("trade_group")),
+                include_ai=False,
+                persist=True,
+            )
+            result["le_compliance_updated"] = True
+            result["le_compliance_version"] = (review.get("compliance") or {}).get("compliance_version")
+        except Exception:
+            logger.warning(
+                "Manual LE tag deleted but compliance refresh failed for %s",
+                tag.get("trade_group"),
+                exc_info=True,
+            )
+            result["le_compliance_updated"] = False
+
+    return result
 
 
 # ── KPIs ───────────────────────────────────────────────────────────────────────
