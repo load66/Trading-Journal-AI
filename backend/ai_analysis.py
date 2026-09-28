@@ -4,6 +4,8 @@ import base64
 import json
 import os
 import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from dotenv import load_dotenv
 from le_compliance import (
@@ -600,6 +602,8 @@ Core rules:
 - The journal's realized P&L is authoritative. Do not recompute it from prices.
 - MFE/MAE/exit-efficiency may be missing on some trades. State coverage when using those fields.
 - If a question asks about a ticker, strategy, date, time window, or recent event, use TARGETED MATCHES when provided.
+- QUESTION_SCOPE is the evidence selected specifically for the user's question. Prefer QUESTION_SCOPE_STATS and TARGETED MATCHES over full-journal aggregates for targeted questions.
+- When target_detection includes resolved dates, treat those dates as the resolved meaning of relative phrases such as "last Friday" or "yesterday".
 - If the question asks "best", explain the metric used (for example total P&L, average P&L, profit factor, or win rate) and note when another metric gives a different answer.
 - Never claim you inspected a chart image unless image data was actually supplied. Session-path evidence is a realized-P&L timeline, not a price chart.
 - The user-supplied LE playbook in LE_PLAYBOOK is authoritative for LE-system questions. Preserve its terminology: Flag, Line, Sign; FORM -> ESTABLISH; L Entry; E Entry; Purple Profits; Three Trade Rule; Chop Hour; 3-2-1; 10m 8 EMA.
@@ -733,6 +737,53 @@ def _brain_group(trades: list[dict], field_fn, *, min_count: int = 1) -> list[di
     return sorted(rows, key=lambda r: (-r["net_pnl"], -r["trades"], r["name"]))
 
 
+BRAIN_JOURNAL_TIMEZONE = os.getenv("JOURNAL_TIMEZONE", "America/Chicago")
+_BRAIN_WEEKDAYS = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+
+def _brain_today():
+    try:
+        return datetime.now(ZoneInfo(BRAIN_JOURNAL_TIMEZONE)).date()
+    except Exception:
+        return datetime.now().date()
+
+
+def _brain_relative_date_targets(question: str) -> tuple[list[str], str | None]:
+    q = str(question or "").strip().lower()
+    today = _brain_today()
+
+    if re.search(r"\byesterday\b", q):
+        return [(today - timedelta(days=1)).isoformat()], "yesterday"
+    if re.search(r"\btoday\b", q):
+        return [today.isoformat()], "today"
+
+    for name, weekday in _BRAIN_WEEKDAYS.items():
+        if re.search(rf"\blast\s+{name}\b", q):
+            days_back = (today.weekday() - weekday) % 7
+            if days_back == 0:
+                days_back = 7
+            resolved = today - timedelta(days=days_back)
+            return [resolved.isoformat()], f"last {name}"
+
+    if re.search(r"\blast\s+week\b", q):
+        this_monday = today - timedelta(days=today.weekday())
+        prior_monday = this_monday - timedelta(days=7)
+        return [
+            (prior_monday + timedelta(days=offset)).isoformat()
+            for offset in range(7)
+        ], "last week"
+
+    return [], None
+
+
 def _brain_extract_targets(question: str, trades: list[dict]) -> dict:
     q = str(question or "")
     q_upper = q.upper()
@@ -746,8 +797,15 @@ def _brain_extract_targets(question: str, trades: list[dict]) -> dict:
         for t in trades
         if t.get("strategy") and str(t.get("strategy")).lower() in q.lower()
     })
-    dates = re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", q)
-    return {"tickers": tickers, "strategies": strategies, "dates": dates}
+    explicit_dates = re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", q)
+    relative_dates, date_phrase = _brain_relative_date_targets(q)
+    dates = sorted(set(explicit_dates + relative_dates))
+    return {
+        "tickers": tickers,
+        "strategies": strategies,
+        "dates": dates,
+        "date_phrase": date_phrase,
+    }
 
 
 def build_brain_context(conn, account_id, question: str = "") -> str:
