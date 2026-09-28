@@ -1359,6 +1359,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               executions={parseExecs(trade)}
               side={trade.side}
               height={520}
+              mobileHeight={340}
+              compactMobile
             />
           </section>
 
