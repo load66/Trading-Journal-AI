@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from trade_metrics import entry_market_minutes
+from le_manual_evidence import apply_manual_le_evidence, build_manual_le_evidence
 
 
-LE_COMPLIANCE_VERSION = "LE_PLAYBOOK_2026_09_v2"
+LE_COMPLIANCE_VERSION = "LE_PLAYBOOK_2026_09_v3"
 
 LE_PLAYBOOK_REFERENCE = {
     "name": "The LE Trading System — Guide Series",
@@ -267,12 +268,15 @@ def build_le_compliance(
     analysis: dict | None = None,
     day_context: dict | None = None,
     risk_plan: dict | None = None,
+    manual_tags: list[dict] | None = None,
 ) -> dict:
     """Grade one trade against the PDF's 13-point LE checklist without guessing.
 
-    Only deterministic journal/market evidence can produce pass/fail. Anything that
-    cannot be proven from the available records is Unknown and does not count against
-    the evaluated-check percentage.
+    Deterministic journal/market evidence produces the base result. Recognized
+    source='manual' LE tags are authoritative user evidence and may override the final
+    Pass/Fail state for the exact LE concept they assert. The original system result
+    remains attached for provenance/conflict review. Anything else that cannot be
+    proven remains Unknown.
     """
     analysis = analysis or {}
     ev = (review or {}).get("evidence") or {}
@@ -436,6 +440,13 @@ def build_le_compliance(
         ),
     ]
 
+    manual_evidence = build_manual_le_evidence(manual_tags, trade)
+    checks, extra_findings, manual_evidence_summary = apply_manual_le_evidence(
+        checks,
+        extra_findings,
+        manual_evidence,
+    )
+
     passed = sum(c["status"] == "pass" for c in checks)
     failed = sum(c["status"] == "fail" for c in checks)
     unknown = sum(c["status"] == "unknown" for c in checks)
@@ -466,6 +477,7 @@ def build_le_compliance(
         },
         "day_context": day_context,
         "risk_plan": risk_plan,
+        "manual_le_evidence": manual_evidence_summary,
         "compliance_version": LE_COMPLIANCE_VERSION,
     }
 
@@ -497,6 +509,7 @@ def build_le_compliance(
         + [f["id"] for f in extra_findings if f["status"] == "fail"],
         "unknown_rule_ids": [c["id"] for c in checks if c["status"] == "unknown"],
         "evidence_quality": ev.get("evidence_quality"),
+        "manual_le_evidence": manual_evidence_summary,
         "evidence_fingerprint": _fingerprint(snapshot_basis),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
