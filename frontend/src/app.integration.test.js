@@ -1019,24 +1019,40 @@ test('Help lists the metric reference and the feature guide', async () => {
   expect(screen.getByRole('heading', { name: 'Features' })).toBeInTheDocument();
 });
 
-test('Calendar keeps Month/Year views and offers a screenshot-ready Share View', async () => {
+test('Calendar Share Image supports month and year screenshot views and hides Brain', async () => {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Calendar' }));
   expect(await screen.findByRole('button', { name: 'Month' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Year' })).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: 'Share View' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Share Image' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Share Image' }));
 
-  expect(await screen.findByRole('button', { name: /Exit/i })).toBeVisible();
+  expect(await screen.findByRole('button', { name: /Save Image/i })).toBeVisible();
+  expect(screen.getByText('Monthly Trading Performance')).toBeVisible();
+  expect(screen.getByText('Net P&L')).toBeVisible();
+  expect(screen.getByText('Win Rate')).toBeVisible();
+  expect(screen.getByText('Profit Factor')).toBeVisible();
   expect(screen.queryByRole('banner')).not.toBeInTheDocument();
-  expect(screen.queryByText('Select a trading day to open its Day Review.')).not.toBeInTheDocument();
   expect(screen.queryByText('The year behind it')).not.toBeInTheDocument();
   expect(screen.queryByText('Week')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /Open Brain/i })).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: /Exit/i }));
   expect(await screen.findByRole('banner')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Share View' })).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Year' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Share Image' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Share Image' }));
+
+  expect(await screen.findByText('Yearly Trading Performance')).toBeVisible();
+  expect(screen.getByText(/Trading Year/)).toBeVisible();
+  expect(screen.getByText('Profitable Months')).toBeVisible();
+  expect(screen.getByRole('button', { name: /Save Image/i })).toBeVisible();
+  expect(screen.queryByRole('banner')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Exit/i }));
+  expect(await screen.findByRole('banner')).toBeVisible();
 });
 
 test('Day Review keeps the loss-streak alert and its Dismiss control', async () => {

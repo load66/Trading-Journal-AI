@@ -1795,6 +1795,96 @@ button.month-card:active { transform: translateY(1px); }
   font-weight: 700;
 }
 
+.calendar-share-stat > small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  line-height: 1.25;
+}
+
+.calendar-share-title-block {
+  min-width: 0;
+  max-width: 720px;
+}
+
+.calendar-share-title-block > p {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.calendar-share-title-block > p strong {
+  font-weight: 750;
+}
+
+.calendar-share-head-detailed {
+  align-items: flex-start;
+}
+
+.calendar-share-save {
+  min-height: 34px;
+}
+
+.calendar-share-status {
+  padding: 7px 10px;
+  border: 1px solid var(--divider-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel);
+  color: var(--result-pos);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.calendar-share-status.neg {
+  color: var(--result-neg);
+}
+
+.calendar-year-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.calendar-year-share-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.calendar-year-share-grid .month-card {
+  min-height: 112px;
+  padding: 9px;
+  gap: 6px;
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.calendar-year-share-grid .month-card > div:first-child span:first-child {
+  font-size: 11px !important;
+}
+
+.calendar-year-share-grid .month-card > div:first-child span:last-child {
+  font-size: 15px !important;
+}
+
+.calendar-year-share-grid .month-card > div:nth-child(2) {
+  gap: 4px !important;
+}
+
+.calendar-year-share-grid .month-card > div:nth-child(2) > div > div:first-child {
+  font-size: 8px !important;
+}
+
+.calendar-year-share-grid .month-card > div:nth-child(2) > div > div:last-child {
+  font-size: 10px !important;
+}
+
+.calendar-year-share-grid .month-card > div:last-child {
+  font-size: 8.5px !important;
+}
+
 .calendar-share-card {
   margin: 0;
   padding: 6px;
@@ -1875,6 +1965,57 @@ button.month-card:active { transform: translateY(1px); }
     font-size: clamp(11px, 3vw, 13px);
   }
 
+  .calendar-share-stat > small {
+    display: none;
+  }
+
+  .calendar-share-title-block > p {
+    margin-top: 3px;
+    font-size: 9px;
+    line-height: 1.25;
+  }
+
+  .calendar-share-head-detailed {
+    min-height: 56px;
+  }
+
+  .calendar-share-head-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 52%;
+  }
+
+  .calendar-share-save {
+    min-height: 30px;
+    padding-inline: 8px;
+    font-size: 10px;
+  }
+
+  .calendar-share-status {
+    padding: 5px 7px;
+    font-size: 9px;
+  }
+
+  .calendar-year-share-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .calendar-year-share-grid .month-card {
+    min-height: 92px;
+    padding: 6px;
+    gap: 3px;
+    border-radius: 5px;
+  }
+
+  .calendar-year-share-grid .month-card > div:nth-child(2) > div > div:first-child {
+    display: none;
+  }
+
+  .calendar-year-share-grid .month-card > div:last-child {
+    font-size: 7px !important;
+  }
+
   .calendar-share-card {
     padding: 3px 2px !important;
     border-radius: 7px;
@@ -1934,6 +2075,15 @@ button.month-card:active { transform: translateY(1px); }
 
   .calendar-share-mode .cal-day-full {
     height: 45px !important;
+  }
+
+  .calendar-year-share-grid .month-card {
+    min-height: 86px;
+    padding: 5px;
+  }
+
+  .calendar-year-share-grid .month-card > div:first-child span:last-child {
+    font-size: 13px !important;
   }
 }
 
