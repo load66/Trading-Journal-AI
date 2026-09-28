@@ -553,7 +553,7 @@ test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key naviga
   fireEvent.click(within(nav()).getByRole('button', { name: 'Reports' }));
   const tablist = await screen.findByRole('tablist');
   const names = within(tablist).getAllByRole('tab').map(t => t.textContent.trim());
-  expect(names).toEqual(['Smoking Gun', 'Overview', 'Setups & Strategy', 'Sources & Tags', 'Timing', 'Execution', 'Symbols', 'Psychology']);
+  expect(names).toEqual(['Smoking Gun', 'LE Diagnosis', 'Overview', 'Setups & Strategy', 'Sources & Tags', 'Timing', 'Execution', 'Symbols', 'Psychology']);
   const overview = within(tablist).getByRole('tab', { name: 'Overview' });
   expect(overview).toHaveAttribute('aria-selected', 'true');
   fireEvent.keyDown(overview, { key: 'ArrowRight' });
@@ -781,7 +781,7 @@ test('Stats planned risk is explicit and is sent with the saved trade analysis',
   expect(payload.risk_per_trade).toBe(150);
 });
 
-test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
+test('Trade View opens Trade Details with five tabs, back and previous/next', async () => {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
   await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
@@ -791,16 +791,12 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
 
   const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
   const names = within(tablist).getAllByRole('tab').map(t => t.textContent.trim());
-  expect(names).toEqual(['Stats', 'Review', 'Tags', 'LE Review', 'Executions', 'Chart Review']);
+  expect(names).toEqual(['Stats', 'Review', 'Tags', 'Executions', 'Chart Review']);
   expect(screen.getByRole('button', { name: /Back to trades/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Previous trade/ })).toBeDisabled();
   expect(screen.getByRole('button', { name: /Next trade/ })).toBeEnabled();
   // Trade View stays highlighted while a trade is open.
   expect(within(nav()).getByRole('button', { name: 'Trade View' })).toHaveAttribute('aria-current', 'page');
-
-  fireEvent.click(within(tablist).getByRole('tab', { name: 'LE Review' }));
-  await waitFor(() => expect(tradesApi.refreshLeCompliance).toHaveBeenCalled());
-  expect(screen.getByText(/LE chart evidence is unavailable/)).toBeInTheDocument();
 
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Executions' }));
   expect(screen.getByRole('button', { name: /Add Execution/ })).toBeInTheDocument();
