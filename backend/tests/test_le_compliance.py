@@ -260,3 +260,64 @@ def test_session_window_fallback_marks_prime_trade_outside_chop():
     check = _by_id(result)["not_chop_hour"]
     assert check["status"] == "pass"
     assert check["evidence"]["session_window"] == "prime"
+
+
+def test_flag_line_sign_gate_fails_when_sign_fails_even_if_level_and_line_pass():
+    result = build_le_compliance(
+        _trade(),
+        _review(entry_checks={
+            "market_sign": {"status": "fail", "detail": "QQQ opposed the long"},
+        }),
+        analysis={},
+        day_context={"sequence": 1, "prior_results": [], "day_trade_count": 1},
+        risk_plan=None,
+        manual_tags=[
+            {
+                "id": 1,
+                "trade_group": "g1",
+                "tag_type": "setup",
+                "tag_value": "Flag Forming",
+                "source": "manual",
+            }
+        ],
+    )
+
+    extras = {item["id"]: item for item in result["extra_findings"]}
+    gate = extras["flag_line_sign_gate"]
+
+    assert _by_id(result)["flag_forming"]["status"] == "pass"
+    assert _by_id(result)["ema_aligned"]["status"] == "pass"
+    assert _by_id(result)["market_sign"]["status"] == "fail"
+    assert gate["status"] == "fail"
+    assert "sign_spy_qqq" in gate["detail"]
+    assert result["classification"] == "LE_VIOLATION"
+
+
+def test_flag_line_sign_gate_passes_only_when_all_four_parts_are_confirmed():
+    result = build_le_compliance(
+        _trade(),
+        _review(),
+        analysis={},
+        day_context={"sequence": 1, "prior_results": [], "day_trade_count": 1},
+        risk_plan=None,
+        manual_tags=[
+            {
+                "id": 1,
+                "trade_group": "g1",
+                "tag_type": "setup",
+                "tag_value": "Flag Forming",
+                "source": "manual",
+            }
+        ],
+    )
+
+    extras = {item["id"]: item for item in result["extra_findings"]}
+    gate = extras["flag_line_sign_gate"]
+
+    assert gate["status"] == "pass"
+    assert gate["evidence"] == {
+        "flag": "pass",
+        "line_10m_8ema": "pass",
+        "sign_spy_qqq": "pass",
+        "level_break": "pass",
+    }
