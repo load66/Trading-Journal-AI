@@ -1033,6 +1033,10 @@ test('Calendar Share Image supports month and year screenshot views and hides Br
   expect(screen.getByText('Net P&L')).toBeVisible();
   expect(screen.getByText('Win Rate')).toBeVisible();
   expect(screen.getByText('Profit Factor')).toBeVisible();
+  expect(screen.getByText('Avg Win / Loss')).toBeVisible();
+  expect(screen.getByText(/Goal ≥ 50%/)).toBeVisible();
+  expect(screen.getByText(/Goal ≥ 1\.30/)).toBeVisible();
+  expect(screen.getByText(/Goal ≥ 1\.20/)).toBeVisible();
   expect(screen.queryByRole('banner')).not.toBeInTheDocument();
   expect(screen.queryByText('The year behind it')).not.toBeInTheDocument();
   expect(screen.queryByText('Week')).not.toBeInTheDocument();
@@ -1047,8 +1051,13 @@ test('Calendar Share Image supports month and year screenshot views and hides Br
 
   expect(await screen.findByText('Yearly Trading Performance')).toBeVisible();
   expect(screen.getByText(/Trading Year/)).toBeVisible();
-  expect(screen.getByText('Profitable Months')).toBeVisible();
+  expect(screen.getByText('Profit Factor')).toBeVisible();
+  expect(screen.getByText('Avg Win / Loss')).toBeVisible();
   expect(screen.getByRole('button', { name: /Save Image/i })).toBeVisible();
+  expect(kpisApi.get).toHaveBeenCalledWith(expect.objectContaining({
+    date_from: expect.stringMatching(/-01-01$/),
+    date_to: expect.stringMatching(/-12-31$/),
+  }));
   expect(screen.queryByRole('banner')).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: /Exit/i }));

@@ -1803,6 +1803,22 @@ button.month-card:active { transform: translateY(1px); }
   line-height: 1.25;
 }
 
+.calendar-share-stat > small.calendar-share-target {
+  font-weight: 700;
+}
+
+.calendar-share-stat > small.calendar-share-target.pos {
+  color: var(--result-pos);
+}
+
+.calendar-share-stat > small.calendar-share-target.amber {
+  color: var(--warning, #f8b342);
+}
+
+.calendar-share-stat > small.calendar-share-target.muted {
+  color: var(--text-tertiary);
+}
+
 .calendar-share-title-block {
   min-width: 0;
   max-width: 720px;

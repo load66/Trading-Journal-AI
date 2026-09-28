@@ -22,6 +22,12 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+export const SHARE_BASELINES = {
+  winRate: 50,
+  profitFactor: 1.3,
+  avgWinLoss: 1.2,
+};
+
 function getDaysInMonth(year, month) { return new Date(year, month, 0).getDate(); }
 function getFirstDayOfMonth(year, month) {
   const d = new Date(year, month - 1, 1).getDay();
@@ -78,14 +84,37 @@ function localDateKey(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function shareMetricCard(x, y, width, label, value, help, tone = 'neutral') {
+function targetStatus(actual, target) {
+  const n = Number(actual);
+  if (!Number.isFinite(n)) return { label: 'No data', tone: 'muted' };
+  return n >= target
+    ? { label: 'Goal met', tone: 'pos' }
+    : { label: 'Below goal', tone: 'amber' };
+}
+
+function targetLine(actual, target, suffix = '') {
+  const status = targetStatus(actual, target);
+  const targetText = suffix === '%' ? `${target.toFixed(0)}%` : target.toFixed(2);
+  return {
+    text: `Goal ≥ ${targetText} · ${status.label}`,
+    tone: status.tone,
+  };
+}
+
+function shareMetricCard(x, y, width, label, value, help, tone = 'neutral', target = null) {
   const valueColor = tone === 'pos' ? SHARE_PALETTE.green : tone === 'neg' ? SHARE_PALETTE.red : SHARE_PALETTE.text;
+  const targetColor = target?.tone === 'pos'
+    ? SHARE_PALETTE.green
+    : target?.tone === 'amber'
+      ? SHARE_PALETTE.amber
+      : SHARE_PALETTE.dim;
+  const footer = target?.text || help;
   return `
     <g transform="translate(${x} ${y})">
       <rect width="${width}" height="96" rx="14" fill="${SHARE_PALETTE.panel}" stroke="${SHARE_PALETTE.border}" />
       <text x="16" y="23" fill="${SHARE_PALETTE.muted}" font-size="11.5" font-weight="750" letter-spacing=".75">${escapeXml(label)}</text>
       <text class="tabular" x="16" y="55" fill="${valueColor}" font-size="25" font-weight="780">${escapeXml(value)}</text>
-      <text x="16" y="78" fill="${SHARE_PALETTE.dim}" font-size="9.5" font-weight="500">${escapeXml(help)}</text>
+      <text x="16" y="78" fill="${target ? targetColor : SHARE_PALETTE.dim}" font-size="9.5" font-weight="${target ? 700 : 500}">${escapeXml(footer)}</text>
     </g>`;
 }
 
@@ -126,7 +155,7 @@ export function buildMonthShareSvg({
   const cellH = 100;
   const rows = Math.max(1, weeks.length);
   const height = gridY + headerH + rows * cellH + Math.max(0, rows - 1) * cellGap + 78;
-  const pfValue = profitFactor == null ? '∞' : Number(profitFactor).toFixed(2);
+  const pfValue = profitFactor === undefined ? '--' : (profitFactor == null ? '∞' : Number(profitFactor).toFixed(2));
   const winValue = winRate === '--' ? '--' : `${winRate}%`;
   const monthName = MONTHS[month - 1];
   const monthShort = MONTHS_SHORT[month - 1];
@@ -138,26 +167,31 @@ export function buildMonthShareSvg({
   const best = entries.reduce((winner, current) => (
     !winner || Number(current[1].net_pnl || 0) > Number(winner[1].net_pnl || 0) ? current : winner
   ), null);
-  const worst = entries.reduce((loser, current) => (
-    !loser || Number(current[1].net_pnl || 0) < Number(loser[1].net_pnl || 0) ? current : loser
-  ), null);
   const dayLabel = entry => entry ? `${monthShort} ${Number(entry[0].slice(-2))}` : '—';
   const asOfCandidate = asOfDate instanceof Date ? asOfDate : new Date(asOfDate || Date.now());
   const asOf = Number.isNaN(asOfCandidate.getTime()) ? new Date() : asOfCandidate;
   const todayKey = localDateKey(asOf);
   const greenRate = tradingDays > 0 ? Math.round((greenDays / tradingDays) * 100) : 0;
 
+  const monthWinTarget = targetLine(Number(winRate), SHARE_BASELINES.winRate, '%');
+  const monthPfTarget = targetLine(
+    profitFactor === undefined ? NaN : (profitFactor == null ? Infinity : Number(profitFactor)),
+    SHARE_BASELINES.profitFactor,
+  );
+  const monthRatioTarget = targetLine(Number(avgWinLoss), SHARE_BASELINES.avgWinLoss);
+
   const metrics = [
-    ['NET P&L', signedPnl(monthPnl), metricHelp.pnl, monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : 'neutral'],
-    ['WIN RATE', winValue, metricHelp.win, 'neutral'],
-    ['PROFIT FACTOR', pfValue, metricHelp.pf, 'neutral'],
-    ['AVG WIN / LOSS', avgWinLoss, metricHelp.ratio, 'neutral'],
-    ['TRADING DAYS', tradingDays, metricHelp.days, 'neutral'],
+    ['NET P&L', signedPnl(monthPnl), metricHelp.pnl, monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : 'neutral', null],
+    ['WIN RATE', winValue, metricHelp.win, 'neutral', monthWinTarget],
+    ['PROFIT FACTOR', pfValue, metricHelp.pf, 'neutral', monthPfTarget],
+    ['AVG WIN / LOSS', avgWinLoss, metricHelp.ratio, 'neutral', monthRatioTarget],
+    ['TRADING DAYS', tradingDays, metricHelp.days, 'neutral', null],
   ].map((m, i) => shareMetricCard(margin + i * (metricW + metricGap), 154, metricW, ...m)).join('');
 
+  const avgTradingDay = tradingDays > 0 ? monthPnl / tradingDays : 0;
   const insights = [
     ['BEST DAY', best ? fmtShareDayPnl(best[1].net_pnl) : '—', dayLabel(best), 'pos'],
-    ['LARGEST LOSS', worst ? fmtShareDayPnl(worst[1].net_pnl) : '—', dayLabel(worst), worst && Number(worst[1].net_pnl || 0) < 0 ? 'neg' : 'neutral'],
+    ['AVG / TRADING DAY', tradingDays ? fmtShareDayPnl(avgTradingDay) : '—', 'Net P&L ÷ trading days', avgTradingDay > 0 ? 'pos' : 'neutral'],
     ['GREEN DAYS', `${greenDays}/${tradingDays || 0}`, tradingDays ? `${greenRate}% of sessions` : 'No sessions yet', 'blue'],
     ['TOTAL TRADES', totalTrades.toLocaleString('en-US'), `${redDays} red · ${flatDays} flat`, 'neutral'],
   ].map((m, i) => shareInsightCard(margin + i * (insightW + insightGap), 262, insightW, ...m)).join('');
@@ -233,7 +267,7 @@ export function buildMonthShareSvg({
       ${weekdayHeaders}
       ${cells}
       <line x1="${margin}" y1="${height - 54}" x2="${width - margin}" y2="${height - 54}" stroke="${SHARE_PALETTE.border}" />
-      <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Green = profitable · Red = losing · Upcoming = future market session</text>
+      <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Goals: Win Rate ≥ 50% · Profit Factor ≥ 1.30 · Avg Win/Loss ≥ 1.20 · Green = profitable · Upcoming = future session</text>
       <text x="${width - margin}" y="${height - 28}" text-anchor="end" fill="${SHARE_PALETTE.dim}" font-size="10.5" font-weight="650">AI Journal</text>
     </svg>`,
   };
@@ -244,6 +278,8 @@ export function buildYearShareSvg({
   yearData,
   yearPnl,
   yearWinRate,
+  yearProfitFactor,
+  yearAvgWinLoss,
   totalTrades,
   tradingDays,
   profitableMonths,
@@ -273,24 +309,29 @@ export function buildYearShareSvg({
   const best = active.reduce((winner, current) => (
     !winner || Number(current.data.net_pnl || 0) > Number(winner.data.net_pnl || 0) ? current : winner
   ), null);
-  const worst = active.reduce((loser, current) => (
-    !loser || Number(current.data.net_pnl || 0) < Number(loser.data.net_pnl || 0) ? current : loser
-  ), null);
   const profitableRate = active.length ? Math.round((profitableMonths / active.length) * 100) : 0;
 
+  const yearWinTarget = targetLine(Number(yearWinRate), SHARE_BASELINES.winRate, '%');
+  const yearPfTarget = targetLine(
+    yearProfitFactor === undefined ? NaN : (yearProfitFactor == null ? Infinity : Number(yearProfitFactor)),
+    SHARE_BASELINES.profitFactor,
+  );
+  const yearRatioTarget = targetLine(Number(yearAvgWinLoss), SHARE_BASELINES.avgWinLoss);
+
   const metrics = [
-    ['YTD NET P&L', signedPnl(yearPnl), metricHelp.pnl, yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : 'neutral'],
-    ['WIN RATE', yearWinRate === '--' ? '--' : `${yearWinRate}%`, metricHelp.win, 'neutral'],
-    ['TOTAL TRADES', totalTrades.toLocaleString('en-US'), 'Closed trades recorded this year', 'neutral'],
-    ['TRADING DAYS', tradingDays.toLocaleString('en-US'), metricHelp.days, 'neutral'],
-    ['PROFITABLE MONTHS', `${profitableMonths}/${active.length || 0}`, 'Positive months out of active months', 'neutral'],
+    ['YTD NET P&L', signedPnl(yearPnl), metricHelp.pnl, yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : 'neutral', null],
+    ['WIN RATE', yearWinRate === '--' ? '--' : `${yearWinRate}%`, metricHelp.win, 'neutral', yearWinTarget],
+    ['PROFIT FACTOR', yearProfitFactor === undefined ? '--' : (yearProfitFactor == null ? '∞' : Number(yearProfitFactor).toFixed(2)), metricHelp.pf, 'neutral', yearPfTarget],
+    ['AVG WIN / LOSS', yearAvgWinLoss, metricHelp.ratio, 'neutral', yearRatioTarget],
+    ['TRADING DAYS', tradingDays.toLocaleString('en-US'), metricHelp.days, 'neutral', null],
   ].map((m, i) => shareMetricCard(margin + i * (metricW + metricGap), 154, metricW, ...m)).join('');
 
+  const avgActiveMonth = active.length > 0 ? yearPnl / active.length : 0;
   const insights = [
     ['BEST MONTH', best ? fmtShareDayPnl(best.data.net_pnl) : '—', best ? MONTHS_SHORT[best.i] : 'No data', 'pos'],
-    ['LARGEST LOSS', worst ? fmtShareDayPnl(worst.data.net_pnl) : '—', worst ? MONTHS_SHORT[worst.i] : 'No data', worst && Number(worst.data.net_pnl || 0) < 0 ? 'neg' : 'neutral'],
+    ['AVG / ACTIVE MONTH', active.length ? fmtShareDayPnl(avgActiveMonth) : '—', 'YTD P&L ÷ active months', avgActiveMonth > 0 ? 'pos' : 'neutral'],
     ['PROFITABLE RATE', active.length ? `${profitableRate}%` : '—', `${profitableMonths} green · ${losingMonths} red`, 'blue'],
-    ['ACTIVE MONTHS', active.length.toString(), `${totalTrades.toLocaleString('en-US')} total trades`, 'neutral'],
+    ['TOTAL TRADES', totalTrades.toLocaleString('en-US'), `${active.length} active months`, 'neutral'],
   ].map((m, i) => shareInsightCard(margin + i * (insightW + insightGap), 262, insightW, ...m)).join('');
 
   const cards = months.map((data, i) => {
@@ -359,7 +400,7 @@ export function buildYearShareSvg({
       <text x="${margin}" y="${gridY - 10}" fill="${SHARE_PALETTE.text}" font-size="12" font-weight="750" letter-spacing="1.2">MONTH-BY-MONTH PERFORMANCE</text>
       ${cards}
       <line x1="${margin}" y1="${height - 54}" x2="${width - margin}" y2="${height - 54}" stroke="${SHARE_PALETTE.border}" />
-      <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Green = profitable · Red = losing · Upcoming = future month</text>
+      <text x="${margin}" y="${height - 28}" fill="${SHARE_PALETTE.dim}" font-size="10.5">Goals: Win Rate ≥ 50% · Profit Factor ≥ 1.30 · Avg Win/Loss ≥ 1.20 · Green = profitable · Upcoming = future month</text>
       <text x="${width - margin}" y="${height - 28}" text-anchor="end" fill="${SHARE_PALETTE.dim}" font-size="10.5" font-weight="650">AI Journal</text>
     </svg>`,
   };
@@ -433,12 +474,14 @@ async function saveOrShareCalendarImage(documentSpec) {
   }
 }
 
-function ShareMetric({ label, value, help, tone }) {
+function ShareMetric({ label, value, help, tone, target }) {
   return (
     <div className="calendar-share-stat">
       <span className="calendar-share-stat-label">{label}</span>
       <strong className={`num ${tone || ''}`}>{value}</strong>
-      <small>{help}</small>
+      <small className={target ? `calendar-share-target ${target.tone || ''}` : ''}>
+        {target?.text || help}
+      </small>
     </div>
   );
 }
@@ -518,6 +561,7 @@ function MonthCard({ data, monthIdx, year, onClick, isCurrent, isFuture }) {
 
 function YearView({ year, setYear, accountId, onMonthClick, view, setView, shareMode, onShareModeChange }) {
   const [yearData, setYearData] = useState([]);
+  const [yearKpis, setYearKpis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [shareStatus, setShareStatus] = useState('');
   const today = new Date();
@@ -527,23 +571,52 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
   useEffect(() => {
     setLoading(true);
     const params = { year };
-    if (accountId != null) params.account_id = accountId;
-    yearlyKpisApi.get(params)
-      .then(r => {
-        const months = Array.isArray(r.data) ? r.data : (Array.isArray(r.data?.months) ? r.data.months : []);
+    const kpiParams = { date_from: `${year}-01-01`, date_to: `${year}-12-31` };
+    if (accountId != null) {
+      params.account_id = accountId;
+      kpiParams.account_id = accountId;
+    }
+
+    Promise.all([yearlyKpisApi.get(params), kpisApi.get(kpiParams)])
+      .then(([yearlyResponse, kpiResponse]) => {
+        const months = Array.isArray(yearlyResponse.data)
+          ? yearlyResponse.data
+          : (Array.isArray(yearlyResponse.data?.months) ? yearlyResponse.data.months : []);
         setYearData(months);
+        setYearKpis(kpiResponse.data || null);
         setLoading(false);
       })
-      .catch(() => { setYearData([]); setLoading(false); });
+      .catch(() => {
+        setYearData([]);
+        setYearKpis(null);
+        setLoading(false);
+      });
   }, [year, accountId]);
 
   const monthsWithData = yearData.filter(m => m?.has_data);
-  const yearPnl = monthsWithData.reduce((s, m) => s + Number(m.net_pnl || 0), 0);
-  const totalTrades = monthsWithData.reduce((s, m) => s + Number(m.total_trades || 0), 0);
-  const totalWinners = monthsWithData.reduce((s, m) => s + Number(m.winning_trades || 0), 0);
-  const tradingDays = monthsWithData.reduce((s, m) => s + Number(m.trading_days || 0), 0);
+  const yearPnl = yearKpis != null
+    ? Number(yearKpis.total_net_pnl || 0)
+    : monthsWithData.reduce((s, m) => s + Number(m.net_pnl || 0), 0);
+  const totalTrades = yearKpis != null
+    ? Number(yearKpis.total_trades || 0)
+    : monthsWithData.reduce((s, m) => s + Number(m.total_trades || 0), 0);
+  const tradingDays = yearKpis != null
+    ? Number(yearKpis.trading_days || 0)
+    : monthsWithData.reduce((s, m) => s + Number(m.trading_days || 0), 0);
   const profitableMonths = monthsWithData.filter(m => Number(m.net_pnl || 0) > 0).length;
-  const yearWinRate = totalTrades > 0 ? (totalWinners / totalTrades * 100).toFixed(1) : '--';
+  const yearWinRate = yearKpis != null
+    ? Number(yearKpis.win_rate || 0).toFixed(1)
+    : '--';
+  const yearProfitFactor = yearKpis ? yearKpis.profit_factor : undefined;
+  const yearAvgWinLoss = yearKpis && Math.abs(Number(yearKpis.avg_loss || 0)) > 0
+    ? (Math.abs(Number(yearKpis.avg_win || 0)) / Math.abs(Number(yearKpis.avg_loss || 0))).toFixed(2)
+    : '--';
+  const yearWinTarget = targetLine(Number(yearWinRate), SHARE_BASELINES.winRate, '%');
+  const yearPfTarget = targetLine(
+    yearProfitFactor === undefined ? NaN : (yearProfitFactor == null ? Infinity : Number(yearProfitFactor)),
+    SHARE_BASELINES.profitFactor,
+  );
+  const yearRatioTarget = targetLine(Number(yearAvgWinLoss), SHARE_BASELINES.avgWinLoss);
 
   const exportYearImage = async () => {
     if (loading) return;
@@ -553,6 +626,8 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
       yearData,
       yearPnl,
       yearWinRate,
+      yearProfitFactor,
+      yearAvgWinLoss,
       totalTrades,
       tradingDays,
       profitableMonths,
@@ -617,10 +692,10 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
 
           <section className="calendar-share-stats calendar-share-stats-detailed" aria-label="Year summary">
             <ShareMetric label="YTD Net P&L" value={signedPnl(yearPnl)} help="Total profit or loss for the year" tone={yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : ''} />
-            <ShareMetric label="Win Rate" value={yearWinRate === '--' ? '--' : `${yearWinRate}%`} help="Percent of closed trades that won" />
-            <ShareMetric label="Total Trades" value={totalTrades.toLocaleString('en-US')} help="Closed trades recorded this year" />
+            <ShareMetric label="Win Rate" value={yearWinRate === '--' ? '--' : `${yearWinRate}%`} help="Closed-trade win rate for this year" target={yearWinTarget} />
+            <ShareMetric label="Profit Factor" value={yearKpis ? (yearProfitFactor == null ? '∞' : Number(yearProfitFactor).toFixed(2)) : '--'} help="Year gross profit ÷ gross loss" target={yearPfTarget} />
+            <ShareMetric label="Avg Win / Loss" value={yearAvgWinLoss} help="Average year winner compared with loser" target={yearRatioTarget} />
             <ShareMetric label="Trading Days" value={tradingDays.toLocaleString('en-US')} help="Days with at least one trade" />
-            <ShareMetric label="Profitable Months" value={`${profitableMonths}/12`} help="Months that finished net positive" />
           </section>
 
           {shareStatus === 'saved' && <div className="calendar-share-status" role="status">PNG saved to your device.</div>}
@@ -648,10 +723,10 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
           {monthsWithData.length > 0 && (
             <KpiStrip label="Year summary">
               <KpiCell label="YTD Net P&L" value={<span className="num">{signedPnl(yearPnl)}</span>} tone={yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : undefined} />
-              <KpiCell label="Win Rate" value={<span className="num">{yearWinRate !== '--' ? `${yearWinRate}%` : '--'}</span>} tone={Number(yearWinRate) >= 55 ? 'pos' : undefined} />
-              <KpiCell label="Total Trades" value={<span className="num">{totalTrades.toLocaleString('en-US')}</span>} />
+              <KpiCell label="Win Rate" value={<span className="num">{yearWinRate !== '--' ? `${yearWinRate}%` : '--'}</span>} tone={Number(yearWinRate) >= SHARE_BASELINES.winRate ? 'pos' : undefined} />
+              <KpiCell label="Profit Factor" value={<span className="num">{yearKpis ? (yearProfitFactor == null ? '∞' : Number(yearProfitFactor).toFixed(2)) : '--'}</span>} tone={yearProfitFactor == null || Number(yearProfitFactor) >= SHARE_BASELINES.profitFactor ? 'pos' : undefined} />
+              <KpiCell label="Avg W/L" value={<span className="num">{yearAvgWinLoss}</span>} tone={Number(yearAvgWinLoss) >= SHARE_BASELINES.avgWinLoss ? 'pos' : undefined} />
               <KpiCell label="Trading Days" value={<span className="num">{tradingDays.toLocaleString('en-US')}</span>} />
-              <KpiCell label="Profitable Months" value={<span className="num">{profitableMonths}/12</span>} />
             </KpiStrip>
           )}
 
@@ -719,6 +794,12 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
   const avgWinLoss = monthKpis && Math.abs(monthKpis.avg_loss || 0) > 0
     ? (Math.abs(monthKpis.avg_win || 0) / Math.abs(monthKpis.avg_loss)).toFixed(2)
     : '--';
+  const monthWinTarget = targetLine(Number(winRate), SHARE_BASELINES.winRate, '%');
+  const monthPfTarget = targetLine(
+    monthKpis == null ? NaN : (pf == null ? Infinity : Number(pf)),
+    SHARE_BASELINES.profitFactor,
+  );
+  const monthRatioTarget = targetLine(Number(avgWinLoss), SHARE_BASELINES.avgWinLoss);
 
   const exportMonthImage = async () => {
     if (loading) return;
@@ -769,9 +850,9 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
 
           <section className="calendar-share-stats calendar-share-stats-detailed" aria-label="Month summary">
             <ShareMetric label="Net P&L" value={signedPnl(monthPnl)} help="Total profit or loss for this month" tone={monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : ''} />
-            <ShareMetric label="Win Rate" value={winRate === '--' ? '--' : `${winRate}%`} help="Percent of closed trades that won" />
-            <ShareMetric label="Profit Factor" value={monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'} help="Gross profit ÷ gross loss" />
-            <ShareMetric label="Avg Win / Loss" value={avgWinLoss} help="Average winner compared with loser" />
+            <ShareMetric label="Win Rate" value={winRate === '--' ? '--' : `${winRate}%`} help="Closed-trade win rate for this month" target={monthWinTarget} />
+            <ShareMetric label="Profit Factor" value={monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'} help="Month gross profit ÷ gross loss" target={monthPfTarget} />
+            <ShareMetric label="Avg Win / Loss" value={avgWinLoss} help="Average month winner compared with loser" target={monthRatioTarget} />
             <ShareMetric label="Trading Days" value={tradingDays} help="Days with at least one trade" />
           </section>
 

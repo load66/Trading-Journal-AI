@@ -32,9 +32,13 @@ describe('Calendar share image documents', () => {
     expect(spec.svg).toContain('-$1.6K');
     expect(spec.svg).toContain('3 trades');
     expect(spec.svg).toContain('BEST DAY');
-    expect(spec.svg).toContain('LARGEST LOSS');
+    expect(spec.svg).toContain('AVG / TRADING DAY');
+    expect(spec.svg).not.toContain('LARGEST LOSS');
     expect(spec.svg).toContain('GREEN DAYS');
     expect(spec.svg).toContain('TOTAL TRADES');
+    expect(spec.svg).toContain('Goal ≥ 50% · Goal met');
+    expect(spec.svg).toContain('Goal ≥ 1.30 · Goal met');
+    expect(spec.svg).toContain('Goal ≥ 1.20 · Goal met');
     expect(spec.svg).toContain('system-ui');
     expect(spec.width).toBe(1200);
     expect(spec.height).toBeGreaterThan(500);
@@ -59,6 +63,8 @@ describe('Calendar share image documents', () => {
       yearData: months,
       yearPnl: 600,
       yearWinRate: '60.0',
+      yearProfitFactor: 1.5,
+      yearAvgWinLoss: '1.50',
       totalTrades: 30,
       tradingDays: 15,
       profitableMonths: 2,
@@ -68,18 +74,43 @@ describe('Calendar share image documents', () => {
     expect(spec.filename).toBe('trading-calendar-2026.png');
     expect(spec.svg).toContain('AI JOURNAL · YEARLY PERFORMANCE');
     expect(spec.svg).toContain('YTD NET P&amp;L');
-    expect(spec.svg).toContain('PROFITABLE MONTHS');
+    expect(spec.svg).toContain('PROFIT FACTOR');
+    expect(spec.svg).toContain('AVG WIN / LOSS');
     expect(spec.svg).toContain('JAN');
     expect(spec.svg).toContain('DEC');
-    expect(spec.svg).toContain('2/3');
+    expect(spec.svg).toContain('67%');
+    expect(spec.svg).toContain('2 green · 1 red');
     expect(spec.svg).toContain('BEST MONTH');
-    expect(spec.svg).toContain('LARGEST LOSS');
+    expect(spec.svg).toContain('AVG / ACTIVE MONTH');
+    expect(spec.svg).not.toContain('LARGEST LOSS');
     expect(spec.svg).toContain('PROFITABLE RATE');
-    expect(spec.svg).toContain('ACTIVE MONTHS');
+    expect(spec.svg).toContain('TOTAL TRADES');
     expect(spec.svg).toContain('UPCOMING');
+    expect(spec.svg).toContain('Goal ≥ 50% · Goal met');
+    expect(spec.svg).toContain('Goal ≥ 1.30 · Goal met');
+    expect(spec.svg).toContain('Goal ≥ 1.20 · Goal met');
     expect(spec.svg).toContain('system-ui');
     expect(spec.width).toBe(1200);
     expect(spec.height).toBeLessThan(1460);
     expect(spec.height).toBeGreaterThan(1100);
+  });
+
+  test('share-card goals clearly show when period metrics are below baseline', () => {
+    const spec = buildMonthShareSvg({
+      year: 2026,
+      month: 9,
+      weeks: [[1, 2, 3, 4, 5]],
+      dayData: {},
+      monthPnl: -100,
+      winRate: '42.0',
+      profitFactor: 0.9,
+      avgWinLoss: '0.80',
+      tradingDays: 5,
+      asOfDate: new Date('2026-09-27T12:00:00'),
+    });
+
+    expect(spec.svg).toContain('Goal ≥ 50% · Below goal');
+    expect(spec.svg).toContain('Goal ≥ 1.30 · Below goal');
+    expect(spec.svg).toContain('Goal ≥ 1.20 · Below goal');
   });
 });
