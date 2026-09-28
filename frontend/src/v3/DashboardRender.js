@@ -1,7 +1,7 @@
 /* The V3 Today page. Presentation only: every value, handler and piece of
    state is passed in from Dashboard.js, so no behaviour lives here. */
 import { useState, useEffect } from 'react';
-import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, AlertTriangle, BarChart3, Sparkles, RotateCcw } from 'lucide-react';
+import { Trophy, Clock3, Target, ShieldAlert, Lightbulb, FileText, AlertTriangle, BarChart3, Sparkles, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { calendarApi } from '../api';
 import LERiskPlanner from './LERiskPlanner';
 import {
@@ -773,8 +773,8 @@ export default function DashboardRender(p) {
   return (
     <div className="v3-dashboard">
       <div className="v3-hero v3-hero-compact">
-        <div className="v3-eyeline">
-          <div>
+        <div className="v3-eyeline v3-hero-summary">
+          <div className="v3-hero-primary">
             <p className="v3-acct">{accountLabel}{span ? ' · ' + span : ''}</p>
             <div className="v3-hero-label">Total net P&amp;L</div>
             <h1 className={'v3-money ' + tone(net)}>{money2(net)}</h1>
@@ -784,27 +784,28 @@ export default function DashboardRender(p) {
               {' '}· {k.trading_days ? money2(net / k.trading_days) + ' avg/day' : 'avg/day unavailable'}
             </p>
           </div>
-          <div className="v3-heroside">
-            <div className="v3-acts">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={onToggleGoals}
-                aria-pressed={showGoals}
-                aria-expanded={showGoals}
-              >
-                Edit goals
-              </button>
-              {RangePicker}
-            </div>
-            {readout && (
-              <dl className="v3-readout">
-                <dt className="v3-lab">Last session</dt>
-                <dd className={tone(readout.net_pnl)}>{money2(readout.net_pnl)}</dd>
-                <div className="when">{shortDate(readout.date)}</div>
-              </dl>
-            )}
-          </div>
+
+          {readout && (
+            <dl className="v3-readout v3-last-session-card">
+              <dt className="v3-lab">Last session</dt>
+              <dd className={tone(readout.net_pnl)}>{money2(readout.net_pnl)}</dd>
+              <div className="when">{shortDate(readout.date)}</div>
+            </dl>
+          )}
+        </div>
+
+        <div className="v3-hero-toolbar" aria-label="Dashboard controls">
+          <button
+            type="button"
+            className="btn btn-secondary v3-goals-button"
+            onClick={onToggleGoals}
+            aria-pressed={showGoals}
+            aria-expanded={showGoals}
+          >
+            <SlidersHorizontal size={15} aria-hidden="true" />
+            <span>Edit goals</span>
+          </button>
+          <div className="v3-range-slot">{RangePicker}</div>
         </div>
       </div>
 
