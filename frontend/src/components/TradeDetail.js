@@ -1697,8 +1697,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
                 {editingStrategy && (
                   <div className="trade-review-mobile-savebar">
-                    <button type="button" onClick={() => setEditingStrategy(false)} className="btn btn-ghost">Cancel</button>
-                    <button type="button" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary">
+                    <button type="button" aria-label="Cancel mobile review" onClick={() => setEditingStrategy(false)} className="btn btn-ghost">Cancel</button>
+                    <button type="button" aria-label="Save mobile review" onClick={handleSaveStrategy} disabled={savingStrategy} className="btn btn-primary">
                       {savingStrategy ? 'Saving…' : 'Save review'}
                     </button>
                   </div>
