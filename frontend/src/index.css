@@ -3434,14 +3434,85 @@ button.month-card:active { transform: translateY(1px); }
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: start;
 }
-.td-tags-picker-row select {
+.td-tags-add-card {
+  overflow: visible;
+  position: relative;
+  z-index: 2;
+}
+.td-tags-combobox {
+  min-width: 0;
+  position: relative;
+}
+.td-tags-combobox > input {
   width: 100%;
   min-width: 0;
   min-height: 38px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
   background: var(--surface-inset);
-  border-color: var(--divider-strong);
+  font: inherit;
   font-size: 12px;
+  outline: none;
+}
+.td-tags-combobox > input::placeholder {
+  color: var(--text-tertiary);
+}
+.td-tags-combobox > input:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-line) 18%, transparent);
+}
+.td-tags-combobox-menu {
+  max-height: 238px;
+  margin-top: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-panel) 96%, black 4%);
+  box-shadow: 0 14px 34px rgba(0,0,0,.28);
+}
+.td-tags-combobox-option {
+  width: 100%;
+  min-height: 42px;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--divider-soft);
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.td-tags-combobox-option:last-child {
+  border-bottom: 0;
+}
+.td-tags-combobox-option:hover,
+.td-tags-combobox-option.active,
+.td-tags-combobox-option[aria-selected="true"] {
+  background: var(--surface-selected);
+}
+.td-tags-combobox-option span {
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+.td-tags-combobox-option small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.td-tags-combobox-empty {
+  padding: 11px 10px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
 }
 .td-tags-add {
   min-width: 102px;
