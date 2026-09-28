@@ -4023,6 +4023,27 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   flex-wrap: wrap;
   gap: 7px;
 }
+.trade-review-desktop-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trade-review-mobile-steps,
+.trade-review-mobile-savebar {
+  display: none;
+}
+.trade-review-mobile-step {
+  min-width: 0;
+}
+.trade-review-editor > .trade-review-mobile-step {
+  display: grid;
+  gap: 12px;
+}
+.trade-review-workspace-grid > .trade-review-mobile-step > .trade-review-journal,
+.trade-review-workspace-grid > .trade-review-mobile-step > .trade-review-summary {
+  height: 100%;
+  box-sizing: border-box;
+}
 .trade-review-kicker,
 .trade-review-eyebrow {
   display: inline-flex;
@@ -4488,6 +4509,209 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   }
   .trade-review-journal-editor {
     min-height: 360px;
+  }
+}
+
+@media (max-width: 720px) {
+  .td-panel-content {
+    padding: 6px 10px calc(86px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .trade-review-shell {
+    gap: 10px;
+    padding-top: 6px;
+  }
+
+  .trade-review-toolbar {
+    gap: 9px;
+    padding-bottom: 0;
+  }
+
+  .trade-review-toolbar-copy {
+    display: none;
+  }
+
+  .trade-review-toolbar-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .trade-review-toolbar-actions > .btn {
+    min-height: 40px;
+  }
+
+  .trade-review-desktop-edit-actions {
+    display: none;
+  }
+
+  .trade-review-mobile-steps {
+    position: sticky;
+    top: 0;
+    z-index: 35;
+    display: flex;
+    gap: 6px;
+    width: 100%;
+    margin: 0 -2px;
+    padding: 8px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    background: color-mix(in srgb, var(--surface-page) 94%, transparent);
+    border-bottom: 1px solid var(--divider-soft);
+    backdrop-filter: blur(12px);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .trade-review-mobile-steps::-webkit-scrollbar {
+    display: none;
+  }
+
+  .trade-review-mobile-step-btn {
+    appearance: none;
+    flex: 0 0 auto;
+    min-width: 76px;
+    min-height: 42px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 8px 11px;
+    border: 1px solid var(--divider);
+    border-radius: 999px;
+    background: var(--surface-inset);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .trade-review-mobile-step-btn.complete {
+    color: var(--result-pos);
+  }
+
+  .trade-review-mobile-step-btn.active {
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+    color: var(--accent-line);
+  }
+
+  .trade-review-mobile-step:not(.active) {
+    display: none !important;
+  }
+
+  .trade-review-workspace-grid {
+    display: block;
+  }
+
+  .trade-review-structured:not(.mobile-review-active) {
+    display: none;
+  }
+
+  .trade-review-structured.mobile-review-active {
+    display: block;
+  }
+
+  .trade-review-structured-head {
+    display: none;
+  }
+
+  .trade-review-editor,
+  .trade-review-readonly {
+    padding-top: 0;
+  }
+
+  .trade-review-note-grid {
+    border: 0;
+    background: transparent;
+  }
+
+  .trade-review-note-grid article {
+    min-height: 0;
+    border: 1px solid var(--divider-soft);
+  }
+
+  .trade-review-templates {
+    padding: 12px;
+  }
+
+  .trade-review-template-grid {
+    grid-template-columns: 1fr;
+    margin-top: 10px;
+  }
+
+  .trade-review-template-card {
+    min-height: 56px;
+    padding: 10px;
+  }
+
+  .trade-review-template-copy {
+    gap: 3px;
+  }
+
+  .trade-review-template-copy > span {
+    display: none;
+  }
+
+  .trade-review-journal,
+  .trade-review-summary,
+  .trade-review-structured {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .trade-review-journal-editor {
+    min-height: 210px;
+    max-height: 42dvh;
+    padding: 12px;
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
+  .trade-review-journal-readonly {
+    min-height: 150px;
+    max-height: 42dvh;
+    overflow-y: auto;
+  }
+
+  .trade-review-pick-group {
+    padding: 11px 10px;
+  }
+
+  .trade-review-chip-row {
+    gap: 7px;
+  }
+
+  .trade-review-chip {
+    min-height: 40px;
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+
+  .trade-review-editor textarea {
+    min-height: 120px;
+    font-size: 16px !important;
+  }
+
+  .trade-review-mobile-savebar {
+    position: sticky;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    z-index: 40;
+    display: grid;
+    grid-template-columns: minmax(0, .72fr) minmax(0, 1.28fr);
+    gap: 8px;
+    padding: 9px;
+    border: 1px solid var(--divider);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface-panel) 94%, transparent);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .36);
+    backdrop-filter: blur(14px);
+  }
+
+  .trade-review-mobile-savebar .btn {
+    width: 100%;
+    min-height: 48px;
+    justify-content: center;
+    font-size: 13px;
   }
 }
 
