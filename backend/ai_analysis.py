@@ -4,6 +4,8 @@ import base64
 import json
 import os
 import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from dotenv import load_dotenv
 from le_compliance import (
@@ -600,6 +602,8 @@ Core rules:
 - The journal's realized P&L is authoritative. Do not recompute it from prices.
 - MFE/MAE/exit-efficiency may be missing on some trades. State coverage when using those fields.
 - If a question asks about a ticker, strategy, date, time window, or recent event, use TARGETED MATCHES when provided.
+- QUESTION_SCOPE is the evidence selected specifically for the user's question. Prefer QUESTION_SCOPE_STATS and TARGETED MATCHES over full-journal aggregates for targeted questions.
+- When target_detection includes resolved dates, treat those dates as the resolved meaning of relative phrases such as "last Friday" or "yesterday".
 - If the question asks "best", explain the metric used (for example total P&L, average P&L, profit factor, or win rate) and note when another metric gives a different answer.
 - Never claim you inspected a chart image unless image data was actually supplied. Session-path evidence is a realized-P&L timeline, not a price chart.
 - The user-supplied LE playbook in LE_PLAYBOOK is authoritative for LE-system questions. Preserve its terminology: Flag, Line, Sign; FORM -> ESTABLISH; L Entry; E Entry; Purple Profits; Three Trade Rule; Chop Hour; 3-2-1; 10m 8 EMA.
@@ -733,6 +737,53 @@ def _brain_group(trades: list[dict], field_fn, *, min_count: int = 1) -> list[di
     return sorted(rows, key=lambda r: (-r["net_pnl"], -r["trades"], r["name"]))
 
 
+BRAIN_JOURNAL_TIMEZONE = os.getenv("JOURNAL_TIMEZONE", "America/Chicago")
+_BRAIN_WEEKDAYS = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+
+def _brain_today():
+    try:
+        return datetime.now(ZoneInfo(BRAIN_JOURNAL_TIMEZONE)).date()
+    except Exception:
+        return datetime.now().date()
+
+
+def _brain_relative_date_targets(question: str) -> tuple[list[str], str | None]:
+    q = str(question or "").strip().lower()
+    today = _brain_today()
+
+    if re.search(r"\byesterday\b", q):
+        return [(today - timedelta(days=1)).isoformat()], "yesterday"
+    if re.search(r"\btoday\b", q):
+        return [today.isoformat()], "today"
+
+    for name, weekday in _BRAIN_WEEKDAYS.items():
+        if re.search(rf"\blast\s+{name}\b", q):
+            days_back = (today.weekday() - weekday) % 7
+            if days_back == 0:
+                days_back = 7
+            resolved = today - timedelta(days=days_back)
+            return [resolved.isoformat()], f"last {name}"
+
+    if re.search(r"\blast\s+week\b", q):
+        this_monday = today - timedelta(days=today.weekday())
+        prior_monday = this_monday - timedelta(days=7)
+        return [
+            (prior_monday + timedelta(days=offset)).isoformat()
+            for offset in range(7)
+        ], "last week"
+
+    return [], None
+
+
 def _brain_extract_targets(question: str, trades: list[dict]) -> dict:
     q = str(question or "")
     q_upper = q.upper()
@@ -746,8 +797,36 @@ def _brain_extract_targets(question: str, trades: list[dict]) -> dict:
         for t in trades
         if t.get("strategy") and str(t.get("strategy")).lower() in q.lower()
     })
-    dates = re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", q)
-    return {"tickers": tickers, "strategies": strategies, "dates": dates}
+    explicit_dates = re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", q)
+    relative_dates, date_phrase = _brain_relative_date_targets(q)
+    dates = sorted(set(explicit_dates + relative_dates))
+    return {
+        "tickers": tickers,
+        "strategies": strategies,
+        "dates": dates,
+        "date_phrase": date_phrase,
+    }
+
+
+def _brain_question_needs_le(question: str) -> bool:
+    q = str(question or "").lower()
+    le_terms = (
+        r"\ble\b",
+        r"\bflag\b",
+        r"\bline\b",
+        r"\bsign\b",
+        r"\bl entry\b",
+        r"\be entry\b",
+        r"purple profits",
+        r"three trade rule",
+        r"chop hour",
+        r"\b3-2-1\b",
+        r"10m 8 ema",
+        r"10 min 8 ema",
+        r"compliance",
+        r"playbook",
+    )
+    return any(re.search(pattern, q) for pattern in le_terms)
 
 
 def build_brain_context(conn, account_id, question: str = "") -> str:
@@ -795,32 +874,12 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
     overall["date_from"] = dates[0] if dates else None
     overall["date_to"] = dates[-1] if dates else None
 
-    by_strategy = _brain_group(trades, lambda t: t.get("strategy") or "No Strategy")
-    by_ticker = _brain_group(trades, lambda t: t.get("ticker") or "Unknown")
-    by_side = _brain_group(trades, lambda t: t.get("side") or "Unknown")
-    by_window = _brain_group(trades, lambda t: t.get("_market_window") or "Unknown")
-    by_hold = _brain_group(trades, lambda t: t.get("_hold_bucket") or "Unknown")
-    by_day = _brain_group(trades, lambda t: t.get("date") or "Unknown")
-
-    mfe_values = [float(t["mfe_pct"]) for t in trades if t.get("mfe_pct") is not None]
-    mae_values = [float(t["mae_pct"]) for t in trades if t.get("mae_pct") is not None]
-    exit_values = [float(t["exit_efficiency"]) for t in trades if t.get("exit_efficiency") is not None]
-    management = {
-        "mfe_coverage": {"count": len(mfe_values), "pct": round(len(mfe_values) / len(trades) * 100, 1)},
-        "mae_coverage": {"count": len(mae_values), "pct": round(len(mae_values) / len(trades) * 100, 1)},
-        "exit_efficiency_coverage": {"count": len(exit_values), "pct": round(len(exit_values) / len(trades) * 100, 1)},
-        "avg_mfe_pct": round(sum(mfe_values) / len(mfe_values), 2) if mfe_values else None,
-        "avg_mae_pct": round(sum(mae_values) / len(mae_values), 2) if mae_values else None,
-        "avg_exit_efficiency": round(sum(exit_values) / len(exit_values), 2) if exit_values else None,
-    }
-
-    ranked = sorted(trades, key=lambda t: float(t.get("net_pnl") or 0))
-    worst_trades = ranked[:10]
-    best_trades = list(reversed(ranked[-10:]))
-
     targets = _brain_extract_targets(question, trades)
+    target_requested = bool(
+        targets["tickers"] or targets["strategies"] or targets["dates"]
+    )
     targeted = []
-    if any(targets.values()):
+    if target_requested:
         for t in trades:
             if targets["tickers"] and str(t.get("ticker") or "").upper() not in targets["tickers"]:
                 continue
@@ -829,49 +888,86 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
             if targets["dates"] and str(t.get("date") or "") not in targets["dates"]:
                 continue
             targeted.append(t)
-    targeted = targeted[:100]
 
+    analysis_trades = targeted if targeted else trades
+    question_scope = {
+        "mode": "targeted" if target_requested else "journal",
+        "matched_trades": len(targeted) if target_requested else len(trades),
+        "requested_dates": targets["dates"],
+        "requested_tickers": targets["tickers"],
+        "requested_strategies": targets["strategies"],
+        "date_phrase": targets.get("date_phrase"),
+    }
+    question_scope_stats = _brain_bucket_stats(analysis_trades)
+
+    by_strategy = _brain_group(analysis_trades, lambda t: t.get("strategy") or "No Strategy")
+    by_ticker = _brain_group(analysis_trades, lambda t: t.get("ticker") or "Unknown")
+    by_side = _brain_group(analysis_trades, lambda t: t.get("side") or "Unknown")
+    by_window = _brain_group(analysis_trades, lambda t: t.get("_market_window") or "Unknown")
+    by_hold = _brain_group(analysis_trades, lambda t: t.get("_hold_bucket") or "Unknown")
+    by_day = _brain_group(analysis_trades, lambda t: t.get("date") or "Unknown")
+
+    mfe_values = [float(t["mfe_pct"]) for t in analysis_trades if t.get("mfe_pct") is not None]
+    mae_values = [float(t["mae_pct"]) for t in analysis_trades if t.get("mae_pct") is not None]
+    exit_values = [float(t["exit_efficiency"]) for t in analysis_trades if t.get("exit_efficiency") is not None]
+    scope_count = len(analysis_trades)
+    management = {
+        "mfe_coverage": {"count": len(mfe_values), "pct": round(len(mfe_values) / scope_count * 100, 1) if scope_count else 0.0},
+        "mae_coverage": {"count": len(mae_values), "pct": round(len(mae_values) / scope_count * 100, 1) if scope_count else 0.0},
+        "exit_efficiency_coverage": {"count": len(exit_values), "pct": round(len(exit_values) / scope_count * 100, 1) if scope_count else 0.0},
+        "avg_mfe_pct": round(sum(mfe_values) / len(mfe_values), 2) if mfe_values else None,
+        "avg_mae_pct": round(sum(mae_values) / len(mae_values), 2) if mae_values else None,
+        "avg_exit_efficiency": round(sum(exit_values) / len(exit_values), 2) if exit_values else None,
+    }
+
+    ranked = sorted(analysis_trades, key=lambda t: float(t.get("net_pnl") or 0))
+    worst_trades = ranked[:5]
+    best_trades = list(reversed(ranked[-5:]))
+
+    le_requested = _brain_question_needs_le(question)
     le_snapshots = []
-    try:
-        if account_id is None:
-            le_rows = conn.execute(
-                "SELECT key, value FROM settings WHERE key LIKE 'le_compliance:%'"
-            ).fetchall()
-        else:
-            le_rows = conn.execute(
-                "SELECT key, value FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
-                (account_id,),
-            ).fetchall()
-        current_groups = {str(t.get("trade_group")): t for t in trades if t.get("trade_group")}
-        for row in le_rows:
-            try:
-                item = json.loads(row["value"])
-            except Exception:
-                continue
-            if not isinstance(item, dict):
-                continue
-            group = str(item.get("trade_group") or "")
-            current = current_groups.get(group)
-            if not current:
-                continue
-            item = dict(item)
-            item["net_pnl"] = round(float(current.get("net_pnl") or 0), 2)
-            item["ticker"] = current.get("ticker")
-            item["date"] = current.get("date")
-            le_snapshots.append(item)
-    except Exception:
-        le_snapshots = []
+    if le_requested:
+        try:
+            if account_id is None:
+                le_rows = conn.execute(
+                    "SELECT key, value FROM settings WHERE key LIKE 'le_compliance:%'"
+                ).fetchall()
+            else:
+                le_rows = conn.execute(
+                    "SELECT key, value FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
+                    (account_id,),
+                ).fetchall()
+            current_groups = {str(t.get("trade_group")): t for t in trades if t.get("trade_group")}
+            for row in le_rows:
+                try:
+                    item = json.loads(row["value"])
+                except Exception:
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                group = str(item.get("trade_group") or "")
+                current = current_groups.get(group)
+                if not current:
+                    continue
+                item = dict(item)
+                item["net_pnl"] = round(float(current.get("net_pnl") or 0), 2)
+                item["ticker"] = current.get("ticker")
+                item["date"] = current.get("date")
+                le_snapshots.append(item)
+        except Exception:
+            le_snapshots = []
 
     le_by_group = {
         str(item.get("trade_group")): item
         for item in le_snapshots
         if item.get("trade_group")
     }
-    le_summary = summarize_le_compliance_snapshots(le_snapshots)
-    le_summary["journal_completed_trades"] = len(trades)
-    le_summary["audit_coverage_pct"] = round(
-        len(le_snapshots) / len(trades) * 100, 1
-    ) if trades else 0.0
+    le_summary = summarize_le_compliance_snapshots(le_snapshots) if le_requested else {}
+    if le_requested:
+        le_summary["journal_completed_trades"] = len(trades)
+        le_summary["audit_coverage_pct"] = round(
+            len(le_snapshots) / len(trades) * 100, 1
+        ) if trades else 0.0
 
     def compact_trade(t: dict) -> dict:
         executions = t.get("executions") or []
@@ -937,6 +1033,10 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
             "improvement_areas": (analysis.get("improvement_areas") or [])[:5],
         })
 
+    if targets["dates"]:
+        diary = [item for item in diary if str(item.get("date") or "") in targets["dates"]]
+    diary = diary[:8]
+
     summary_params = []
     summary_sql = """
         SELECT summary_date, ai_content, generated_at
@@ -984,34 +1084,46 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
     except Exception:
         daily_reviews = []
 
+    if targets["dates"]:
+        daily_reviews = [
+            item for item in daily_reviews
+            if str(item.get("date") or "") in targets["dates"]
+        ]
+    daily_reviews = daily_reviews[:8]
+
     snapshot = {
         "journal_scope": {
             "account_id": account_id,
             "question": question,
             "completed_trades": len(trades),
             "date_range": [overall.get("date_from"), overall.get("date_to")],
-            "source_note": "All aggregates below are computed from completed trades in the selected account scope.",
+            "source_note": "Full-journal overall metrics plus question-scoped evidence.",
         },
+        "question_scope": question_scope,
+        "question_scope_stats": question_scope_stats,
         "overall": overall,
         "management": management,
-        "by_strategy": by_strategy[:40],
-        "by_ticker": by_ticker[:60],
+        "by_strategy": by_strategy[:20],
+        "by_ticker": by_ticker[:30],
         "by_side": by_side,
         "by_exit_window_et": by_window,
         "by_hold_time": by_hold,
-        "by_day": by_day[:90],
+        "by_day": by_day[:45],
         "best_trades": [compact_trade(t) for t in best_trades],
         "worst_trades": [compact_trade(t) for t in worst_trades],
-        "recent_trades": [compact_trade(t) for t in trades[:75]],
+        "recent_trades": [compact_trade(t) for t in analysis_trades[:30]],
         "target_detection": targets,
-        "targeted_matches": [compact_trade(t) for t in targeted],
+        "targeted_matches": [compact_trade(t) for t in targeted[:50]],
         "recent_diary_insights": diary,
         "recent_day_reviews": daily_reviews,
-        "le_playbook": {
+    }
+
+    if le_requested:
+        snapshot["le_playbook"] = {
             "compliance_version": LE_COMPLIANCE_VERSION,
             **LE_PLAYBOOK_REFERENCE,
-        },
-        "le_compliance": {
+        }
+        snapshot["le_compliance"] = {
             "summary": le_summary,
             "audited_trades": [
                 {
@@ -1028,18 +1140,35 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
                     le_snapshots,
                     key=lambda x: (str(x.get("date") or ""), str(x.get("trade_group") or "")),
                     reverse=True,
-                )[:100]
+                )[:40]
             ],
-        },
-    }
-    return json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+        }
+
+    raw = json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+    if len(raw) > 55000:
+        snapshot["context_compacted"] = True
+        snapshot["recent_trades"] = snapshot["recent_trades"][:12]
+        snapshot["targeted_matches"] = snapshot["targeted_matches"][:20]
+        snapshot["by_strategy"] = snapshot["by_strategy"][:12]
+        snapshot["by_ticker"] = snapshot["by_ticker"][:16]
+        snapshot["by_day"] = snapshot["by_day"][:24]
+        snapshot["recent_diary_insights"] = snapshot["recent_diary_insights"][:4]
+        snapshot["recent_day_reviews"] = snapshot["recent_day_reviews"][:4]
+        if "le_compliance" in snapshot:
+            snapshot["le_compliance"]["audited_trades"] = snapshot["le_compliance"]["audited_trades"][:20]
+        raw = json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+
+    return raw
 
 
 def _groq_brain_response(messages: list[dict], context: str, api_key: str) -> str:
     history = []
-    for msg in messages[-16:]:
+    for msg in messages[-8:]:
         role = "assistant" if msg.get("role") == "assistant" else "user"
-        history.append({"role": role, "content": str(msg.get("content") or "")})
+        content = str(msg.get("content") or "")
+        if len(content) > 4000:
+            content = content[:4000] + "\n[message truncated]"
+        history.append({"role": role, "content": content})
     if history:
         history[-1] = {
             "role": "user",
@@ -1072,9 +1201,12 @@ def _groq_brain_response(messages: list[dict], context: str, api_key: str) -> st
 def _anthropic_brain_response(messages: list[dict], context: str) -> str:
     client = get_client()
     claude_messages = []
-    for msg in messages[-16:]:
+    for msg in messages[-8:]:
         role = "assistant" if msg.get("role") == "assistant" else "user"
-        claude_messages.append({"role": role, "content": str(msg.get("content") or "")})
+        content = str(msg.get("content") or "")
+        if len(content) > 4000:
+            content = content[:4000] + "\n[message truncated]"
+        claude_messages.append({"role": role, "content": content})
     if claude_messages:
         claude_messages[-1] = {
             "role": "user",
