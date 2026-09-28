@@ -193,3 +193,215 @@ def test_brain_falls_back_to_anthropic_when_groq_fails(monkeypatch):
         [{"role": "user", "content": "Review my trading"}],
         "{}",
     ) == "Fallback answer"
+
+
+def _le_context():
+    return json.dumps({
+        "journal_scope": {
+            "completed_trades": 20,
+            "date_range": ["2026-09-01", "2026-09-25"],
+        },
+        "question_scope_stats": {
+            "trades": 20,
+            "net_pnl": 450.0,
+            "win_rate": 55.0,
+            "profit_factor": 1.4,
+        },
+        "overall": {
+            "trades": 20,
+            "net_pnl": 450.0,
+            "win_rate": 55.0,
+            "profit_factor": 1.4,
+            "date_from": "2026-09-01",
+            "date_to": "2026-09-25",
+        },
+        "management": {
+            "exit_efficiency_coverage": {"count": 10, "pct": 50.0},
+            "avg_exit_efficiency": 61.0,
+        },
+        "le_playbook": {
+            "name": "The LE Trading System — Guide Series",
+            "version": "Complete collection, September 2026",
+            "principles": ["No Flag, no Line, no Sign -> not worth your time."],
+        },
+        "le_compliance": {
+            "summary": {
+                "audited_trades": 8,
+                "journal_completed_trades": 20,
+                "audit_coverage_pct": 40.0,
+                "classification_counts": {
+                    "LE_VIOLATION": 4,
+                    "INCOMPLETE_EVIDENCE": 3,
+                    "LE_COMPLIANT": 1,
+                },
+                "rule_stats": [
+                    {
+                        "id": "not_chop_hour",
+                        "label": "Not in Chop Hour?",
+                        "pass": 5,
+                        "fail": 3,
+                        "unknown": 0,
+                        "evaluated": 8,
+                        "fail_net_pnl": -325.0,
+                        "pass_net_pnl": 700.0,
+                    },
+                    {
+                        "id": "trade_count_ok",
+                        "label": "Trade Count OK?",
+                        "pass": 6,
+                        "fail": 2,
+                        "unknown": 0,
+                        "evaluated": 8,
+                        "fail_net_pnl": -150.0,
+                        "pass_net_pnl": 600.0,
+                    },
+                ],
+            },
+            "audited_trades": [
+                {
+                    "trade_group": "g8",
+                    "date": "2026-09-25",
+                    "ticker": "SPY",
+                    "net_pnl": -125.0,
+                    "classification": "LE_VIOLATION",
+                    "failed_rule_ids": ["not_chop_hour"],
+                    "unknown_rule_ids": ["flag_forming"],
+                },
+                {
+                    "trade_group": "g7",
+                    "date": "2026-09-24",
+                    "ticker": "QQQ",
+                    "net_pnl": 200.0,
+                    "classification": "LE_COMPLIANT",
+                    "failed_rule_ids": [],
+                    "unknown_rule_ids": [],
+                },
+            ],
+        },
+    })
+
+
+def test_brain_le_audit_is_deterministic_and_does_not_require_provider(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setattr(
+        ai_analysis,
+        "_groq_brain_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("provider should not be called")),
+    )
+
+    answer = ai_analysis.generate_brain_response(
+        [{"role": "user", "content": "Audit my recent trades against the LE system"}],
+        _le_context(),
+    )
+
+    assert "Recent LE audit" in answer
+    assert "8/20 completed trades (40.0%)" in answer
+    assert "Not in Chop Hour?" in answer
+    assert "2026-09-25 SPY" in answer
+
+
+def test_brain_le_rule_cost_answer_uses_negative_pnl_association_without_claiming_causation(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+
+    answer = ai_analysis.generate_brain_response(
+        [{"role": "user", "content": "Which LE rule is costing me the most money?"}],
+        _le_context(),
+    )
+
+    assert "Not in Chop Hour?" in answer
+    assert "$-325.00" in answer
+    assert "descriptive association" in answer
+    assert "proof" in answer
+
+
+def test_brain_provider_context_has_hard_compact_budget():
+    huge = json.dumps({
+        "journal_scope": {"completed_trades": 500},
+        "question_scope_stats": {"trades": 500, "net_pnl": 1234},
+        "overall": {"trades": 500, "net_pnl": 1234},
+        "recent_trades": [
+            {"trade_group": f"g{i}", "notes": "x" * 5000, "net_pnl": i}
+            for i in range(100)
+        ],
+        "recent_day_reviews": [
+            {"date": "2026-09-25", "narrative": "y" * 10000}
+            for _ in range(20)
+        ],
+    })
+
+    compact = ai_analysis._brain_provider_context(
+        huge,
+        ai_analysis.BRAIN_PROVIDER_CONTEXT_CHARS,
+    )
+
+    assert len(compact) <= ai_analysis.BRAIN_PROVIDER_CONTEXT_CHARS
+    parsed = json.loads(compact)
+    assert parsed["overall"]["trades"] == 500
+
+
+def test_groq_brain_retries_413_with_stricter_context(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code, body=None):
+            self.status_code = status_code
+            self._body = body or {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http {self.status_code}")
+
+        def json(self):
+            return self._body
+
+    def fake_post(_url, headers, json, timeout):
+        calls.append(json)
+        if len(calls) == 1:
+            return FakeResponse(413)
+        return FakeResponse(200, {
+            "choices": [{"message": {"content": "Compact answer"}}]
+        })
+
+    monkeypatch.setattr(ai_analysis.httpx, "post", fake_post)
+
+    long_context = json.dumps({
+        "journal_scope": {"completed_trades": 200},
+        "question_scope_stats": {"trades": 200},
+        "overall": {"trades": 200},
+        "recent_trades": [
+            {"trade_group": f"g{i}", "notes": "z" * 4000}
+            for i in range(80)
+        ],
+    })
+
+    answer = ai_analysis._groq_brain_response(
+        [{"role": "user", "content": "Review my trading"}],
+        long_context,
+        "gsk-test",
+    )
+
+    assert answer == "Compact answer"
+    assert len(calls) == 2
+    first = calls[0]["messages"][-1]["content"]
+    second = calls[1]["messages"][-1]["content"]
+    assert len(second) < len(first)
+    assert "JOURNAL EVIDENCE" in second
+
+
+def test_brain_provider_failure_returns_safe_journal_fallback_without_raw_provider_error(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(
+        ai_analysis,
+        "_groq_brain_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("413 Payload Too Large https://api.groq.com/private")),
+    )
+
+    answer = ai_analysis.generate_brain_response(
+        [{"role": "user", "content": "Where am I losing the most money?"}],
+        _le_context(),
+    )
+
+    assert "Journal analysis" in answer
+    assert "413" not in answer
+    assert "api.groq.com" not in answer
