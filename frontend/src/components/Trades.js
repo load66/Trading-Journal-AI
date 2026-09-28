@@ -139,67 +139,68 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
   );
 
   return (
-    <div>
+    <div className="trade-view-page">
       <PageHeader
         title="Trade View"
         subtitle="Scan results, strategy, review quality, excursion and R in one place. Click any row for the full trade review."
       />
 
-      <KpiStrip label="Filtered trade summary">
+      <div className="trade-view-kpis">
+        <KpiStrip label="Filtered trade summary">
         <KpiCell label="Selected period" value={<span style={{ fontSize: 22 }}>{period}</span>} />
         <KpiCell label="Net P&L" value={<MoneyValue value={totalNet} />} tone={totalNet >= 0 ? 'pos' : 'neg'} />
         <KpiCell label="Trades" value={<span className="num">{visibleTrades.length.toLocaleString('en-US')}</span>} />
         <KpiCell label="Win rate" value={<span className="num">{winRate}%</span>} foot={<><span className="num">{winners}</span> winners</>} />
-      </KpiStrip>
+        </KpiStrip>
+      </div>
 
       {/* Filter bar */}
-      <div role="search" aria-label="Filter trades" style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-        <div>
+      <div role="search" aria-label="Filter trades" className="trade-view-filters">
+        <div className="trade-view-filter trade-view-filter-ticker">
           <label className="field-label" htmlFor="tv-ticker">Ticker</label>
-          <div style={{ position: 'relative' }}>
-            <Search size={15} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} aria-hidden="true" />
+          <div className="trade-view-search">
+            <Search size={15} aria-hidden="true" />
             <input
               id="tv-ticker"
               placeholder="Ticker..."
               value={ticker}
               onChange={e => setTicker(e.target.value)}
-              style={{ paddingLeft: 32, width: 170 }}
             />
           </div>
         </div>
-        <div>
+        <div className="trade-view-filter">
           <label className="field-label" htmlFor="tv-type">Type</label>
-          <select id="tv-type" value={instrType} onChange={e => setInstrType(e.target.value)} style={{ width: 140 }}>
+          <select id="tv-type" value={instrType} onChange={e => setInstrType(e.target.value)}>
             <option value="">All Types</option>
             <option value="STOCK">Stock</option>
             <option value="OPTION">Option</option>
             <option value="FUTURE">Future</option>
           </select>
         </div>
-        <div>
+        <div className="trade-view-filter">
           <label className="field-label" htmlFor="tv-review">Review</label>
-          <select id="tv-review" value={reviewFilter} onChange={e => { setReviewFilter(e.target.value); setPage(1); }} style={{ width: 160 }}>
+          <select id="tv-review" value={reviewFilter} onChange={e => { setReviewFilter(e.target.value); setPage(1); }}>
             <option value="">All reviews</option>
             <option value="needs">Needs review</option>
             <option value="reviewed">Fully reviewed</option>
             <option value="mistake">Mistake flagged</option>
           </select>
         </div>
-        <div>
+        <div className="trade-view-filter">
           <label className="field-label" htmlFor="tv-from">From</label>
-          <input id="tv-from" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ width: 160 }} />
+          <input id="tv-from" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
         </div>
-        <div>
+        <div className="trade-view-filter">
           <label className="field-label" htmlFor="tv-to">To</label>
-          <input id="tv-to" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ width: 160 }} />
+          <input id="tv-to" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
         </div>
         {(ticker || instrType || reviewFilter || dateFrom || dateTo) && (
           <button
             type="button"
-            className="btn btn-ghost"
+            className="btn btn-ghost trade-view-clear"
             onClick={() => { setTicker(''); setInstrType(''); setReviewFilter(''); setDateFrom(''); setDateTo(''); }}
           >
-            Clear
+            Clear filters
           </button>
         )}
       </div>
@@ -210,8 +211,36 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
         </div>
       )}
 
-      <section className="card panel-flush" aria-label="Trades">
-        <div className="table-container">
+      <section className="card panel-flush trade-view-results" aria-label="Trades">
+        <div className="trade-view-mobile-list" aria-label="Trades">
+          {loading ? (
+            [...Array(5)].map((_, i) => (
+              <div className="trade-mobile-card trade-mobile-card-skeleton" key={i} aria-hidden="true">
+                <div className="skeleton" style={{ height: 18, width: '44%' }} />
+                <div className="skeleton" style={{ height: 13, width: '70%', marginTop: 8 }} />
+                <div className="skeleton" style={{ height: 52, width: '100%', marginTop: 12 }} />
+              </div>
+            ))
+          ) : paginated.length === 0 ? (
+            <div className="empty trade-view-mobile-empty">
+              No trades found. Import a CSV to get started.
+            </div>
+          ) : (
+            paginated.map(trade => (
+              <TradeRow
+                key={`mobile-${trade.id}`}
+                trade={trade}
+                openTime={getOpenTime(trade)}
+                onOpenDetail={(t) => onOpenDetail(t, paginated)}
+                customSetups={customSetups}
+                onCustomSetupsChanged={reloadCustomSetups}
+                mobile
+              />
+            ))
+          )}
+        </div>
+
+        <div className="table-container trade-view-desktop-table">
           <table className="trade-view-table">
             <thead>
               <tr>
@@ -257,10 +286,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
           </table>
         </div>
 
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap',
-          gap: 8, padding: '12px 20px', borderTop: '1px solid var(--divider-soft)',
-        }}>
+        <div className="trade-view-pagination">
           <span className="text-muted" style={{ fontSize: 13 }}>
             Showing <span className="num">{firstShown}-{lastShown}</span> of <span className="num">{sorted.length}</span> trades
           </span>
