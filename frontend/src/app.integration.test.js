@@ -859,9 +859,13 @@ test('Tags uses the Settings library and adds a saved mistake tag', async () => 
   const category = screen.getByRole('button', { name: 'Mistake' });
   expect(category).toHaveAttribute('aria-pressed', 'true');
 
-  const savedTag = screen.getByRole('combobox', { name: 'Saved tag' });
-  expect(within(savedTag).getByRole('option', { name: 'Entered Too Close to Resistance' })).toBeInTheDocument();
-  fireEvent.change(savedTag, { target: { value: 'Entered Too Close to Resistance' } });
+  const savedTag = screen.getByRole('combobox', { name: 'Search saved tag' });
+  fireEvent.focus(savedTag);
+  fireEvent.change(savedTag, { target: { value: 'too close' } });
+
+  const match = screen.getByRole('option', { name: /Entered Too Close to Resistance/i });
+  expect(match).toBeVisible();
+  fireEvent.click(match);
 
   expect(screen.getByText('Higher-priority resistance remained overhead.')).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Add tag' }));
