@@ -181,7 +181,7 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
   const load = () => {
     setLoading(true);
     setError('');
-    tradesApi.getLeReview(trade.trade_group)
+    tradesApi.refreshLeCompliance(trade.trade_group)
       .then(r => setReview(r.data))
       .catch(e => setError(e?.response?.data?.detail || e.message || 'Could not load LE review.'))
       .finally(() => setLoading(false));
@@ -314,6 +314,13 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
   const strategy = ai?.strategy;
   const aiTags = ai?.suggested_tags || [];
   const executions = parseExecutions(trade);
+  const compliance = review.compliance || {};
+  const complianceScore = compliance.score || {};
+  const complianceTone = compliance.classification === 'LE_COMPLIANT'
+    ? 'pass'
+    : compliance.classification === 'LE_VIOLATION'
+      ? 'fail'
+      : 'neutral';
 
   const allProvenApplied = proven.length > 0 && proven.every(
     tag => existing.has(`${tag.tag_type}::${tag.tag_value}`)
@@ -380,13 +387,76 @@ export default function LEReview({ trade, analysis, tags, onAnalysisChange, onTa
       <div className="le-review-readonly-note">
         <ShieldCheck size={14} />
         <span>
-          Read-only analysis. Deterministic findings are not saved until you apply a tag or strategy.
-          AI interpretation never overrides verified market evidence.
+          Market evidence and AI suggestions remain read-only. The deterministic LE compliance snapshot
+          is cached for Brain so journal-wide audits can use the same verified result.
         </span>
         <span className="le-ruleset">{review.ruleset_version}</span>
       </div>
 
       {error && <div className="notice neg" role="alert">{error}</div>}
+
+      <section className={`le-compliance-panel ${complianceTone}`} aria-label="LE compliance score">
+        <div className="le-compliance-head">
+          <div>
+            <span className="le-section-kicker"><ShieldCheck size={12} /> PDF rule engine</span>
+            <h3>13-Point LE Compliance</h3>
+            <p>
+              Pass / Fail / Unknown only. Unknown evidence never counts as a failure and never inflates the score.
+            </p>
+          </div>
+          <span className={`le-compliance-classification ${complianceTone}`}>
+            {compliance.classification_label || 'Incomplete evidence'}
+          </span>
+        </div>
+
+        <div className="le-compliance-score-grid">
+          <div>
+            <span>Verified checks</span>
+            <strong>
+              {complianceScore.evaluated
+                ? `${complianceScore.passed}/${complianceScore.evaluated}`
+                : '—'}
+            </strong>
+            <small>
+              {complianceScore.evaluated_pass_pct == null
+                ? 'No evaluable checks'
+                : `${complianceScore.evaluated_pass_pct}% passed`}
+            </small>
+          </div>
+          <div>
+            <span>Evidence coverage</span>
+            <strong>{complianceScore.coverage_pct == null ? '—' : `${complianceScore.coverage_pct}%`}</strong>
+            <small>{complianceScore.evaluated ?? 0} of {complianceScore.total ?? 13} evaluable</small>
+          </div>
+          <div>
+            <span>Failed</span>
+            <strong className={complianceScore.failed > 0 ? 'is-neg' : ''}>{complianceScore.failed ?? 0}</strong>
+            <small>Verified rule violations</small>
+          </div>
+          <div>
+            <span>Unknown</span>
+            <strong>{complianceScore.unknown ?? 0}</strong>
+            <small>Needs better evidence</small>
+          </div>
+        </div>
+
+        <div className="le-compliance-check-list">
+          {(compliance.checks || []).map(item => (
+            <CheckRow key={item.id} label={item.label} item={item} />
+          ))}
+        </div>
+
+        {(compliance.extra_findings || []).length > 0 && (
+          <details className="le-compliance-extra">
+            <summary>Additional LE non-negotiables</summary>
+            <div className="le-compliance-check-list extra">
+              {compliance.extra_findings.map(item => (
+                <CheckRow key={item.id} label={item.label} item={item} />
+              ))}
+            </div>
+          </details>
+        )}
+      </section>
 
       <section className="le-chart-panel" aria-label="Primary LE review chart">
         <div className="le-section-head">

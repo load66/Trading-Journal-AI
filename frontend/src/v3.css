@@ -4978,6 +4978,138 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   font-size: 8px;
   letter-spacing: .04em;
 }
+.le-compliance-panel {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--divider);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-panel) 92%, transparent), transparent 44%),
+    var(--surface-page);
+}
+.le-compliance-panel.pass {
+  box-shadow: inset 3px 0 0 var(--result-pos);
+}
+.le-compliance-panel.fail {
+  box-shadow: inset 3px 0 0 var(--result-neg);
+}
+.le-compliance-panel.neutral {
+  box-shadow: inset 3px 0 0 var(--caution);
+}
+.le-compliance-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--divider-soft);
+}
+.le-compliance-head h3 {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 680;
+  letter-spacing: -.025em;
+}
+.le-compliance-head p {
+  max-width: 720px;
+  margin: 5px 0 0;
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+.le-compliance-classification {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border: 1px solid var(--divider);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  font-size: 8px;
+  font-weight: 780;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.le-compliance-classification.pass {
+  color: var(--result-pos);
+  border-color: color-mix(in srgb, var(--result-pos) 36%, var(--divider));
+}
+.le-compliance-classification.fail {
+  color: var(--result-neg);
+  border-color: color-mix(in srgb, var(--result-neg) 36%, var(--divider));
+}
+.le-compliance-classification.neutral {
+  color: var(--caution);
+  border-color: color-mix(in srgb, var(--caution) 36%, var(--divider));
+}
+.le-compliance-score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 12px;
+  border: 1px solid var(--divider-soft);
+  background: var(--divider-soft);
+}
+.le-compliance-score-grid > div {
+  min-width: 0;
+  min-height: 76px;
+  padding: 10px 11px;
+  background: var(--surface-inset);
+}
+.le-compliance-score-grid span,
+.le-compliance-score-grid small {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 7.5px;
+  line-height: 1.35;
+}
+.le-compliance-score-grid span {
+  font-weight: 740;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.le-compliance-score-grid strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 680;
+  letter-spacing: -.025em;
+}
+.le-compliance-score-grid strong.is-neg { color: var(--result-neg); }
+.le-compliance-score-grid small { margin-top: 3px; }
+.le-compliance-check-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 12px;
+  border: 1px solid var(--divider-soft);
+  background: var(--divider-soft);
+}
+.le-compliance-check-list .le-check-row {
+  min-height: 70px;
+}
+.le-compliance-extra {
+  margin-top: 10px;
+  border: 1px solid var(--divider-soft);
+  background: var(--surface-inset);
+}
+.le-compliance-extra > summary {
+  padding: 9px 11px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+  list-style: none;
+}
+.le-compliance-extra > summary::-webkit-details-marker { display: none; }
+.le-compliance-extra .le-compliance-check-list {
+  margin: 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
 .le-chart-panel,
 .le-review-panel {
   min-width: 0;
@@ -5470,7 +5602,8 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 }
 @media (max-width: 680px) {
   .le-review-hero,
-  .le-section-head {
+  .le-section-head,
+  .le-compliance-head {
     flex-direction: column;
   }
   .le-review-hero-actions {
@@ -5481,8 +5614,15 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .le-data-grid,
-  .le-tag-grid {
+  .le-tag-grid,
+  .le-compliance-check-list {
     grid-template-columns: 1fr;
+  }
+  .le-compliance-score-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .le-compliance-classification {
+    align-self: flex-start;
   }
   .le-check-row {
     grid-template-columns: 25px minmax(0, 1fr);
@@ -5500,7 +5640,8 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     padding-left: 22px;
   }
   .le-chart-panel,
-  .le-review-panel {
+  .le-review-panel,
+  .le-compliance-panel {
     padding: 12px;
   }
   .le-chart-frame {
@@ -5510,7 +5651,8 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   }
 }
 @media (max-width: 440px) {
-  .le-signal-strip {
+  .le-signal-strip,
+  .le-compliance-score-grid {
     grid-template-columns: 1fr;
   }
   .le-signal-card {

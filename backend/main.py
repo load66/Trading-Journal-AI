@@ -54,7 +54,13 @@ from performance_report import build_performance_report
 from excursion_analysis import calculate_trade_excursion, EXCURSION_ENGINE_VERSION
 from library import router as library_router, init_library_tables, apply_aliases, library_names, TAG_TYPES as LIBRARY_TAG_TYPES
 from smoking_gun_routes import router as smoking_gun_router
-from le_analysis import build_le_levels, build_le_review
+from le_analysis import build_le_levels, build_le_review, entry_datetime
+from le_compliance import (
+    LE_COMPLIANCE_VERSION,
+    LE_PLAYBOOK_REFERENCE,
+    build_le_compliance,
+    summarize_le_compliance_snapshots,
+)
 from smoking_gun_library import ANALYTICS_ENGINE_VERSION
 from trade_metrics import (
     trade_is_closed,
@@ -902,6 +908,13 @@ async def import_csv(
             except Exception as e:
                 errors.append({"trade_group": trade.get('trade_group'), "error": str(e)})
 
+        # A broker import can regroup fills, change trade dates/outcomes, or alter
+        # same-day sequence. All cached LE compliance for this account is derived
+        # data, so invalidate it atomically and rebuild lazily from broker truth.
+        conn.execute(
+            "DELETE FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
+            (account_id,),
+        )
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -1230,8 +1243,33 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         """, (trade_group, data.ticker.upper(), data.date, data.strategy, data.stop_loss, data.notes))
         conn.commit()
 
+    _invalidate_le_compliance_for_dates(conn, data.account_id, {data.date})
+    conn.commit()
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
     return row_to_dict(row)
+
+
+def _invalidate_le_compliance_for_dates(conn, account_id, dates) -> None:
+    """Drop derived LE snapshots for every trade on affected trading days.
+
+    The Three Trade Rule depends on prior same-day outcomes, so changing one
+    trade can change the compliance of later trades on that date.
+    """
+    if account_id is None:
+        return
+    normalized = sorted({str(value or "").strip() for value in dates if str(value or "").strip()})
+    if not normalized:
+        return
+    placeholders = ",".join("?" for _ in normalized)
+    rows = conn.execute(
+        f"SELECT trade_group FROM trades WHERE account_id=? AND date IN ({placeholders})",
+        (account_id, *normalized),
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "DELETE FROM settings WHERE account_id=? AND key=?",
+            (account_id, f"le_compliance:{row['trade_group']}"),
+        )
 
 
 @app.put("/api/trades/{trade_id}")
@@ -1272,6 +1310,12 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
         conn.commit()
 
         refreshed = row_to_dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone())
+        _invalidate_le_compliance_for_dates(
+            conn,
+            trade.get("account_id"),
+            {trade.get("date"), refreshed.get("date")},
+        )
+        conn.commit()
         execs = json.loads(refreshed.get('executions') or '[]')
         if execs and any(k in data for k in {'ticker', 'side', 'instrument_type', 'date'}):
             return _recalculate_and_save(refreshed, execs, conn, trade_id)
@@ -1336,6 +1380,11 @@ def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
         (json.dumps(execs), gross_pnl, net_pnl, commissions, trade_date, trade_id)
     )
     account_id = trade.get("account_id")
+    _invalidate_le_compliance_for_dates(
+        conn,
+        account_id,
+        {trade.get("date"), trade_date},
+    )
     for summary_date in {str(trade.get("date") or ""), str(trade_date or "")}:
         if not summary_date:
             continue
@@ -1413,6 +1462,11 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
     ).fetchone()
     screenshot_path = analysis_row["chart_screenshot_path"] if analysis_row else None
 
+    _invalidate_le_compliance_for_dates(
+        conn,
+        trade.get("account_id"),
+        {trade.get("date")},
+    )
     conn.execute("DELETE FROM trade_tags WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trade_analysis WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trades WHERE id=?", (trade_id,))
@@ -1552,16 +1606,130 @@ def delete_trade_chart_screenshot(
     return {"deleted": True}
 
 
-@app.get("/api/trades/{trade_group:path}/le-review")
-async def get_trade_le_review(
-    trade_group: str,
-    conn: sqlite3.Connection = Depends(get_connection),
-):
-    """Read-only LE evidence review.
 
-    This endpoint never writes strategy/tags automatically. It combines deterministic
-    market-data evidence with a conservative Groq suggestion when Groq is configured.
-    """
+def _le_compliance_cache_key(trade_group: str) -> str:
+    return f"le_compliance:{trade_group}"
+
+
+def _trade_dict_with_executions(row) -> dict:
+    trade = row_to_dict(row)
+    try:
+        trade["executions"] = json.loads(trade.get("executions") or "[]")
+    except Exception:
+        trade["executions"] = []
+    return trade
+
+
+def _load_le_day_context(conn, trade: dict) -> dict | None:
+    account_id = trade.get("account_id")
+    trade_date = trade.get("date")
+    if account_id is None or not trade_date:
+        return None
+
+    rows = conn.execute(
+        "SELECT * FROM trades WHERE account_id=? AND date=? ORDER BY id",
+        (account_id, trade_date),
+    ).fetchall()
+    trades = [_trade_dict_with_executions(row) for row in rows]
+
+    def sort_key(item):
+        dt = entry_datetime(item)
+        return (
+            dt is None,
+            dt.isoformat() if dt is not None else "",
+            int(item.get("id") or 0),
+        )
+
+    trades.sort(key=sort_key)
+    index = next(
+        (i for i, item in enumerate(trades) if item.get("trade_group") == trade.get("trade_group")),
+        None,
+    )
+    if index is None:
+        return None
+
+    def result_label(item):
+        pnl = float(item.get("net_pnl") or 0)
+        if pnl > 0:
+            return "green"
+        if pnl < 0:
+            return "red"
+        return "flat"
+
+    return {
+        "sequence": index + 1,
+        "prior_results": [result_label(item) for item in trades[:index]],
+        "day_trade_count": len(trades),
+    }
+
+
+def _load_le_risk_plan_for_trade(conn, trade: dict) -> dict | None:
+    account_id = trade.get("account_id")
+    trade_date = trade.get("date")
+    if account_id is None or not trade_date:
+        return None
+    row = conn.execute(
+        "SELECT value FROM settings WHERE account_id=? AND key=?",
+        (account_id, f"le_risk_plan:{trade_date}"),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        value = json.loads(row["value"])
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def _load_trade_analysis_dict(conn, trade_group: str) -> dict:
+    row = conn.execute(
+        "SELECT * FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    return row_to_dict(row) if row else {}
+
+
+def _cache_le_compliance(conn, account_id: int, trade_group: str, compliance: dict) -> None:
+    conn.execute(
+        """INSERT INTO settings (account_id, key, value) VALUES (?, ?, ?)
+           ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value""",
+        (
+            account_id,
+            _le_compliance_cache_key(trade_group),
+            json.dumps(compliance, separators=(",", ":"), default=str),
+        ),
+    )
+    conn.commit()
+
+
+def _load_cached_le_compliance(conn, account_id: int | None) -> list[dict]:
+    if account_id is None:
+        rows = conn.execute(
+            "SELECT value FROM settings WHERE key LIKE 'le_compliance:%'"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT value FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
+            (account_id,),
+        ).fetchall()
+    snapshots = []
+    for row in rows:
+        try:
+            payload = json.loads(row["value"])
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            snapshots.append(payload)
+    return snapshots
+
+
+async def _build_trade_le_compliance(
+    conn,
+    trade_group: str,
+    *,
+    include_ai: bool,
+    persist: bool,
+) -> dict:
     row = conn.execute(
         "SELECT * FROM trades WHERE trade_group=?",
         (trade_group,),
@@ -1569,13 +1737,160 @@ async def get_trade_le_review(
     if not row:
         raise HTTPException(status_code=404, detail="Trade not found")
 
-    trade = row_to_dict(row)
-    try:
-        trade["executions"] = json.loads(trade.get("executions") or "[]")
-    except Exception:
-        trade["executions"] = []
+    trade = _trade_dict_with_executions(row)
+    review = await build_le_review(trade, include_ai=include_ai)
+    analysis = _load_trade_analysis_dict(conn, trade_group)
+    day_context = _load_le_day_context(conn, trade)
+    risk_plan = _load_le_risk_plan_for_trade(conn, trade)
+    compliance = build_le_compliance(
+        trade,
+        review,
+        analysis=analysis,
+        day_context=day_context,
+        risk_plan=risk_plan,
+    )
+    review["compliance"] = compliance
 
-    return await build_le_review(trade)
+    account_id = trade.get("account_id")
+    if persist and account_id is not None:
+        _cache_le_compliance(conn, int(account_id), trade_group, compliance)
+        review["compliance_cached"] = True
+    else:
+        review["compliance_cached"] = False
+    return review
+
+
+@app.get("/api/trades/{trade_group:path}/le-review")
+async def get_trade_le_review(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Read-only LE evidence review with deterministic compliance grading."""
+    return await _build_trade_le_compliance(
+        conn,
+        trade_group,
+        include_ai=True,
+        persist=False,
+    )
+
+
+@app.post("/api/trades/{trade_group:path}/le-compliance/refresh")
+async def refresh_trade_le_compliance(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Rebuild one trade's LE evidence and persist only the derived compliance snapshot."""
+    return await _build_trade_le_compliance(
+        conn,
+        trade_group,
+        include_ai=True,
+        persist=True,
+    )
+
+
+@app.get("/api/le-playbook")
+def get_le_playbook():
+    return {
+        "compliance_version": LE_COMPLIANCE_VERSION,
+        "playbook": LE_PLAYBOOK_REFERENCE,
+    }
+
+
+@app.get("/api/le-compliance/summary")
+def get_le_compliance_summary(
+    account_id: int | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    snapshots = _load_cached_le_compliance(conn, account_id)
+    return summarize_le_compliance_snapshots(snapshots)
+
+
+class LEComplianceRebuildBody(BaseModel):
+    account_id: int | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    limit: int = 10
+    force: bool = False
+
+
+@app.post("/api/le-compliance/rebuild")
+async def rebuild_le_compliance(
+    body: LEComplianceRebuildBody,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Backfill deterministic LE compliance in bounded batches.
+
+    Groq classification is intentionally disabled here. The caller can repeat batches
+    until remaining=0 without spending AI tokens.
+    """
+    limit = max(1, min(int(body.limit or 10), 25))
+    clauses = ["1=1"]
+    params = []
+    if body.account_id is not None:
+        clauses.append("account_id=?")
+        params.append(body.account_id)
+    if body.date_from:
+        clauses.append("date>=?")
+        params.append(body.date_from)
+    if body.date_to:
+        clauses.append("date<=?")
+        params.append(body.date_to)
+
+    rows = conn.execute(
+        f"SELECT trade_group, account_id, date FROM trades WHERE {' AND '.join(clauses)} ORDER BY date, id",
+        tuple(params),
+    ).fetchall()
+
+    cached = {}
+    for snapshot in _load_cached_le_compliance(conn, body.account_id):
+        group = snapshot.get("trade_group")
+        if group:
+            cached[str(group)] = snapshot
+
+    candidates = []
+    skipped = 0
+    for row in rows:
+        group = str(row["trade_group"])
+        prior = cached.get(group)
+        if (
+            not body.force
+            and prior
+            and prior.get("compliance_version") == LE_COMPLIANCE_VERSION
+        ):
+            skipped += 1
+            continue
+        candidates.append(group)
+
+    batch = candidates[:limit]
+    results = []
+    errors = []
+    for group in batch:
+        try:
+            review = await _build_trade_le_compliance(
+                conn,
+                group,
+                include_ai=False,
+                persist=True,
+            )
+            results.append({
+                "trade_group": group,
+                "classification": (review.get("compliance") or {}).get("classification"),
+                "score": (review.get("compliance") or {}).get("score"),
+            })
+        except Exception as exc:
+            logger.warning("LE compliance backfill failed for %s", group, exc_info=True)
+            errors.append({"trade_group": group, "error": str(exc)})
+
+    snapshots = _load_cached_le_compliance(conn, body.account_id)
+    return {
+        "compliance_version": LE_COMPLIANCE_VERSION,
+        "processed": len(results),
+        "skipped_current": skipped,
+        "errors": errors,
+        "remaining": max(0, len(candidates) - len(batch)),
+        "results": results,
+        "summary": summarize_le_compliance_snapshots(snapshots),
+    }
 
 
 @app.get("/api/trades/{trade_group:path}/le-levels")
@@ -1603,6 +1918,7 @@ async def get_trade_le_levels(
 class AnalysisUpdate(BaseModel):
     strategy: str | None = None
     idea_source: str | None = None
+    risk_reward: float | None = None
     stop_loss: float | None = None
     risk_per_trade: float | None = None
     target_price: float | None = None
@@ -1615,7 +1931,7 @@ class AnalysisUpdate(BaseModel):
 
 @app.patch("/api/trades/{trade_group:path}/analysis")
 def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.Connection = Depends(get_connection)):
-    trade = conn.execute("SELECT trade_group, ticker, date FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
+    trade = conn.execute("SELECT trade_group, ticker, date, account_id FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
 
@@ -1625,6 +1941,11 @@ def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.
         if float(updates["risk_per_trade"]) <= 0:
             raise HTTPException(status_code=400, detail="Planned risk must be greater than $0.")
         updates["risk_per_trade"] = abs(float(updates["risk_per_trade"]))
+
+    if "risk_reward" in updates and updates["risk_reward"] is not None:
+        if float(updates["risk_reward"]) <= 0:
+            raise HTTPException(status_code=400, detail="Risk/reward must be greater than 0.")
+        updates["risk_reward"] = float(updates["risk_reward"])
 
     existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
     if not existing:
@@ -1641,6 +1962,14 @@ def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.
         )
 
     conn.commit()
+
+    if updates and trade["account_id"] is not None:
+        conn.execute(
+            "DELETE FROM settings WHERE account_id=? AND key=?",
+            (trade["account_id"], _le_compliance_cache_key(trade_group)),
+        )
+        conn.commit()
+
     row = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
     return row_to_dict(row) if row else {}
 
@@ -4037,6 +4366,90 @@ def get_daily_summary(
 
 # ── Brain AI Chatbot ────────────────────────────────────────────────────────────
 
+LE_BRAIN_AUDIT_TERMS = (
+    " le ",
+    "le ",
+    "rule",
+    "compliance",
+    "flag",
+    "line",
+    "sign",
+    "chop",
+    "three trade",
+    "3 trade",
+    "8 ema",
+    "runner",
+    "purple profits",
+    "level break",
+)
+
+
+def _brain_question_needs_le_audit(question: str) -> bool:
+    q = f" {str(question or '').strip().lower()} "
+    return any(term in q for term in LE_BRAIN_AUDIT_TERMS)
+
+
+async def _warm_brain_le_compliance(
+    conn,
+    account_id: int | None,
+    question: str,
+    *,
+    limit: int = 5,
+) -> dict:
+    """Lazily audit a small recent batch for LE-specific Brain questions.
+
+    This keeps normal Brain latency unchanged while steadily increasing LE audit
+    coverage across repeated coaching sessions. Groq classification is disabled:
+    only deterministic market/journal evidence is cached.
+    """
+    if not _brain_question_needs_le_audit(question):
+        return {"triggered": False, "processed": 0}
+
+    cached_groups = {
+        str(item.get("trade_group"))
+        for item in _load_cached_le_compliance(conn, account_id)
+        if item.get("trade_group") and item.get("compliance_version") == LE_COMPLIANCE_VERSION
+    }
+
+    if account_id is None:
+        rows = conn.execute(
+            "SELECT trade_group FROM trades ORDER BY date DESC, id DESC"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT trade_group FROM trades WHERE account_id=? ORDER BY date DESC, id DESC",
+            (account_id,),
+        ).fetchall()
+
+    candidates = [
+        str(row["trade_group"])
+        for row in rows
+        if str(row["trade_group"]) not in cached_groups
+    ][:max(1, min(int(limit), 8))]
+
+    processed = 0
+    errors = []
+    for group in candidates:
+        try:
+            await _build_trade_le_compliance(
+                conn,
+                group,
+                include_ai=False,
+                persist=True,
+            )
+            processed += 1
+        except Exception as exc:
+            logger.warning("Brain LE warm audit failed for %s", group, exc_info=True)
+            errors.append({"trade_group": group, "error": str(exc)})
+
+    return {
+        "triggered": True,
+        "processed": processed,
+        "attempted": len(candidates),
+        "errors": errors,
+    }
+
+
 from fastapi import Request as FastAPIRequest
 
 @app.post("/api/brain")
@@ -4053,8 +4466,13 @@ async def brain_chat(
 
     try:
         current_question = str(messages[-1].get("content") or "") if messages else ""
+        le_warm = await _warm_brain_le_compliance(
+            conn,
+            account_id,
+            current_question,
+        )
         context = build_brain_context(conn, account_id, current_question)
         response_text = generate_brain_response(messages, context)
-        return {"response": response_text}
+        return {"response": response_text, "le_audit_warmup": le_warm}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -6,6 +6,12 @@ import os
 import re
 from pathlib import Path
 from dotenv import load_dotenv
+from le_compliance import (
+    LE_COMPLIANCE_VERSION,
+    LE_PLAYBOOK_REFERENCE,
+    summarize_le_compliance_snapshots,
+)
+
 from trade_metrics import (
     execution_datetime,
     split_entry_exit,
@@ -596,6 +602,11 @@ Core rules:
 - If a question asks about a ticker, strategy, date, time window, or recent event, use TARGETED MATCHES when provided.
 - If the question asks "best", explain the metric used (for example total P&L, average P&L, profit factor, or win rate) and note when another metric gives a different answer.
 - Never claim you inspected a chart image unless image data was actually supplied. Session-path evidence is a realized-P&L timeline, not a price chart.
+- The user-supplied LE playbook in LE_PLAYBOOK is authoritative for LE-system questions. Preserve its terminology: Flag, Line, Sign; FORM -> ESTABLISH; L Entry; E Entry; Purple Profits; Three Trade Rule; Chop Hour; 3-2-1; 10m 8 EMA.
+- LE_COMPLIANCE is deterministic. A status of Unknown means the journal could not prove the condition. Never convert Unknown into Pass or Fail.
+- When citing a compliance percentage, distinguish evaluated-pass percentage from evidence coverage. Do not present a high pass percentage as strong proof when coverage is low.
+- P&L grouped by an LE rule failure is descriptive association, not proof that the violation caused the result.
+- If the user asks whether a specific trade followed LE and no compliance snapshot exists for it, say the trade is unaudited rather than guessing from generic stats.
 - Be willing to say "I don't have enough journal evidence for that" instead of guessing.
 - Keep answers concise but useful. Prefer a direct answer, then 2-5 supporting bullets, then one practical takeaway when appropriate.
 
@@ -820,6 +831,48 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
             targeted.append(t)
     targeted = targeted[:100]
 
+    le_snapshots = []
+    try:
+        if account_id is None:
+            le_rows = conn.execute(
+                "SELECT key, value FROM settings WHERE key LIKE 'le_compliance:%'"
+            ).fetchall()
+        else:
+            le_rows = conn.execute(
+                "SELECT key, value FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
+                (account_id,),
+            ).fetchall()
+        current_groups = {str(t.get("trade_group")): t for t in trades if t.get("trade_group")}
+        for row in le_rows:
+            try:
+                item = json.loads(row["value"])
+            except Exception:
+                continue
+            if not isinstance(item, dict):
+                continue
+            group = str(item.get("trade_group") or "")
+            current = current_groups.get(group)
+            if not current:
+                continue
+            item = dict(item)
+            item["net_pnl"] = round(float(current.get("net_pnl") or 0), 2)
+            item["ticker"] = current.get("ticker")
+            item["date"] = current.get("date")
+            le_snapshots.append(item)
+    except Exception:
+        le_snapshots = []
+
+    le_by_group = {
+        str(item.get("trade_group")): item
+        for item in le_snapshots
+        if item.get("trade_group")
+    }
+    le_summary = summarize_le_compliance_snapshots(le_snapshots)
+    le_summary["journal_completed_trades"] = len(trades)
+    le_summary["audit_coverage_pct"] = round(
+        len(le_snapshots) / len(trades) * 100, 1
+    ) if trades else 0.0
+
     def compact_trade(t: dict) -> dict:
         executions = t.get("executions") or []
         return {
@@ -844,6 +897,16 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
             "ai_feedback": t.get("ai_feedback"),
             "idea_source": t.get("idea_source"),
             "execution_count": len(executions),
+            "le_compliance": (
+                {
+                    "classification": le_by_group[str(t.get("trade_group"))].get("classification"),
+                    "score": le_by_group[str(t.get("trade_group"))].get("score"),
+                    "failed_rule_ids": le_by_group[str(t.get("trade_group"))].get("failed_rule_ids"),
+                    "unknown_rule_ids": le_by_group[str(t.get("trade_group"))].get("unknown_rule_ids"),
+                }
+                if str(t.get("trade_group")) in le_by_group
+                else None
+            ),
         }
 
     diary_params = []
@@ -944,6 +1007,30 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
         "targeted_matches": [compact_trade(t) for t in targeted],
         "recent_diary_insights": diary,
         "recent_day_reviews": daily_reviews,
+        "le_playbook": {
+            "compliance_version": LE_COMPLIANCE_VERSION,
+            **LE_PLAYBOOK_REFERENCE,
+        },
+        "le_compliance": {
+            "summary": le_summary,
+            "audited_trades": [
+                {
+                    "trade_group": item.get("trade_group"),
+                    "date": item.get("date"),
+                    "ticker": item.get("ticker"),
+                    "net_pnl": item.get("net_pnl"),
+                    "classification": item.get("classification"),
+                    "score": item.get("score"),
+                    "failed_rule_ids": item.get("failed_rule_ids"),
+                    "unknown_rule_ids": item.get("unknown_rule_ids"),
+                }
+                for item in sorted(
+                    le_snapshots,
+                    key=lambda x: (str(x.get("date") or ""), str(x.get("trade_group") or "")),
+                    reverse=True,
+                )[:100]
+            ],
+        },
     }
     return json.dumps(snapshot, indent=2, sort_keys=True, default=str)
 
