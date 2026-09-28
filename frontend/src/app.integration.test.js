@@ -351,7 +351,7 @@ test('Dashboard quick date ranges apply 7D, 30D, and YTD without opening the cal
   expect(screen.queryByRole('dialog', { name: 'Choose a date range' })).not.toBeInTheDocument();
 
   fireEvent.click(within(quick).getByRole('button', { name: 'All time' }));
-  expect(within(quick).getByRole('button', { name: 'All time' })).toHaveAttribute('aria-pressed', 'true');
+  await waitFor(() => expect(within(quick).getByRole('button', { name: 'All time' })).toHaveAttribute('aria-pressed', 'true'));
 });
 
 test('Brain opens from the header as a dialog and closes on Escape', async () => {
@@ -1281,7 +1281,7 @@ test('A failed dashboard load keeps the page and offers Retry', async () => {
   expect(alert).toHaveTextContent(/Could not load the dashboard: Network Error/);
   // The shell stays: title and the date filter are still there.
   expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
-  expect(within(screen.getByRole('main')).getByRole('button', { name: /All time/ })).toBeInTheDocument();
+  expect(within(screen.getByRole('group', { name: 'Quick date ranges' })).getByRole('button', { name: 'All time' })).toBeInTheDocument();
 
   kpisApi.get.mockImplementation(() => Promise.resolve({ data: { total_net_pnl: 100, daily_pnl: [], by_strategy: [] } }));
   fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
