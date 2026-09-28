@@ -891,7 +891,19 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
                 "mistakes": (review.get("mistakes") or [])[:5],
                 "strengths": (review.get("strengths") or [])[:5],
                 "patterns": (review.get("patterns") or [])[:5],
-                "session_path_analysis": review.get("session_path_analysis"),
+                "session_path_analysis": {
+                    key: (review.get("session_path_analysis") or {}).get(key)
+                    for key in (
+                        "timing_coverage_pct",
+                        "day_total_realized_pnl",
+                        "peak_realized_pnl",
+                        "trough_realized_pnl",
+                        "giveback_from_positive_peak",
+                        "max_drawdown_from_high_water",
+                        "post_peak",
+                        "window_realized_pnl",
+                    )
+                } if review.get("session_path_analysis") else None,
             })
     except Exception:
         daily_reviews = []
