@@ -98,3 +98,61 @@ def test_le_diagnosis_ignores_stale_snapshot_for_current_coverage():
     assert report["missing_trades"] == 1
     assert report["stale_snapshots"] == 1
     assert report["coverage_pct"] == 0.0
+
+
+def test_le_diagnosis_counts_user_backed_evidence_and_manual_setups():
+    trades = [
+        {
+            "id": 1,
+            "trade_group": "manual-1",
+            "date": "2026-09-25",
+            "ticker": "SPY",
+            "side": "LONG",
+            "net_pnl": 250,
+        }
+    ]
+    snapshot = _snapshot(
+        "manual-1",
+        "LE_VIOLATION",
+        [
+            {
+                **_check("level_broken", "Level Broken?", "pass", "PDH, PMH"),
+                "manual_override": True,
+                "conflict_with_system": True,
+            },
+            _check("market_sign", "Market Sign?", "pass"),
+        ],
+        250,
+    )
+    snapshot["manual_le_evidence"] = {
+        "source": "USER_MANUAL",
+        "authoritative": True,
+        "recognized_tags": [
+            {
+                "id": 7,
+                "tag_type": "setup",
+                "tag_value": "Outside Day",
+                "source": "manual",
+            }
+        ],
+        "setup_tags": ["Outside Day"],
+        "override_count": 1,
+        "conflict_count": 1,
+        "overridden_ids": ["level_broken"],
+    }
+
+    report = build_le_diagnosis(
+        trades,
+        [snapshot],
+        compliance_version="LE_PLAYBOOK_2026_09_v1",
+    )
+
+    assert report["manual_evidence"]["trades"] == 1
+    assert report["manual_evidence"]["override_count"] == 1
+    assert report["manual_evidence"]["conflict_count"] == 1
+    assert report["user_confirmed_setups"][0]["label"] == "Outside Day"
+    assert report["user_confirmed_setups"][0]["net_pnl"] == 250.0
+    level = next(row for row in report["rules"] if row["id"] == "level_broken")
+    assert level["user_backed_trades"] == 1
+    assert level["user_system_conflicts"] == 1
+    assert report["recent_trades"][0]["manual_le_evidence"]["override_count"] == 1
