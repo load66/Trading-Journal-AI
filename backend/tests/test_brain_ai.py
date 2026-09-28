@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import ai_analysis
 
@@ -132,6 +133,38 @@ def test_brain_all_accounts_avoids_ambiguous_null_parameters_for_postgres():
     assert "account_id = ?" not in diary_sql
     assert diary_params == ()
 
+
+
+
+def test_brain_resolves_last_friday_before_building_ai_context(monkeypatch):
+    monkeypatch.setattr(ai_analysis, "_brain_today", lambda: date(2026, 9, 28))
+
+    targets = ai_analysis._brain_extract_targets(
+        "How's my trade last Friday?",
+        [{"date": "2026-09-25", "ticker": "SPY", "strategy": None}],
+    )
+
+    assert targets["dates"] == ["2026-09-25"]
+    assert targets["date_phrase"] == "last friday"
+
+
+def test_brain_date_question_compacts_context_to_target_session(monkeypatch):
+    monkeypatch.setattr(ai_analysis, "_brain_today", lambda: date(2026, 9, 28))
+    conn = FakeConn()
+
+    raw = ai_analysis.build_brain_context(
+        conn,
+        account_id=None,
+        question="How's my trade last Friday?",
+    )
+    context = json.loads(raw)
+
+    assert context["target_detection"]["dates"] == ["2026-09-25"]
+    assert context["question_scope"]["mode"] == "targeted"
+    assert context["question_scope"]["matched_trades"] == 2
+    assert context["question_scope_stats"]["trades"] == 2
+    assert {t["date"] for t in context["recent_trades"]} == {"2026-09-25"}
+    assert len(raw) < 30000
 
 def test_brain_prefers_groq_when_production_key_is_available(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
