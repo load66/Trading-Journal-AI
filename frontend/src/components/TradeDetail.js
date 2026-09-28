@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import './TradeDetail.mobile.css';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil, Sparkles, Target, AlertTriangle, CheckCircle2, Upload, BookOpen, ClipboardCheck, FileText, ShieldCheck, Tags as TagsIcon, Library, RefreshCw } from 'lucide-react';
 import { tradesApi, libraryApi } from '../api';
@@ -347,6 +347,7 @@ export function SavedTagCombobox({
   const [query, setQuery] = useState(value || '');
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const listId = useId();
 
   useEffect(() => {
     setQuery(value || '');
@@ -395,7 +396,7 @@ export function SavedTagCombobox({
         role="combobox"
         aria-label={ariaLabel}
         aria-expanded={open && !disabled}
-        aria-controls="saved-tag-results"
+        aria-controls={listId}
         aria-autocomplete="list"
         autoComplete="off"
         spellCheck="false"
@@ -407,7 +408,7 @@ export function SavedTagCombobox({
         onKeyDown={handleKeyDown}
       />
       {open && !disabled && (
-        <div id="saved-tag-results" className="td-tags-combobox-menu" role="listbox" aria-label="Saved tag matches">
+        <div id={listId} className="td-tags-combobox-menu" role="listbox" aria-label="Saved tag matches">
           {matches.length ? matches.map((item, index) => (
             <button
               key={item.name}
