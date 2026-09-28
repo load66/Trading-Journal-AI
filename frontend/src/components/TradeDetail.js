@@ -892,6 +892,28 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const [tags, setTags] = useState([]);
   const [mobileTab, setMobileTab] = useState('Overview');
   const [mobileAdvanced, setMobileAdvanced] = useState(false);
+  const [isMobileView, setIsMobileView] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    if (typeof window.matchMedia === 'function') return window.matchMedia('(max-width: 720px)').matches;
+    return window.innerWidth <= 720;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const query = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 720px)')
+      : null;
+    const update = () => setIsMobileView(query ? query.matches : window.innerWidth <= 720);
+    update();
+    if (query?.addEventListener) query.addEventListener('change', update);
+    else if (query?.addListener) query.addListener(update);
+    else window.addEventListener('resize', update);
+    return () => {
+      if (query?.removeEventListener) query.removeEventListener('change', update);
+      else if (query?.removeListener) query.removeListener(update);
+      else window.removeEventListener('resize', update);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -1332,6 +1354,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
 
   return (
     <div>
+      {isMobileView && (
       <div className="td-mobile-view">
         <section className="tdm-shell" aria-label="Mobile trade review">
           <header className="tdm-trade-head">
@@ -1684,7 +1707,9 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           )}
         </section>
       </div>
+      )}
 
+      {(!isMobileView || mobileAdvanced) && (
       <div className={`td-desktop-view${mobileAdvanced ? ' mobile-open' : ''}`}>
       {/* Back nav + prev/next */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -2631,6 +2656,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       </div>
 
       </div>
+      )}
 
       <dialog
         ref={chartScreenshotDialogRef}
