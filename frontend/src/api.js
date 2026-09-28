@@ -37,6 +37,7 @@ export const tradesApi = {
   delete: (id) => api.delete(`/api/trades/${id}`),
   getAnalysis: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/analysis`),
   getLeReview: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/le-review`),
+  refreshLeCompliance: (group) => api.post(`/api/trades/${encodeURIComponent(group)}/le-compliance/refresh`),
   getLeLevels: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/le-levels`),
   getAnalysisOptions: () => api.get('/api/analysis-options'),
   updateAnalysis: (group, data) => api.patch(`/api/trades/${encodeURIComponent(group)}/analysis`, data),
@@ -54,6 +55,12 @@ export const tradesApi = {
   addExecution: (id, data) => api.post(`/api/trades/${id}/executions`, data),
   updateExecution: (id, idx, data) => api.put(`/api/trades/${id}/executions/${idx}`, data),
   deleteExecution: (id, idx) => api.delete(`/api/trades/${id}/executions/${idx}`),
+};
+
+export const leApi = {
+  getPlaybook: () => api.get('/api/le-playbook'),
+  getComplianceSummary: (params) => api.get('/api/le-compliance/summary', { params }),
+  rebuildCompliance: (data) => api.post('/api/le-compliance/rebuild', data),
 };
 
 export const importApi = {
