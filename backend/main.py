@@ -1894,6 +1894,11 @@ def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.
             raise HTTPException(status_code=400, detail="Planned risk must be greater than $0.")
         updates["risk_per_trade"] = abs(float(updates["risk_per_trade"]))
 
+    if "risk_reward" in updates and updates["risk_reward"] is not None:
+        if float(updates["risk_reward"]) <= 0:
+            raise HTTPException(status_code=400, detail="Risk/reward must be greater than 0.")
+        updates["risk_reward"] = float(updates["risk_reward"])
+
     existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
     if not existing:
         conn.execute(
@@ -1909,6 +1914,14 @@ def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.
         )
 
     conn.commit()
+
+    if updates and trade["account_id"] is not None:
+        conn.execute(
+            "DELETE FROM settings WHERE account_id=? AND key=?",
+            (trade["account_id"], _le_compliance_cache_key(trade_group)),
+        )
+        conn.commit()
+
     row = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
     return row_to_dict(row) if row else {}
 
