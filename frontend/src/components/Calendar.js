@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import YearBehind from '../v3/YearBehind';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Share2, X } from 'lucide-react';
 import { calendarApi, kpisApi, yearlyKpisApi } from '../api';
 import CalendarGrid from './CalendarGrid';
 import { PageHeader, KpiStrip, KpiCell } from './ui';
@@ -175,7 +175,7 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView }) {
 
 // ── Month view ─────────────────────────────────────────────────────────────────
 
-function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view, setView }) {
+function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view, setView, shareMode, onShareModeChange }) {
   const today = new Date();
   const [dayData, setDayData] = useState({});
   const [loading, setLoading] = useState(true);
@@ -225,45 +225,99 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
   const pf = monthKpis ? monthKpis.profit_factor : undefined;
   const pfTone = monthKpis && (pf == null || pf >= 1.5) ? 'pos' : undefined;
 
+  const winRate = monthKpis ? Number(monthKpis.win_rate || 0).toFixed(1) : '--';
+  const avgWinLoss = monthKpis && Math.abs(monthKpis.avg_loss || 0) > 0
+    ? (Math.abs(monthKpis.avg_win || 0) / Math.abs(monthKpis.avg_loss)).toFixed(2)
+    : '--';
+
   return (
-    <div>
-      <PageHeader
-        title={<>{MONTHS[month - 1]} <span className="num">{year}</span></>}
-        subtitle="Select a trading day to open its Day Review."
-        actions={<>
-          <button type="button" className="cal-nav" onClick={prevMonth} aria-label="Previous month"><ChevronLeft size={18} /></button>
-          <button type="button" className="cal-nav" onClick={nextMonth} aria-label="Next month"><ChevronRight size={18} /></button>
-          <button type="button" className="btn btn-secondary" onClick={goToday}>This month</button>
-          <ViewToggle view={view} setView={setView} />
-        </>}
-      />
+    <div className={`calendar-month-view${shareMode ? ' calendar-share-mode' : ''}`}>
+      {shareMode ? (
+        <>
+          <div className="calendar-share-head">
+            <div>
+              <div className="calendar-share-eyebrow">Trading Calendar</div>
+              <h1>{MONTHS[month - 1]} <span className="num">{year}</span></h1>
+            </div>
+            <div className="calendar-share-head-actions">
+              <button type="button" className="cal-nav" onClick={prevMonth} aria-label="Previous month"><ChevronLeft size={16} /></button>
+              <button type="button" className="cal-nav" onClick={nextMonth} aria-label="Next month"><ChevronRight size={16} /></button>
+              <button type="button" className="btn btn-ghost btn-sm calendar-share-exit" onClick={() => onShareModeChange(false)}>
+                <X size={14} /> Exit
+              </button>
+            </div>
+          </div>
 
-      <KpiStrip label="Month summary">
-        <KpiCell label="MTD P&L" value={<span className="num">{signedPnl(monthPnl)}</span>} tone={monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : undefined} />
-        <KpiCell
-          label="Win %"
-          value={<span className="num">{monthKpis ? `${Number(monthKpis.win_rate || 0).toFixed(1)}%` : '--'}</span>}
-          tone={monthKpis && monthKpis.win_rate >= 55 ? 'pos' : undefined}
-        />
-        <KpiCell
-          label="Prof. Factor"
-          value={<span className={`num ${monthKpis && pf != null && pf >= 1 && pf < 1.5 ? 'text-purple' : ''}`}>{monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'}</span>}
-          tone={pfTone}
-        />
-        <KpiCell
-          label="Avg W/L"
-          value={<span className="num">{monthKpis && Math.abs(monthKpis.avg_loss || 0) > 0
-            ? (Math.abs(monthKpis.avg_win || 0) / Math.abs(monthKpis.avg_loss)).toFixed(2)
-            : '--'}</span>}
-        />
-        <KpiCell label="Trading days" value={<span className="num">{tradingDays}</span>} />
-      </KpiStrip>
+          <section className="calendar-share-stats" aria-label="Month summary">
+            <div className="calendar-share-stat">
+              <span>MTD</span>
+              <strong className={`num ${monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : ''}`}>{signedPnl(monthPnl)}</strong>
+            </div>
+            <div className="calendar-share-stat">
+              <span>Win</span>
+              <strong className="num">{winRate === '--' ? '--' : `${winRate}%`}</strong>
+            </div>
+            <div className="calendar-share-stat">
+              <span>PF</span>
+              <strong className={`num ${monthKpis && pf != null && pf >= 1 && pf < 1.5 ? 'text-purple' : ''}`}>{monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'}</strong>
+            </div>
+            <div className="calendar-share-stat">
+              <span>Avg W/L</span>
+              <strong className="num">{avgWinLoss}</strong>
+            </div>
+            <div className="calendar-share-stat">
+              <span>Days</span>
+              <strong className="num">{tradingDays}</strong>
+            </div>
+          </section>
+        </>
+      ) : (
+        <>
+          <PageHeader
+            title={<>{MONTHS[month - 1]} <span className="num">{year}</span></>}
+            subtitle="Select a trading day to open its Day Review."
+            actions={<>
+              <button type="button" className="cal-nav" onClick={prevMonth} aria-label="Previous month"><ChevronLeft size={18} /></button>
+              <button type="button" className="cal-nav" onClick={nextMonth} aria-label="Next month"><ChevronRight size={18} /></button>
+              <button type="button" className="btn btn-secondary" onClick={goToday}>This month</button>
+              <ViewToggle view={view} setView={setView} />
+              <button type="button" className="btn btn-ghost calendar-share-trigger" onClick={() => onShareModeChange(true)}>
+                <Share2 size={15} /> Share View
+              </button>
+            </>}
+          />
 
-      <section className="card">
+          <KpiStrip label="Month summary">
+            <KpiCell label="MTD P&L" value={<span className="num">{signedPnl(monthPnl)}</span>} tone={monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : undefined} />
+            <KpiCell
+              label="Win %"
+              value={<span className="num">{winRate === '--' ? '--' : `${winRate}%`}</span>}
+              tone={monthKpis && monthKpis.win_rate >= 55 ? 'pos' : undefined}
+            />
+            <KpiCell
+              label="Prof. Factor"
+              value={<span className={`num ${monthKpis && pf != null && pf >= 1 && pf < 1.5 ? 'text-purple' : ''}`}>{monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'}</span>}
+              tone={pfTone}
+            />
+            <KpiCell label="Avg W/L" value={<span className="num">{avgWinLoss}</span>} />
+            <KpiCell label="Trading days" value={<span className="num">{tradingDays}</span>} />
+          </KpiStrip>
+        </>
+      )}
+
+      <section className={`card${shareMode ? ' calendar-share-card' : ''}`}>
         {loading ? (
           <div className="empty" role="status">Loading...</div>
         ) : (
-          <CalendarGrid weeks={weeks} dayData={dayData} year={year} month={month} onDayClick={onDayClick} size="full" />
+          <CalendarGrid
+            weeks={weeks}
+            dayData={dayData}
+            year={year}
+            month={month}
+            onDayClick={onDayClick}
+            size="full"
+            compact={shareMode}
+          />
         )}
       </section>
     </div>
@@ -272,7 +326,7 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
 
 // ── Main Calendar (view switcher) ──────────────────────────────────────────────
 
-export default function Calendar({ accountId, onDayClick }) {
+export default function Calendar({ accountId, onDayClick, shareMode = false, onShareModeChange = () => {} }) {
   const today = new Date();
   const [view, setView] = useState('month');
   const [year, setYear] = useState(today.getFullYear());
@@ -280,24 +334,40 @@ export default function Calendar({ accountId, onDayClick }) {
 
   const switchToMonth = (m) => { setMonth(m); setView('month'); };
 
+  useEffect(() => {
+    if (view === 'year' && shareMode) onShareModeChange(false);
+  }, [view, shareMode, onShareModeChange]);
+
   return (
-    <>
+    <div className={`calendar-page${shareMode ? ' calendar-page-share' : ''}`}>
       {view === 'year' ? (
         <YearView year={year} setYear={setYear} accountId={accountId} onMonthClick={switchToMonth} view={view} setView={setView} />
       ) : (
-        <MonthView year={year} month={month} setYear={setYear} setMonth={setMonth} accountId={accountId} onDayClick={onDayClick} view={view} setView={setView} />
+        <MonthView
+          year={year}
+          month={month}
+          setYear={setYear}
+          setMonth={setMonth}
+          accountId={accountId}
+          onDayClick={onDayClick}
+          view={view}
+          setView={setView}
+          shareMode={shareMode}
+          onShareModeChange={onShareModeChange}
+        />
       )}
 
-      {/* the month grid cannot tell you where the account stood; this can */}
-      <section className="v3-band" style={{ borderBottom: 0 }}>
-        <div className="v3-sec-head">
-          <div>
-            <h2 className="v3-h">The year behind it</h2>
-            <p className="v3-h-sub">Each month closing where the next one opens</p>
+      {!shareMode && (
+        <section className="v3-band" style={{ borderBottom: 0 }}>
+          <div className="v3-sec-head">
+            <div>
+              <h2 className="v3-h">The year behind it</h2>
+              <p className="v3-h-sub">Each month closing where the next one opens</p>
+            </div>
           </div>
-        </div>
-        <YearBehind accountId={accountId} />
-      </section>
-    </>
+          <YearBehind accountId={accountId} />
+        </section>
+      )}
+    </div>
   );
 }

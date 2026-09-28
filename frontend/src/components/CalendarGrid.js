@@ -27,8 +27,11 @@ const SIZES = {
   full: { rowH: 138, headH: 38, gap: 8, cardGap: 14, pnl: 25, num: 13, meta: 12.5, wkPnl: 20 },
 };
 
-export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, size = 'full' }) {
-  const S = SIZES[size] || SIZES.full;
+export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, size = 'full', compact = false }) {
+  const S = compact
+    ? { rowH: 48, headH: 22, gap: 2, cardGap: 0, pnl: 13, num: 9, meta: 8.5, wkPnl: 0 }
+    : (SIZES[size] || SIZES.full);
+  const cellGap = compact ? 2 : 6;
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
@@ -50,12 +53,12 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
   return (
     // Below ~600px the grid keeps a readable minimum width and scrolls sideways
     // (same overflow cue as the tables) instead of truncating P&L to "+".
-    <div className="scroll-x cal-scroll">
-    <div className={`cal-inner${size === 'mini' ? '' : ' cal-inner-full'}`} style={{ display: 'flex', gap: S.cardGap, alignItems: 'flex-start' }}>
+    <div className={`scroll-x cal-scroll${compact ? ' cal-scroll-share' : ''}`}>
+    <div className={`cal-inner${size === 'mini' ? '' : ' cal-inner-full'}${compact ? ' cal-inner-share' : ''}`} style={{ display: 'flex', gap: S.cardGap, alignItems: 'flex-start' }}>
 
       {/* ── Day grid (Mon-Fri) ── */}
       <div style={{ flex: 5, minWidth: 0 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: cellGap }}>
           {WEEKDAYS.map(d => (
             <div key={d} style={{
               height: S.headH, display: 'flex', alignItems: 'center',
@@ -64,9 +67,9 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
           ))}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: cellGap }}>
           {weeks.map((week, wi) => (
-            <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 6 }}>
+            <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: cellGap }}>
               {week.slice(0, 5).map((d, di) => {
                 const key = dateKey(d);
                 const data = key ? dayData[key] : null;
@@ -98,11 +101,11 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
                     style={{
                       height: S.rowH,
                       background: bg,
-                      borderRadius: 'var(--radius-md)',
+                      borderRadius: compact ? 5 : 'var(--radius-md)',
                       position: 'relative',
                       boxShadow: bar ? `inset 3px 0 0 ${bar}` : undefined,
                       opacity: future ? 0.55 : 1,
-                      padding: size === 'mini' ? '8px 10px' : '10px 14px',
+                      padding: compact ? '4px 3px' : (size === 'mini' ? '8px 10px' : '10px 14px'),
                       display: 'flex',
                       flexDirection: 'column',
                       overflow: 'hidden',
@@ -113,8 +116,8 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                           {tod ? (
                             <span className="num" style={{
-                              display: 'grid', placeItems: 'center', minWidth: 22, height: 22, padding: '0 5px',
-                              borderRadius: 11, background: 'var(--accent-line)',
+                              display: 'grid', placeItems: 'center', minWidth: compact ? 18 : 22, height: compact ? 18 : 22, padding: compact ? '0 3px' : '0 5px',
+                              borderRadius: compact ? 9 : 11, background: 'var(--accent-line)',
                               color: 'var(--surface-page)', fontSize: S.num, fontWeight: 700,
                             }} aria-label={`Today, ${d}`}>{d}</span>
                           ) : (
@@ -132,10 +135,16 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
                               fontFamily: 'var(--font-display)',
                               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                             }}>{signedK(pnl)}</div>
-                            <div className="cal-day-meta" style={{ fontSize: S.meta, color: 'var(--text-secondary)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              <span className="num">{data.trade_count}</span> trade{data.trade_count !== 1 ? 's' : ''}
-                              {size === 'mini' ? ' · ' : <br className="cal-win-break" />}
-                              <span className="cal-win-rate"><span className="num">{data.win_rate}%</span> win</span>
+                            <div className="cal-day-meta" style={{ fontSize: S.meta, color: 'var(--text-secondary)', marginTop: compact ? 1 : 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {compact ? (
+                                <><span className="num">{data.trade_count}</span>T</>
+                              ) : (
+                                <>
+                                  <span className="num">{data.trade_count}</span> trade{data.trade_count !== 1 ? 's' : ''}
+                                  {size === 'mini' ? ' · ' : <br className="cal-win-break" />}
+                                  <span className="cal-win-rate"><span className="num">{data.win_rate}%</span> win</span>
+                                </>
+                              )}
                             </div>
                           </div>
                         )}
@@ -149,7 +158,8 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
         </div>
       </div>
 
-      {/* ── Week-summary cards (same width as one day column) ── */}
+      {/* ── Week-summary cards (hidden in screenshot-focused compact mode) ── */}
+      {!compact && (
       <div className="cal-week-column" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div className="cal-week-head" style={{ height: S.headH, display: 'flex', alignItems: 'center', fontSize: 13, color: 'var(--text-secondary)', paddingLeft: 4 }}>Week</div>
         {weeks.map((week, wi) => {
@@ -180,6 +190,7 @@ export default function CalendarGrid({ weeks, dayData, year, month, onDayClick, 
           );
         })}
       </div>
+      )}
     </div>
     </div>
   );
