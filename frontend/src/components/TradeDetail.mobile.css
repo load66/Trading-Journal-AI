@@ -20,6 +20,52 @@
 }
 
 @media (max-width: 720px) {
+  .td-live-chart {
+    padding: 10px 10px 8px;
+  }
+
+  .td-main {
+    gap: 12px;
+  }
+
+  .trading-chart-compact-mobile .section-title {
+    font-size: 14px !important;
+    line-height: 1.25;
+  }
+
+  .trading-chart-compact-mobile .chart-legend {
+    flex-wrap: nowrap;
+    gap: 2px;
+    margin: 0 0 4px;
+    padding-bottom: 1px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .trading-chart-compact-mobile .chart-legend::-webkit-scrollbar {
+    display: none;
+  }
+
+  .trading-chart-compact-mobile .chart-legend-item {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 3px 6px;
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
+
+  .trading-chart-compact-mobile .chart-execution-help {
+    margin: 1px 1px 5px !important;
+    font-size: 10px !important;
+    line-height: 1.3;
+  }
+
+  .trading-chart-compact-mobile .chart-canvas {
+    overflow: hidden;
+  }
+
   .td-chart-review-toolbar {
     align-items: flex-start;
     flex-direction: column;
