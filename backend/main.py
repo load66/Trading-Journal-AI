@@ -1236,8 +1236,33 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         """, (trade_group, data.ticker.upper(), data.date, data.strategy, data.stop_loss, data.notes))
         conn.commit()
 
+    _invalidate_le_compliance_for_dates(conn, data.account_id, {data.date})
+    conn.commit()
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
     return row_to_dict(row)
+
+
+def _invalidate_le_compliance_for_dates(conn, account_id, dates) -> None:
+    """Drop derived LE snapshots for every trade on affected trading days.
+
+    The Three Trade Rule depends on prior same-day outcomes, so changing one
+    trade can change the compliance of later trades on that date.
+    """
+    if account_id is None:
+        return
+    normalized = sorted({str(value or "").strip() for value in dates if str(value or "").strip()})
+    if not normalized:
+        return
+    placeholders = ",".join("?" for _ in normalized)
+    rows = conn.execute(
+        f"SELECT trade_group FROM trades WHERE account_id=? AND date IN ({placeholders})",
+        (account_id, *normalized),
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "DELETE FROM settings WHERE account_id=? AND key=?",
+            (account_id, f"le_compliance:{row['trade_group']}"),
+        )
 
 
 @app.put("/api/trades/{trade_id}")
@@ -1278,6 +1303,12 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
         conn.commit()
 
         refreshed = row_to_dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone())
+        _invalidate_le_compliance_for_dates(
+            conn,
+            trade.get("account_id"),
+            {trade.get("date"), refreshed.get("date")},
+        )
+        conn.commit()
         execs = json.loads(refreshed.get('executions') or '[]')
         if execs and any(k in data for k in {'ticker', 'side', 'instrument_type', 'date'}):
             return _recalculate_and_save(refreshed, execs, conn, trade_id)
@@ -1342,6 +1373,11 @@ def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
         (json.dumps(execs), gross_pnl, net_pnl, commissions, trade_date, trade_id)
     )
     account_id = trade.get("account_id")
+    _invalidate_le_compliance_for_dates(
+        conn,
+        account_id,
+        {trade.get("date"), trade_date},
+    )
     for summary_date in {str(trade.get("date") or ""), str(trade_date or "")}:
         if not summary_date:
             continue
@@ -1419,6 +1455,11 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
     ).fetchone()
     screenshot_path = analysis_row["chart_screenshot_path"] if analysis_row else None
 
+    _invalidate_le_compliance_for_dates(
+        conn,
+        trade.get("account_id"),
+        {trade.get("date")},
+    )
     conn.execute("DELETE FROM trade_tags WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trade_analysis WHERE trade_group=?", (trade_group,))
     conn.execute("DELETE FROM trades WHERE id=?", (trade_id,))
