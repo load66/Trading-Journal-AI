@@ -610,7 +610,7 @@ Core rules:
 - If the question asks "best", explain the metric used (for example total P&L, average P&L, profit factor, or win rate) and note when another metric gives a different answer.
 - Never claim you inspected a chart image unless image data was actually supplied. Session-path evidence is a realized-P&L timeline, not a price chart.
 - The user-supplied LE playbook in LE_PLAYBOOK is authoritative for LE-system questions. Preserve its terminology: Flag, Line, Sign; FORM -> ESTABLISH; L Entry; E Entry; Purple Profits; Three Trade Rule; Chop Hour; 3-2-1; 10m 8 EMA.
-- LE_COMPLIANCE is deterministic. A status of Unknown means the journal could not prove the condition. Never convert Unknown into Pass or Fail.
+- LE_COMPLIANCE final statuses combine deterministic system evidence with recognized source='manual' LE tags. Manual LE tags are authoritative user evidence for the exact concept they assert and win the final status when mapped. The prior automated result is preserved as system_result/conflict metadata. Never second-guess or reverse a USER_MANUAL override. A status of Unknown means neither system evidence nor a recognized manual tag proved the condition.
 - When citing a compliance percentage, distinguish evaluated-pass percentage from evidence coverage. Do not present a high pass percentage as strong proof when coverage is low.
 - P&L grouped by an LE rule failure is descriptive association, not proof that the violation caused the result.
 - If the user asks whether a specific trade followed LE and no compliance snapshot exists for it, say the trade is unaudited rather than guessing from generic stats.
@@ -1002,6 +1002,7 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
                     "score": le_by_group[str(t.get("trade_group"))].get("score"),
                     "failed_rule_ids": le_by_group[str(t.get("trade_group"))].get("failed_rule_ids"),
                     "unknown_rule_ids": le_by_group[str(t.get("trade_group"))].get("unknown_rule_ids"),
+                    "manual_le_evidence": le_by_group[str(t.get("trade_group"))].get("manual_le_evidence"),
                 }
                 if str(t.get("trade_group")) in le_by_group
                 else None
@@ -1138,6 +1139,7 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
                     "score": item.get("score"),
                     "failed_rule_ids": item.get("failed_rule_ids"),
                     "unknown_rule_ids": item.get("unknown_rule_ids"),
+                    "manual_le_evidence": item.get("manual_le_evidence"),
                 }
                 for item in sorted(
                     le_snapshots,
