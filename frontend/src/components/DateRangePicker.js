@@ -16,6 +16,19 @@ function fmtLabel(s) {
   return `${MONTHS[Number(m) - 1].slice(0, 3)} ${d}, ${y}`;
 }
 
+function getQuickPresets() {
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const l7 = new Date(t); l7.setDate(t.getDate() - 6);
+  const l30 = new Date(t); l30.setDate(t.getDate() - 29);
+  const ytd = new Date(t.getFullYear(), 0, 1);
+  return [
+    { label: '7D', aria: 'Last 7 days', from: l7, to: t },
+    { label: '30D', aria: 'Last 30 days', from: l30, to: t },
+    { label: 'YTD', aria: 'Year to date', from: ytd, to: t },
+  ];
+}
+
+
 function getPresets() {
   const t = new Date(); t.setHours(0, 0, 0, 0);
   const dow = t.getDay();
@@ -41,7 +54,7 @@ function getPresets() {
   ];
 }
 
-function CalendarMonth({ year, month, fromStr, toStr: toS, hoverStr, selecting, onDayClick, onDayHover }) {
+function CalendarMonth({ year, month, fromStr, toStr: toS, hoverStr, selecting, onDayClick, onDayHover, className = '' }) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDow = new Date(year, month, 1).getDay();
   const cells = [];
@@ -70,7 +83,7 @@ function CalendarMonth({ year, month, fromStr, toStr: toS, hoverStr, selecting, 
   const rEnd = rangeEnd();
 
   return (
-    <div style={{ minWidth: 220 }}>
+    <div className={`date-range-month ${className}`.trim()} style={{ minWidth: 220 }}>
       <div style={{ fontWeight: 600, fontSize: 14, textAlign: 'center', marginBottom: 8, color: 'var(--text-primary)' }}>
         {MONTHS[month]} {year}
       </div>
@@ -188,6 +201,7 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
     setHover(null);
   }
 
+  const quickPresets = getQuickPresets();
   const hasRange = dateFrom || dateTo;
   const displayText = selecting
     ? `${fmtLabel(selecting)} → ...`
@@ -196,9 +210,30 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
     : 'All time';
 
   return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      {/* Trigger button + separate clear control (no nested interactive elements) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+    <div ref={ref} className="date-range-picker" style={{ position: 'relative' }}>
+      <div className="date-range-toolbar">
+        <div className="date-range-quick" role="group" aria-label="Quick date ranges">
+          {quickPresets.map((preset) => {
+            const from = toStr(preset.from);
+            const to = toStr(preset.to);
+            const active = dateFrom === from && dateTo === to;
+            return (
+              <button
+                type="button"
+                key={preset.label}
+                className={`date-range-quick-btn${active ? ' active' : ''}`}
+                aria-label={preset.aria}
+                aria-pressed={active}
+                onClick={() => applyPreset(preset)}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Trigger button + separate clear control (no nested interactive elements) */}
+        <div className="date-range-main" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
         <button
           type="button"
           className="btn btn-secondary"
@@ -216,11 +251,12 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
             <X size={14} />
           </button>
         )}
+        </div>
       </div>
 
       {/* Dropdown panel */}
       {open && (
-        <div role="dialog" aria-label="Choose a date range" style={{
+        <div className="date-range-popover" role="dialog" aria-label="Choose a date range" style={{
           position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 500,
           background: 'var(--surface-panel)', border: '1px solid var(--divider)',
           borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-dropdown)',
@@ -228,7 +264,7 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
           width: 'max-content', maxWidth: 'calc(100vw - 32px)',
         }}>
           {/* Calendars */}
-          <div style={{ padding: '16px 20px', flex: 1 }}>
+          <div className="date-range-calendars-section" style={{ padding: '16px 20px', flex: 1 }}>
             {/* Selected range display */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, fontSize: 13 }}>
               <div style={{
@@ -254,7 +290,7 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
               <button type="button" className="cal-nav" onClick={prevMonth} aria-label="Previous month">
                 <ChevronLeft size={16} />
               </button>
-              <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <div className="date-range-calendars" style={{ display: 'flex', gap: 32, flexWrap: 'wrap', justifyContent: 'center' }}>
                 <CalendarMonth
                   year={viewYear} month={viewMonth}
                   fromStr={dateFrom} toStr={dateTo}
@@ -262,6 +298,7 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
                   onDayClick={handleDayClick} onDayHover={setHover}
                 />
                 <CalendarMonth
+                  className="date-range-secondary-month"
                   year={rightYear} month={rightMonth}
                   fromStr={dateFrom} toStr={dateTo}
                   hoverStr={hover} selecting={selecting}
@@ -275,7 +312,7 @@ export default function DateRangePicker({ dateFrom, dateTo, onChange }) {
           </div>
 
           {/* Presets */}
-          <div style={{
+          <div className="date-range-presets" style={{
             borderLeft: '1px solid var(--divider)',
             padding: '16px 0',
             minWidth: 170,
