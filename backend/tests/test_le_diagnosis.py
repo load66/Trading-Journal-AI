@@ -156,3 +156,6 @@ def test_le_diagnosis_counts_user_backed_evidence_and_manual_setups():
     assert level["user_backed_trades"] == 1
     assert level["user_system_conflicts"] == 1
     assert report["recent_trades"][0]["manual_le_evidence"]["override_count"] == 1
+    assert report["learning_core"]["learning_version"] == "LE_LEARNING_2026_09_v1"
+    assert report["learning_core"]["setup_edges"][0]["label"] == "Outside Day"
+    assert report["learning_core"]["setup_edges"][0]["stage"] == "DISCOVERY"
