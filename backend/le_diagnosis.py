@@ -129,6 +129,10 @@ def build_le_diagnosis(
     rule_groups: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     rule_labels: dict[str, str] = {}
     cohort_groups: dict[str, list[dict]] = defaultdict(list)
+    user_setup_groups: dict[str, list[dict]] = defaultdict(list)
+    manual_evidence_trades = 0
+    manual_override_count = 0
+    manual_conflict_count = 0
     trade_rows = []
 
     for row in audited_rows:
@@ -146,6 +150,14 @@ def build_le_diagnosis(
             if flags.get(cohort_id):
                 cohort_groups[cohort_id].append(row)
 
+        manual = snapshot.get('manual_le_evidence') or {}
+        if manual.get('recognized_tags'):
+            manual_evidence_trades += 1
+        manual_override_count += int(manual.get('override_count') or 0)
+        manual_conflict_count += int(manual.get('conflict_count') or 0)
+        for setup_name in manual.get('setup_tags') or []:
+            user_setup_groups[str(setup_name)].append(row)
+
         trade_rows.append({
             'trade_group': row.get('trade_group'),
             'date': row.get('date'),
@@ -157,6 +169,12 @@ def build_le_diagnosis(
             'score': snapshot.get('score') or {},
             'failed_rule_ids': snapshot.get('failed_rule_ids') or [],
             'unknown_rule_ids': snapshot.get('unknown_rule_ids') or [],
+            'manual_le_evidence': {
+                'override_count': int(manual.get('override_count') or 0),
+                'conflict_count': int(manual.get('conflict_count') or 0),
+                'setup_tags': manual.get('setup_tags') or [],
+                'recognized_tags': manual.get('recognized_tags') or [],
+            },
             'generated_at': snapshot.get('generated_at'),
         })
 
@@ -195,6 +213,17 @@ def build_le_diagnosis(
             'stable_sample': len(rows) >= MIN_STABLE_SAMPLE,
         })
     cohorts.sort(key=lambda item: (-item['net_pnl'], -item['trades']))
+
+    user_confirmed_setups = []
+    for setup_name, rows in user_setup_groups.items():
+        user_confirmed_setups.append({
+            'id': setup_name.lower().replace(' ', '_'),
+            'label': setup_name,
+            **_stats(rows),
+            'stable_sample': len(rows) >= MIN_STABLE_SAMPLE,
+            'evidence_source': 'USER_MANUAL',
+        })
+    user_confirmed_setups.sort(key=lambda item: (-item['net_pnl'], -item['trades'], item['label']))
 
     stable_positive = [row for row in cohorts if row['stable_sample'] and row['net_pnl'] > 0]
     most_profitable = max(
@@ -265,6 +294,17 @@ def build_le_diagnosis(
                 ' profit factor across ' + str(highest_quality['trades']) + ' trades.'
             ),
         })
+    if manual_evidence_trades:
+        findings.append({
+            'kind': 'manual',
+            'title': 'User-confirmed LE evidence',
+            'text': (
+                str(manual_evidence_trades) + ' audited trade(s) contain authoritative manual LE tags, '
+                + str(manual_override_count) + ' final rule/finding result(s) were user-backed, and '
+                + str(manual_conflict_count) + ' system-vs-user conflict(s) were preserved for review.'
+            ),
+        })
+
     if evidence_gaps:
         top_gap = evidence_gaps[0]
         findings.append({
@@ -288,6 +328,13 @@ def build_le_diagnosis(
         'classifications': classification_stats,
         'rules': rules,
         'cohorts': cohorts,
+        'user_confirmed_setups': user_confirmed_setups,
+        'manual_evidence': {
+            'trades': manual_evidence_trades,
+            'override_count': manual_override_count,
+            'conflict_count': manual_conflict_count,
+            'authoritative_source': 'USER_MANUAL',
+        },
         'most_profitable_cohort': most_profitable,
         'highest_quality_cohort': highest_quality,
         'biggest_verified_leak': biggest_leak,
@@ -295,7 +342,8 @@ def build_le_diagnosis(
         'findings': findings,
         'recent_trades': trade_rows[:50],
         'note': (
-            'LE diagnosis is deterministic. Missing evidence remains Unknown. '
-            'Rule and cohort P&L are descriptive associations and do not prove causation.'
+            'LE diagnosis uses deterministic system evidence plus authoritative recognized manual LE tags. '
+            'Manual user assertions win the final status for the exact mapped concept while the prior system result is preserved. '
+            'Missing evidence remains Unknown. Rule and cohort P&L are descriptive associations and do not prove causation.'
         ),
     }
