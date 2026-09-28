@@ -54,7 +54,13 @@ from performance_report import build_performance_report
 from excursion_analysis import calculate_trade_excursion, EXCURSION_ENGINE_VERSION
 from library import router as library_router, init_library_tables, apply_aliases, library_names, TAG_TYPES as LIBRARY_TAG_TYPES
 from smoking_gun_routes import router as smoking_gun_router
-from le_analysis import build_le_levels, build_le_review
+from le_analysis import build_le_levels, build_le_review, entry_datetime
+from le_compliance import (
+    LE_COMPLIANCE_VERSION,
+    LE_PLAYBOOK_REFERENCE,
+    build_le_compliance,
+    summarize_le_compliance_snapshots,
+)
 from smoking_gun_library import ANALYTICS_ENGINE_VERSION
 from trade_metrics import (
     trade_is_closed,
@@ -1552,16 +1558,130 @@ def delete_trade_chart_screenshot(
     return {"deleted": True}
 
 
-@app.get("/api/trades/{trade_group:path}/le-review")
-async def get_trade_le_review(
-    trade_group: str,
-    conn: sqlite3.Connection = Depends(get_connection),
-):
-    """Read-only LE evidence review.
 
-    This endpoint never writes strategy/tags automatically. It combines deterministic
-    market-data evidence with a conservative Groq suggestion when Groq is configured.
-    """
+def _le_compliance_cache_key(trade_group: str) -> str:
+    return f"le_compliance:{trade_group}"
+
+
+def _trade_dict_with_executions(row) -> dict:
+    trade = row_to_dict(row)
+    try:
+        trade["executions"] = json.loads(trade.get("executions") or "[]")
+    except Exception:
+        trade["executions"] = []
+    return trade
+
+
+def _load_le_day_context(conn, trade: dict) -> dict | None:
+    account_id = trade.get("account_id")
+    trade_date = trade.get("date")
+    if account_id is None or not trade_date:
+        return None
+
+    rows = conn.execute(
+        "SELECT * FROM trades WHERE account_id=? AND date=? ORDER BY id",
+        (account_id, trade_date),
+    ).fetchall()
+    trades = [_trade_dict_with_executions(row) for row in rows]
+
+    def sort_key(item):
+        dt = entry_datetime(item)
+        return (
+            dt is None,
+            dt.isoformat() if dt is not None else "",
+            int(item.get("id") or 0),
+        )
+
+    trades.sort(key=sort_key)
+    index = next(
+        (i for i, item in enumerate(trades) if item.get("trade_group") == trade.get("trade_group")),
+        None,
+    )
+    if index is None:
+        return None
+
+    def result_label(item):
+        pnl = float(item.get("net_pnl") or 0)
+        if pnl > 0:
+            return "green"
+        if pnl < 0:
+            return "red"
+        return "flat"
+
+    return {
+        "sequence": index + 1,
+        "prior_results": [result_label(item) for item in trades[:index]],
+        "day_trade_count": len(trades),
+    }
+
+
+def _load_le_risk_plan_for_trade(conn, trade: dict) -> dict | None:
+    account_id = trade.get("account_id")
+    trade_date = trade.get("date")
+    if account_id is None or not trade_date:
+        return None
+    row = conn.execute(
+        "SELECT value FROM settings WHERE account_id=? AND key=?",
+        (account_id, f"le_risk_plan:{trade_date}"),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        value = json.loads(row["value"])
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def _load_trade_analysis_dict(conn, trade_group: str) -> dict:
+    row = conn.execute(
+        "SELECT * FROM trade_analysis WHERE trade_group=?",
+        (trade_group,),
+    ).fetchone()
+    return row_to_dict(row) if row else {}
+
+
+def _cache_le_compliance(conn, account_id: int, trade_group: str, compliance: dict) -> None:
+    conn.execute(
+        """INSERT INTO settings (account_id, key, value) VALUES (?, ?, ?)
+           ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value""",
+        (
+            account_id,
+            _le_compliance_cache_key(trade_group),
+            json.dumps(compliance, separators=(",", ":"), default=str),
+        ),
+    )
+    conn.commit()
+
+
+def _load_cached_le_compliance(conn, account_id: int | None) -> list[dict]:
+    if account_id is None:
+        rows = conn.execute(
+            "SELECT value FROM settings WHERE key LIKE 'le_compliance:%'"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT value FROM settings WHERE account_id=? AND key LIKE 'le_compliance:%'",
+            (account_id,),
+        ).fetchall()
+    snapshots = []
+    for row in rows:
+        try:
+            payload = json.loads(row["value"])
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            snapshots.append(payload)
+    return snapshots
+
+
+async def _build_trade_le_compliance(
+    conn,
+    trade_group: str,
+    *,
+    include_ai: bool,
+    persist: bool,
+) -> dict:
     row = conn.execute(
         "SELECT * FROM trades WHERE trade_group=?",
         (trade_group,),
@@ -1569,13 +1689,160 @@ async def get_trade_le_review(
     if not row:
         raise HTTPException(status_code=404, detail="Trade not found")
 
-    trade = row_to_dict(row)
-    try:
-        trade["executions"] = json.loads(trade.get("executions") or "[]")
-    except Exception:
-        trade["executions"] = []
+    trade = _trade_dict_with_executions(row)
+    review = await build_le_review(trade, include_ai=include_ai)
+    analysis = _load_trade_analysis_dict(conn, trade_group)
+    day_context = _load_le_day_context(conn, trade)
+    risk_plan = _load_le_risk_plan_for_trade(conn, trade)
+    compliance = build_le_compliance(
+        trade,
+        review,
+        analysis=analysis,
+        day_context=day_context,
+        risk_plan=risk_plan,
+    )
+    review["compliance"] = compliance
 
-    return await build_le_review(trade)
+    account_id = trade.get("account_id")
+    if persist and account_id is not None:
+        _cache_le_compliance(conn, int(account_id), trade_group, compliance)
+        review["compliance_cached"] = True
+    else:
+        review["compliance_cached"] = False
+    return review
+
+
+@app.get("/api/trades/{trade_group:path}/le-review")
+async def get_trade_le_review(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Read-only LE evidence review with deterministic compliance grading."""
+    return await _build_trade_le_compliance(
+        conn,
+        trade_group,
+        include_ai=True,
+        persist=False,
+    )
+
+
+@app.post("/api/trades/{trade_group:path}/le-compliance/refresh")
+async def refresh_trade_le_compliance(
+    trade_group: str,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Rebuild one trade's LE evidence and persist only the derived compliance snapshot."""
+    return await _build_trade_le_compliance(
+        conn,
+        trade_group,
+        include_ai=True,
+        persist=True,
+    )
+
+
+@app.get("/api/le-playbook")
+def get_le_playbook():
+    return {
+        "compliance_version": LE_COMPLIANCE_VERSION,
+        "playbook": LE_PLAYBOOK_REFERENCE,
+    }
+
+
+@app.get("/api/le-compliance/summary")
+def get_le_compliance_summary(
+    account_id: int | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    snapshots = _load_cached_le_compliance(conn, account_id)
+    return summarize_le_compliance_snapshots(snapshots)
+
+
+class LEComplianceRebuildBody(BaseModel):
+    account_id: int | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    limit: int = 10
+    force: bool = False
+
+
+@app.post("/api/le-compliance/rebuild")
+async def rebuild_le_compliance(
+    body: LEComplianceRebuildBody,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Backfill deterministic LE compliance in bounded batches.
+
+    Groq classification is intentionally disabled here. The caller can repeat batches
+    until remaining=0 without spending AI tokens.
+    """
+    limit = max(1, min(int(body.limit or 10), 25))
+    clauses = ["1=1"]
+    params = []
+    if body.account_id is not None:
+        clauses.append("account_id=?")
+        params.append(body.account_id)
+    if body.date_from:
+        clauses.append("date>=?")
+        params.append(body.date_from)
+    if body.date_to:
+        clauses.append("date<=?")
+        params.append(body.date_to)
+
+    rows = conn.execute(
+        f"SELECT trade_group, account_id, date FROM trades WHERE {' AND '.join(clauses)} ORDER BY date, id",
+        tuple(params),
+    ).fetchall()
+
+    cached = {}
+    for snapshot in _load_cached_le_compliance(conn, body.account_id):
+        group = snapshot.get("trade_group")
+        if group:
+            cached[str(group)] = snapshot
+
+    candidates = []
+    skipped = 0
+    for row in rows:
+        group = str(row["trade_group"])
+        prior = cached.get(group)
+        if (
+            not body.force
+            and prior
+            and prior.get("compliance_version") == LE_COMPLIANCE_VERSION
+        ):
+            skipped += 1
+            continue
+        candidates.append(group)
+
+    batch = candidates[:limit]
+    results = []
+    errors = []
+    for group in batch:
+        try:
+            review = await _build_trade_le_compliance(
+                conn,
+                group,
+                include_ai=False,
+                persist=True,
+            )
+            results.append({
+                "trade_group": group,
+                "classification": (review.get("compliance") or {}).get("classification"),
+                "score": (review.get("compliance") or {}).get("score"),
+            })
+        except Exception as exc:
+            logger.warning("LE compliance backfill failed for %s", group, exc_info=True)
+            errors.append({"trade_group": group, "error": str(exc)})
+
+    snapshots = _load_cached_le_compliance(conn, body.account_id)
+    return {
+        "compliance_version": LE_COMPLIANCE_VERSION,
+        "processed": len(results),
+        "skipped_current": skipped,
+        "errors": errors,
+        "remaining": max(0, len(candidates) - len(batch)),
+        "results": results,
+        "summary": summarize_le_compliance_snapshots(snapshots),
+    }
 
 
 @app.get("/api/trades/{trade_group:path}/le-levels")
@@ -1603,6 +1870,7 @@ async def get_trade_le_levels(
 class AnalysisUpdate(BaseModel):
     strategy: str | None = None
     idea_source: str | None = None
+    risk_reward: float | None = None
     stop_loss: float | None = None
     risk_per_trade: float | None = None
     target_price: float | None = None
@@ -1615,7 +1883,7 @@ class AnalysisUpdate(BaseModel):
 
 @app.patch("/api/trades/{trade_group:path}/analysis")
 def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.Connection = Depends(get_connection)):
-    trade = conn.execute("SELECT trade_group, ticker, date FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
+    trade = conn.execute("SELECT trade_group, ticker, date, account_id FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
 
