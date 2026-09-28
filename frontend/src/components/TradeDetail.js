@@ -748,6 +748,7 @@ export function executionTimeETMinutes(dateStr, timeStr) {
 
 
 const TABS = ['Stats', 'Review', 'Tags', 'Executions', 'Chart Review'];
+const MOBILE_TABS = ['Overview', 'Review', 'Tags', 'Session'];
 const TRADE_DETAIL_TAB_KEY = 'trading-journal:trade-detail-tab';
 
 const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', date: '', time: '' };
@@ -889,6 +890,30 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   });
   const [analysis, setAnalysis] = useState(null);
   const [tags, setTags] = useState([]);
+  const [mobileTab, setMobileTab] = useState('Overview');
+  const [mobileAdvanced, setMobileAdvanced] = useState(false);
+  const [isMobileView, setIsMobileView] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    if (typeof window.matchMedia === 'function') return window.matchMedia('(max-width: 720px)').matches;
+    return window.innerWidth <= 720;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const query = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 720px)')
+      : null;
+    const update = () => setIsMobileView(query ? query.matches : window.innerWidth <= 720);
+    update();
+    if (query?.addEventListener) query.addEventListener('change', update);
+    else if (query?.addListener) query.addListener(update);
+    else window.addEventListener('resize', update);
+    return () => {
+      if (query?.removeEventListener) query.removeEventListener('change', update);
+      else if (query?.removeListener) query.removeListener(update);
+      else window.removeEventListener('resize', update);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -1002,6 +1027,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     if (!focusPlannedRisk || analysis == null || plannedRiskFocusHandled.current) return;
     plannedRiskFocusHandled.current = true;
     setTab('Stats');
+    setMobileTab('Overview');
     setStatsForm({
       strategy: analysis?.strategy || '',
       idea_source: analysis?.idea_source || 'Watchlist',
@@ -1313,8 +1339,378 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     if (onTradeUpdate) onTradeUpdate(t);
   };
 
+  const mobileTabIcon = {
+    Overview: FileText,
+    Review: ClipboardCheck,
+    Tags: TagsIcon,
+    Session: BookOpen,
+  };
+
+  const mobilePlannedRr = Number(analysis?.stop_loss) > 0 && Number(analysis?.target_price) > 0
+    ? `1:${(Number(analysis.target_price) / Number(analysis.stop_loss)).toFixed(2)}`
+    : '—';
+
+  const mobileExecs = parseExecs(trade);
+
   return (
     <div>
+      {isMobileView && (
+      <div className="td-mobile-view">
+        <section className="tdm-shell" aria-label="Mobile trade review">
+          <header className="tdm-trade-head">
+            <div className="tdm-head-row">
+              <button type="button" className="tdm-icon-btn" onClick={onBack} aria-label="Back to trades">
+                <ArrowLeft size={19} />
+              </button>
+
+              <div className="tdm-head-title">
+                <h1>{trade.ticker}</h1>
+                <div className="tdm-head-meta">
+                  <span>{trade.date}</span>
+                  <span>·</span>
+                  <span>{trade.instrument_type ? trade.instrument_type.charAt(0) + trade.instrument_type.slice(1).toLowerCase() : 'Stock'}</span>
+                </div>
+              </div>
+
+              {tradeNavList.length > 1 ? (
+                <div className="tdm-head-nav" aria-label="Trade navigation">
+                  <button type="button" className="tdm-icon-btn small" onClick={() => goTo(navIdx - 1)} disabled={!hasPrev} aria-label="Previous trade">
+                    <ChevronLeft size={17} />
+                  </button>
+                  <span className="num">{navIdx + 1} / {tradeNavList.length}</span>
+                  <button type="button" className="tdm-icon-btn small" onClick={() => goTo(navIdx + 1)} disabled={!hasNext} aria-label="Next trade">
+                    <ChevronRight size={17} />
+                  </button>
+                </div>
+              ) : <span />}
+            </div>
+
+            <div className="tdm-trade-timing">
+              {stats.openTime && <>Opened <span className="num">{formatExecutionObjectET(stats.openExecution, trade.date)}</span></>}
+              {stats.closeTime && stats.isClosed && <> · Closed <span className="num">{formatExecutionObjectET(stats.closeExecution, trade.date)}</span></>}
+              {stats.holdMinutes != null && <> · Held <span className="num">{stats.fmtHold(stats.holdMinutes)}</span></>}
+            </div>
+
+            <div className="tdm-status-row">
+              <div className="tdm-chip-row">
+                <span className="tdm-chip side">{trade.side}</span>
+                <span className="tdm-chip">{stats.isClosed ? 'Closed' : 'Open'}</span>
+                {stats.isClosed && <span className={`tdm-chip ${stats.isWin ? 'win' : 'loss'}`}>{stats.isWin ? 'Win' : 'Loss'}</span>}
+              </div>
+              <div className="tdm-pnl-card">
+                <span>Net P&amp;L</span>
+                <strong className={pnl >= 0 ? 'pos' : 'neg'}>{fmtSigned$(pnl)}</strong>
+              </div>
+            </div>
+          </header>
+
+          <nav className="tdm-tabs" role="tablist" aria-label="Mobile trade detail sections">
+            {MOBILE_TABS.map(name => {
+              const Icon = mobileTabIcon[name];
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  role="tab"
+                  aria-selected={mobileTab === name}
+                  className={`tdm-tab ${mobileTab === name ? 'active' : ''}`}
+                  onClick={() => setMobileTab(name)}
+                >
+                  <Icon size={15} />
+                  <span>{name}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {mobileTab === 'Overview' && (
+            <div className="tdm-page">
+              <section className="tdm-card">
+                <div className="tdm-section-head">
+                  <div>
+                    <span className="tdm-kicker">Performance</span>
+                    <h2>Trade snapshot</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="tdm-text-btn"
+                    onClick={() => {
+                      setStatsForm({
+                        strategy: analysis?.strategy || '',
+                        idea_source: analysis?.idea_source || 'Watchlist',
+                        stop_loss: analysis?.stop_loss ?? '',
+                        risk_per_trade: analysis?.risk_per_trade ?? calculateDefaultPlannedRisk(trade) ?? '',
+                        target_price: analysis?.target_price ?? '',
+                        emotional_state: analysis?.emotional_state || '',
+                      });
+                      setEditingStats(true);
+                    }}
+                  >
+                    <Pencil size={13} /> Edit
+                  </button>
+                </div>
+
+                <div className="tdm-metric-grid">
+                  <div className="tdm-metric primary">
+                    <span>Net P&amp;L</span>
+                    <strong className={pnl >= 0 ? 'pos' : 'neg'}>{fmtSigned$(pnl)}</strong>
+                    <small>{stats.plPercent != null ? `ROI ${stats.plPercent >= 0 ? '+' : ''}${stats.plPercent.toFixed(2)}%` : 'ROI unavailable'}{trade.gross_pnl != null ? ` · Gross ${fmtSigned$(trade.gross_pnl)}` : ''}</small>
+                  </div>
+                  <div className="tdm-metric primary">
+                    <span>Realized R</span>
+                    <strong className={realizedRValue == null ? '' : realizedRValue >= 0 ? 'pos' : 'neg'}>{realizedR || '—'}</strong>
+                    <small>{plannedRisk ? `Risk basis ${fmt$(plannedRisk)}` : 'Add planned risk'}</small>
+                  </div>
+                  <div className="tdm-metric">
+                    <span>Avg entry</span>
+                    <strong>{stats.avgEntry ? `${stats.avgEntry.toFixed(2)}` : '—'}</strong>
+                  </div>
+                  <div className="tdm-metric">
+                    <span>Avg exit</span>
+                    <strong>{stats.avgExit ? `${stats.avgExit.toFixed(2)}` : '—'}</strong>
+                  </div>
+                  <div className="tdm-metric">
+                    <span>{trade.instrument_type === 'STOCK' ? 'Shares' : 'Contracts'}</span>
+                    <strong>{stats.totalQty || '—'}</strong>
+                    <small>{trade.commissions ? `Comm ${fmt$(trade.commissions)}` : 'No fee data'}</small>
+                  </div>
+                  <div className="tdm-metric">
+                    <span>Exit efficiency</span>
+                    <strong className={pnl > 0 && trade.exit_efficiency != null ? (Number(trade.exit_efficiency) >= 50 ? 'pos' : 'neg') : ''}>
+                      {pnl > 0 && trade.exit_efficiency != null ? `${Number(trade.exit_efficiency).toFixed(1)}%` : '—'}
+                    </strong>
+                  </div>
+                  <div className="tdm-metric">
+                    <span>Hold time</span>
+                    <strong>{stats.fmtHold(stats.holdMinutes)}</strong>
+                    <small>{stats.openTime ? formatExecutionObjectET(stats.openExecution, trade.date) : '—'} → {stats.closeTime ? formatExecutionObjectET(stats.closeExecution, trade.date) : '—'}</small>
+                  </div>
+                  <div className="tdm-metric">
+                    <span>Emotional state</span>
+                    <strong className="accent">{analysis?.emotional_state || '—'}</strong>
+                  </div>
+                </div>
+              </section>
+
+              <section className="tdm-card">
+                <div className="tdm-section-head compact">
+                  <div>
+                    <span className="tdm-kicker">Execution</span>
+                    <h2>Quality snapshot</h2>
+                  </div>
+                </div>
+                <div className="tdm-snapshot-grid">
+                  <div><span>MFE</span><strong className="pos">{trade.excursion_stale || trade.mfe_pct == null ? '—' : `+${Number(trade.mfe_pct).toFixed(2)}%`}</strong></div>
+                  <div><span>MAE</span><strong className="neg">{trade.excursion_stale || trade.mae_pct == null ? '—' : `-${Math.abs(Number(trade.mae_pct)).toFixed(2)}%`}</strong></div>
+                  <div><span>Planned R:R</span><strong className="accent">{mobilePlannedRr}</strong></div>
+                  <div><span>{usesMaxPremiumRiskBaseline ? 'Max premium risk' : 'Planned risk'}</span><strong className="caution">{plannedRisk ? fmt$(-plannedRisk) : '—'}</strong></div>
+                </div>
+                {(analysis?.strategy || analysis?.idea_source) && (
+                  <div className="tdm-setup-line">
+                    {analysis?.strategy && <span><b>Strategy</b>{analysis.strategy}</span>}
+                    {analysis?.idea_source && <span><b>Source</b>{analysis.idea_source}</span>}
+                  </div>
+                )}
+              </section>
+
+              {editingStats && (
+                <section className="tdm-card tdm-edit-card">
+                  <div className="tdm-section-head">
+                    <div><span className="tdm-kicker">Edit</span><h2>Trade plan</h2></div>
+                    <div className="tdm-inline-actions">
+                      <button type="button" className="btn btn-primary btn-sm" onClick={handleSaveStats} disabled={savingStats}>{savingStats ? 'Saving…' : 'Save'}</button>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingStats(false)}>Cancel</button>
+                    </div>
+                  </div>
+                  <div className="tdm-edit-grid">
+                    <div>
+                      <div className="field-label">Strategy</div>
+                      <SelectWithAdd
+                        value={statsForm.strategy}
+                        onChange={v => setStatsForm(f => ({ ...f, strategy: v }))}
+                        options={analysisOptions.strategies}
+                        label="Strategy"
+                        placeholder="Select strategy"
+                      />
+                    </div>
+                    <EditField label="Stop Distance ($)" type="number" value={String(statsForm.stop_loss)} onChange={v => setStatsForm(f => ({ ...f, stop_loss: v }))} />
+                    <EditField label="Target Distance ($)" type="number" value={String(statsForm.target_price)} onChange={v => setStatsForm(f => ({ ...f, target_price: v }))} />
+                    <EditField label="Planned Risk ($)" type="number" value={String(statsForm.risk_per_trade)} onChange={v => setStatsForm(f => ({ ...f, risk_per_trade: v }))} />
+                    <EditField label="Emotional State" value={statsForm.emotional_state} onChange={v => setStatsForm(f => ({ ...f, emotional_state: v }))} options={EMOTIONAL_STATES} />
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
+
+          {mobileTab === 'Review' && (
+            <div className="tdm-page">
+              <section className="tdm-card">
+                <div className="tdm-section-head">
+                  <div><span className="tdm-kicker">Review</span><h2>Strategy notes</h2></div>
+                  {!editingStrategy ? (
+                    <button type="button" className="tdm-text-btn" onClick={startReview}><Pencil size={13} /> Edit</button>
+                  ) : (
+                    <div className="tdm-inline-actions">
+                      <button type="button" className="btn btn-primary btn-sm" onClick={handleSaveStrategy} disabled={savingStrategy}>{savingStrategy ? 'Saving…' : 'Save'}</button>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingStrategy(false)}>Cancel</button>
+                    </div>
+                  )}
+                </div>
+
+                {editingStrategy ? (
+                  <div className="tdm-review-edit">
+                    <EditTextarea label="Entry Reason" value={strategyForm.entry_reason || ''} onChange={v => setStrategyForm(f => ({ ...f, entry_reason: v }))} />
+                    <EditTextarea label="Exit Reason" value={strategyForm.exit_reason || ''} onChange={v => setStrategyForm(f => ({ ...f, exit_reason: v }))} />
+                    <EditTextarea label="Mistakes" value={strategyForm.mistakes || ''} onChange={v => setStrategyForm(f => ({ ...f, mistakes: v }))} />
+                    <EditTextarea label="Journal Note" value={strategyForm.notes || ''} onChange={v => setStrategyForm(f => ({ ...f, notes: v }))} />
+                  </div>
+                ) : (
+                  <div className="tdm-note-stack">
+                    <details className="tdm-note-block" open>
+                      <summary><span>Entry reason</span><ChevronRight size={15} /></summary>
+                      <div>{analysis?.entry_reason || 'No entry reason recorded.'}</div>
+                    </details>
+                    <details className="tdm-note-block">
+                      <summary><span>Exit reason</span><ChevronRight size={15} /></summary>
+                      <div>{analysis?.exit_reason || 'No exit reason recorded.'}</div>
+                    </details>
+                    <details className={`tdm-note-block ${analysis?.mistakes ? 'danger' : ''}`}>
+                      <summary><span>Mistakes</span><ChevronRight size={15} /></summary>
+                      <div>{analysis?.mistakes || 'No mistake recorded.'}</div>
+                    </details>
+                    {analysis?.notes && (
+                      <details className="tdm-note-block">
+                        <summary><span>Journal note</span><ChevronRight size={15} /></summary>
+                        <div className="tdm-note-pre">{analysis.notes}</div>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {analysis?.ai_feedback && (
+                <section className="tdm-card">
+                  <div className="tdm-section-head compact"><div><span className="tdm-kicker">AI review</span><h2>Feedback</h2></div></div>
+                  <div className="tdm-ai-feedback">{analysis.ai_feedback}</div>
+                </section>
+              )}
+            </div>
+          )}
+
+          {mobileTab === 'Tags' && (
+            <div className="tdm-page">
+              <section className="tdm-card">
+                <div className="tdm-section-head compact">
+                  <div><span className="tdm-kicker">Classification</span><h2>Tags</h2></div>
+                </div>
+
+                <div className="tdm-tag-cloud">
+                  {tags.length ? tags.map(tag => (
+                    <span key={tag.id} className={`tdm-tag ${tag.tag_type === 'mistake' ? 'danger' : ''}`}>
+                      {tag.tag_value}
+                      <button type="button" aria-label={`Remove ${tag.tag_value}`} onClick={() => handleDeleteTag(tag.id)}>×</button>
+                    </span>
+                  )) : <span className="tdm-empty">No tags recorded yet.</span>}
+                </div>
+
+                <div className="tdm-tag-add">
+                  <select value={tagForm.tag_type} onChange={e => setTagForm(f => ({ ...f, tag_type: e.target.value }))} aria-label="Tag type">
+                    {TAG_TYPES.map(type => <option value={type} key={type}>{TAG_TYPE_META[type]?.label || type}</option>)}
+                  </select>
+                  <input
+                    value={tagForm.tag_value}
+                    onChange={e => setTagForm(f => ({ ...f, tag_value: e.target.value }))}
+                    placeholder="Add tag"
+                    aria-label="Tag value"
+                  />
+                  <button type="button" className="btn btn-primary btn-sm" onClick={handleAddTag} disabled={savingTag || !tagForm.tag_value.trim()}>
+                    {savingTag ? 'Adding…' : 'Add'}
+                  </button>
+                </div>
+                {tagError && <div className="notice neg" role="alert">{tagError}</div>}
+              </section>
+            </div>
+          )}
+
+          {mobileTab === 'Session' && (
+            <div className="tdm-page">
+              <div className="tdm-session-wrap">
+                <DaySidebar currentTrade={trade} onOpenDetail={onOpenDetail} />
+              </div>
+
+              <section className="tdm-card tdm-chart-card" aria-label="Mobile trade chart">
+                <div className="tdm-section-head compact"><div><span className="tdm-kicker">Chart</span><h2>{trade.ticker} · 10m</h2></div></div>
+                <TradingChart
+                  ticker={trade.ticker}
+                  date={trade.date}
+                  tradeGroup={trade.trade_group}
+                  defaultTimeframe="10Min"
+                  executions={mobileExecs}
+                  side={trade.side}
+                  height={360}
+                  mobileHeight={300}
+                  compactMobile
+                />
+              </section>
+
+              <details className="tdm-card tdm-execution-details">
+                <summary>
+                  <div><span className="tdm-kicker">Orders</span><strong>Executions</strong></div>
+                  <span>{mobileExecs.length}</span>
+                </summary>
+                <div className="tdm-exec-list">
+                  {mobileExecs.length ? mobileExecs.map((exec, idx) => (
+                    <div className="tdm-exec-row" key={idx}>
+                      <div>
+                        <b>{exec.action || exec.side || 'Execution'} · {exec.qty ?? exec.quantity ?? '—'}</b>
+                        <small>{formatExecutionObjectET(exec, trade.date)}</small>
+                      </div>
+                      <strong className="num">{exec.price != null ? `${Number(exec.price).toFixed(2)}` : '—'}</strong>
+                    </div>
+                  )) : <div className="tdm-empty">No executions recorded.</div>}
+                </div>
+              </details>
+
+              <section className="tdm-card tdm-chart-review-mobile">
+                <div className="tdm-section-head compact"><div><span className="tdm-kicker">Review chart</span><h2>Screenshot</h2></div></div>
+                {chartScreenshotUrl ? (
+                  <button type="button" className="tdm-chart-thumb" onClick={openChartScreenshot} aria-label="Open chart screenshot full screen">
+                    <img src={chartScreenshotUrl} alt={`${trade.ticker} TradingView review screenshot`} />
+                  </button>
+                ) : (
+                  <label className="tdm-upload-compact">
+                    <Upload size={16} />
+                    <span>{chartScreenshotUploading ? 'Uploading…' : 'Add chart screenshot'}</span>
+                    <input type="file" accept="image/png,image/jpeg,image/webp" disabled={chartScreenshotUploading} onChange={e => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      handleChartScreenshotUpload(file);
+                    }} />
+                  </label>
+                )}
+              </section>
+
+              <button
+                type="button"
+                className="tdm-advanced-toggle"
+                aria-expanded={mobileAdvanced}
+                onClick={() => setMobileAdvanced(value => !value)}
+              >
+                <span>
+                  <b>Advanced trade editor</b>
+                  <small>Executions, full review templates, chart review and detailed fields</small>
+                </span>
+                <ChevronRight size={17} />
+              </button>
+            </div>
+          )}
+        </section>
+      </div>
+      )}
+
+      {(!isMobileView || mobileAdvanced) && (
+      <div className={`td-desktop-view${mobileAdvanced ? ' mobile-open' : ''}`}>
       {/* Back nav + prev/next */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <button type="button" onClick={onBack} className="btn btn-ghost" style={{ paddingLeft: 8 }}>
@@ -2258,6 +2654,9 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           </div>
         </div>
       </div>
+
+      </div>
+      )}
 
       <dialog
         ref={chartScreenshotDialogRef}
