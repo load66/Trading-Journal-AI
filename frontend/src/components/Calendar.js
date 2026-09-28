@@ -155,7 +155,7 @@ export function buildMonthShareSvg({
   const cellH = 100;
   const rows = Math.max(1, weeks.length);
   const height = gridY + headerH + rows * cellH + Math.max(0, rows - 1) * cellGap + 78;
-  const pfValue = profitFactor == null ? '∞' : Number(profitFactor).toFixed(2);
+  const pfValue = profitFactor === undefined ? '--' : (profitFactor == null ? '∞' : Number(profitFactor).toFixed(2));
   const winValue = winRate === '--' ? '--' : `${winRate}%`;
   const monthName = MONTHS[month - 1];
   const monthShort = MONTHS_SHORT[month - 1];
@@ -174,7 +174,10 @@ export function buildMonthShareSvg({
   const greenRate = tradingDays > 0 ? Math.round((greenDays / tradingDays) * 100) : 0;
 
   const monthWinTarget = targetLine(Number(winRate), SHARE_BASELINES.winRate, '%');
-  const monthPfTarget = targetLine(Number(profitFactor), SHARE_BASELINES.profitFactor);
+  const monthPfTarget = targetLine(
+    profitFactor === undefined ? NaN : (profitFactor == null ? Infinity : Number(profitFactor)),
+    SHARE_BASELINES.profitFactor,
+  );
   const monthRatioTarget = targetLine(Number(avgWinLoss), SHARE_BASELINES.avgWinLoss);
 
   const metrics = [
@@ -309,13 +312,16 @@ export function buildYearShareSvg({
   const profitableRate = active.length ? Math.round((profitableMonths / active.length) * 100) : 0;
 
   const yearWinTarget = targetLine(Number(yearWinRate), SHARE_BASELINES.winRate, '%');
-  const yearPfTarget = targetLine(Number(yearProfitFactor), SHARE_BASELINES.profitFactor);
+  const yearPfTarget = targetLine(
+    yearProfitFactor === undefined ? NaN : (yearProfitFactor == null ? Infinity : Number(yearProfitFactor)),
+    SHARE_BASELINES.profitFactor,
+  );
   const yearRatioTarget = targetLine(Number(yearAvgWinLoss), SHARE_BASELINES.avgWinLoss);
 
   const metrics = [
     ['YTD NET P&L', signedPnl(yearPnl), metricHelp.pnl, yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : 'neutral', null],
     ['WIN RATE', yearWinRate === '--' ? '--' : `${yearWinRate}%`, metricHelp.win, 'neutral', yearWinTarget],
-    ['PROFIT FACTOR', yearProfitFactor == null ? '∞' : Number(yearProfitFactor).toFixed(2), metricHelp.pf, 'neutral', yearPfTarget],
+    ['PROFIT FACTOR', yearProfitFactor === undefined ? '--' : (yearProfitFactor == null ? '∞' : Number(yearProfitFactor).toFixed(2)), metricHelp.pf, 'neutral', yearPfTarget],
     ['AVG WIN / LOSS', yearAvgWinLoss, metricHelp.ratio, 'neutral', yearRatioTarget],
     ['TRADING DAYS', tradingDays.toLocaleString('en-US'), metricHelp.days, 'neutral', null],
   ].map((m, i) => shareMetricCard(margin + i * (metricW + metricGap), 154, metricW, ...m)).join('');
@@ -606,7 +612,10 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView, share
     ? (Math.abs(Number(yearKpis.avg_win || 0)) / Math.abs(Number(yearKpis.avg_loss || 0))).toFixed(2)
     : '--';
   const yearWinTarget = targetLine(Number(yearWinRate), SHARE_BASELINES.winRate, '%');
-  const yearPfTarget = targetLine(Number(yearProfitFactor), SHARE_BASELINES.profitFactor);
+  const yearPfTarget = targetLine(
+    yearProfitFactor === undefined ? NaN : (yearProfitFactor == null ? Infinity : Number(yearProfitFactor)),
+    SHARE_BASELINES.profitFactor,
+  );
   const yearRatioTarget = targetLine(Number(yearAvgWinLoss), SHARE_BASELINES.avgWinLoss);
 
   const exportYearImage = async () => {
@@ -786,7 +795,10 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
     ? (Math.abs(monthKpis.avg_win || 0) / Math.abs(monthKpis.avg_loss)).toFixed(2)
     : '--';
   const monthWinTarget = targetLine(Number(winRate), SHARE_BASELINES.winRate, '%');
-  const monthPfTarget = targetLine(Number(pf), SHARE_BASELINES.profitFactor);
+  const monthPfTarget = targetLine(
+    monthKpis == null ? NaN : (pf == null ? Infinity : Number(pf)),
+    SHARE_BASELINES.profitFactor,
+  );
   const monthRatioTarget = targetLine(Number(avgWinLoss), SHARE_BASELINES.avgWinLoss);
 
   const exportMonthImage = async () => {
