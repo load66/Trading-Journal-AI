@@ -110,7 +110,32 @@
   padding: 0;
 }
 
-html { color-scheme: dark; }
+html {
+  color-scheme: dark;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+@supports (overflow: clip) {
+  html,
+  body,
+  #root {
+    overflow-x: clip;
+  }
+}
 
 body {
   background: var(--surface-page);
@@ -198,10 +223,23 @@ summary:focus-visible {
    App shell
    ============================================================ */
 
-.app-shell { min-height: 100vh; background: var(--surface-page); }
+.app-shell {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 100vh;
+  background: var(--surface-page);
+  overflow-x: hidden;
+}
+@supports (overflow: clip) {
+  .app-shell { overflow-x: clip; }
+}
 
 .app-header {
   position: sticky;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   top: 0;
   z-index: 200;
   background: var(--surface-header);
@@ -210,6 +248,8 @@ summary:focus-visible {
 }
 .app-header-inner {
   display: grid;
+  width: 100%;
+  min-width: 0;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas: "brand nav actions";
   align-items: center;
@@ -376,11 +416,31 @@ summary:focus-visible {
 }
 
 .app-main {
+  width: 100%;
+  min-width: 0;
   padding: var(--space-6) var(--space-7) 96px;
   max-width: 1920px;
   margin: 0 auto;
 }
 @media (max-width: 720px) {
+  html,
+  body,
+  #root,
+  .app-shell,
+  .app-header,
+  .app-header-inner,
+  .app-main {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app-header-inner,
+  .app-main {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
   .app-main {
     padding:
       12px max(12px, env(safe-area-inset-right))

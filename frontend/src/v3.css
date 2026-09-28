@@ -7371,3 +7371,75 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
     padding-inline: 9px;
   }
 }
+
+
+/* ---------- mobile viewport scale contract ----------
+   The dashboard must never enlarge the page's layout viewport. Wide tables and
+   charts may scroll inside their own wrappers, but the app/dashboard itself
+   always matches the phone's visual viewport. */
+.v3-dashboard {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+@supports (overflow: clip) {
+  .v3-dashboard { overflow-x: clip; }
+}
+.v3-dashboard > *,
+.v3-dashboard-main,
+.v3-dashboard-section,
+.v3-hero,
+.v3-measures-dashboard,
+.v3-dashboard-planning,
+.v3-smoking-band {
+  min-width: 0;
+  max-width: 100%;
+}
+.v3-dashboard .v3-scroll {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 600px) {
+  .v3-dashboard {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    --v3-pad: 14px;
+  }
+
+  .v3-hero,
+  .v3-hero-compact,
+  .v3-measures-dashboard,
+  .v3-dashboard-core,
+  .v3-dashboard-main,
+  .v3-dashboard-section,
+  .v3-dashboard-planning,
+  .v3-smoking-band {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .v3-measures-dashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v3-m,
+  .v3-hero-primary,
+  .v3-last-session-card,
+  .v3-hero-toolbar,
+  .v3-range-slot {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .v3-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
