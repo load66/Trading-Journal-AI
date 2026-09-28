@@ -2,6 +2,7 @@ import anthropic
 import httpx
 import base64
 import json
+import logging
 import os
 import re
 from datetime import datetime, timedelta
@@ -22,6 +23,8 @@ from trade_metrics import (
 )
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 MODEL = "claude-opus-5"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -1161,68 +1164,370 @@ def build_brain_context(conn, account_id, question: str = "") -> str:
     return raw
 
 
-def _groq_brain_response(messages: list[dict], context: str, api_key: str) -> str:
+BRAIN_PROVIDER_CONTEXT_CHARS = 18000
+BRAIN_PROVIDER_RETRY_CONTEXT_CHARS = 7000
+BRAIN_PROVIDER_HISTORY_MESSAGES = 4
+BRAIN_PROVIDER_HISTORY_CHARS = 1500
+
+
+def _brain_last_question(messages: list[dict]) -> str:
+    for msg in reversed(messages or []):
+        if str(msg.get("role") or "").lower() == "user":
+            return str(msg.get("content") or "").strip()
+    return ""
+
+
+def _brain_load_context(context: str) -> dict:
+    try:
+        value = json.loads(context or "{}")
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _brain_rule_stats(data: dict) -> list[dict]:
+    return list((((data.get("le_compliance") or {}).get("summary") or {}).get("rule_stats") or []))
+
+
+def _brain_rule_row(data: dict, rule_id: str) -> dict | None:
+    return next((row for row in _brain_rule_stats(data) if row.get("id") == rule_id), None)
+
+
+def _brain_money_text(value) -> str:
+    try:
+        return f"${float(value):,.2f}"
+    except Exception:
+        return "N/A"
+
+
+def _brain_le_coverage_line(data: dict) -> str:
+    le = data.get("le_compliance") or {}
+    summary = le.get("summary") or {}
+    audited = int(summary.get("audited_trades") or 0)
+    total = int(summary.get("journal_completed_trades") or 0)
+    coverage = float(summary.get("audit_coverage_pct") or 0)
+    return f"LE audit coverage: **{audited}/{total} completed trades ({coverage:.1f}%)**."
+
+
+def _brain_deterministic_le_answer(question: str, context: str) -> str | None:
+    q = str(question or "").strip().lower()
+    if not _brain_question_needs_le(q):
+        return None
+
+    data = _brain_load_context(context)
+    le = data.get("le_compliance") or {}
+    summary = le.get("summary") or {}
+    audited = le.get("audited_trades") or []
+    if not le:
+        return (
+            "## LE audit\n"
+            "I do not have a deterministic LE compliance packet for this question yet. "
+            "Open or refresh LE Review on trades so Brain can grade them as Pass / Fail / Unknown without guessing."
+        )
+
+    coverage_line = _brain_le_coverage_line(data)
+
+    if ("which le rule" in q or ("rule" in q and ("cost" in q or "money" in q))) and "rule" in q:
+        failed = [row for row in _brain_rule_stats(data) if int(row.get("fail") or 0) > 0]
+        if not failed:
+            return (
+                "## LE rule leak\n"
+                f"{coverage_line}\n\n"
+                "No **verified LE checklist failure** exists in the audited sample yet. "
+                "That does not mean every trade was LE-compliant; Unknown evidence is deliberately not treated as Pass or Fail."
+            )
+        negative = [row for row in failed if float(row.get("fail_net_pnl") or 0) < 0]
+        if negative:
+            worst = min(negative, key=lambda row: (float(row.get("fail_net_pnl") or 0), -int(row.get("fail") or 0)))
+            lead = (
+                f"The strongest negative P&L association is **{worst.get('label') or worst.get('id')}**: "
+                f"**{int(worst.get('fail') or 0)} verified failures** with "
+                f"**{_brain_money_text(worst.get('fail_net_pnl'))}** combined realized P&L on those trades."
+            )
+        else:
+            worst = max(failed, key=lambda row: int(row.get("fail") or 0))
+            lead = (
+                f"The most frequent verified LE violation is **{worst.get('label') or worst.get('id')}** "
+                f"with **{int(worst.get('fail') or 0)} failures**. Its failed trades are not net-negative in the current audited sample, "
+                "so I would not call it a proven money leak yet."
+            )
+        ranked = sorted(failed, key=lambda row: (-int(row.get("fail") or 0), float(row.get("fail_net_pnl") or 0)))[:4]
+        rows = "\n".join(
+            f"- **{row.get('label') or row.get('id')}** — {int(row.get('fail') or 0)} fails; "
+            f"failed-trade P&L {_brain_money_text(row.get('fail_net_pnl'))}"
+            for row in ranked
+        )
+        return (
+            "## LE rule leak\n"
+            f"{lead}\n\n{coverage_line}\n\n"
+            "### Confirmed violations\n"
+            f"{rows}\n\n"
+            "**Interpretation:** this is descriptive association, not proof that the rule violation caused the P&L."
+        )
+
+    if "chop" in q:
+        row = _brain_rule_row(data, "not_chop_hour")
+        if not row:
+            return f"## Chop Hour\n{coverage_line}\n\nI do not have enough deterministic Chop Hour evidence yet."
+        fail = int(row.get("fail") or 0)
+        passed = int(row.get("pass") or 0)
+        return (
+            "## Chop Hour audit\n"
+            f"{coverage_line}\n\n"
+            f"- Trades **inside LE Chop Hour (verified failures): {fail}**\n"
+            f"- Trades **outside Chop Hour (verified passes): {passed}**\n"
+            f"- P&L on Chop Hour failures: **{_brain_money_text(row.get('fail_net_pnl'))}**\n"
+            f"- P&L on passes: **{_brain_money_text(row.get('pass_net_pnl'))}**\n\n"
+            "Unknown entries are excluded rather than guessed."
+        )
+
+    if "three trade" in q or "3 trade" in q:
+        row = _brain_rule_row(data, "trade_count_ok")
+        if not row:
+            return f"## Three Trade Rule\n{coverage_line}\n\nI do not have enough deterministic sequence evidence yet."
+        return (
+            "## Three Trade Rule\n"
+            f"{coverage_line}\n\n"
+            f"- Verified violations: **{int(row.get('fail') or 0)}**\n"
+            f"- Verified passes: **{int(row.get('pass') or 0)}**\n"
+            f"- Unknown: **{int(row.get('unknown') or 0)}**\n"
+            f"- P&L on verified violations: **{_brain_money_text(row.get('fail_net_pnl'))}**"
+        )
+
+    if "runner" in q and ("early" in q or "sell" in q or "exit" in q):
+        management = data.get("management") or {}
+        coverage = (management.get("exit_efficiency_coverage") or {}).get("pct")
+        avg = management.get("avg_exit_efficiency")
+        return (
+            "## LE runner management\n"
+            f"{coverage_line}\n\n"
+            f"Exit-efficiency coverage is **{_brain_pct(coverage)}** with average exit efficiency **{_brain_pct(avg)}**. "
+            "That metric can show whether you leave favorable excursion on the table, but it does **not** by itself prove an LE 10m 8 EMA runner violation. "
+            "For a strict LE verdict, Brain needs the per-trade confirmed 10m 8 EMA exit evidence from LE Review."
+        )
+
+    if "audit" in q and ("trade" in q or "recent" in q or "le" in q):
+        counts = summary.get("classification_counts") or {}
+        violations = int(counts.get("LE_VIOLATION") or 0)
+        incomplete = int(counts.get("INCOMPLETE_EVIDENCE") or 0)
+        compliant = int(counts.get("LE_COMPLIANT") or 0)
+        failed_rules = [row for row in _brain_rule_stats(data) if int(row.get("fail") or 0) > 0]
+        failed_rules = sorted(failed_rules, key=lambda row: (-int(row.get("fail") or 0), float(row.get("fail_net_pnl") or 0)))[:4]
+        rule_lines = "\n".join(
+            f"- **{row.get('label') or row.get('id')}** — {int(row.get('fail') or 0)} failures; "
+            f"associated P&L {_brain_money_text(row.get('fail_net_pnl'))}"
+            for row in failed_rules
+        ) or "- No verified checklist failures in the audited sample."
+        recent_lines = []
+        for item in audited[:6]:
+            failed_ids = item.get("failed_rule_ids") or []
+            failed_text = ", ".join(str(x).replace("_", " ") for x in failed_ids[:3]) if failed_ids else "no verified failures"
+            recent_lines.append(
+                f"- **{item.get('date') or '—'} {item.get('ticker') or '—'}** "
+                f"{_brain_money_text(item.get('net_pnl'))} — {item.get('classification') or 'UNAUDITED'}; {failed_text}"
+            )
+        recent_text = "\n".join(recent_lines) or "- No audited trades are cached yet."
+        return (
+            "## Recent LE audit\n"
+            f"{coverage_line}\n\n"
+            f"- **LE violations:** {violations}\n"
+            f"- **Incomplete evidence:** {incomplete}\n"
+            f"- **Fully compliant:** {compliant}\n\n"
+            "### Most common verified rule failures\n"
+            f"{rule_lines}\n\n"
+            "### Recent audited trades\n"
+            f"{recent_text}\n\n"
+            "**Important:** Unknown evidence is not counted as a failure or a pass. The audit gets stronger as evidence coverage increases."
+        )
+
+    return None
+
+
+def _brain_trim_strings(value, max_string: int):
+    if isinstance(value, dict):
+        return {k: _brain_trim_strings(v, max_string) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_brain_trim_strings(v, max_string) for v in value]
+    if isinstance(value, str) and len(value) > max_string:
+        return value[:max_string] + "…"
+    return value
+
+
+def _brain_provider_context(context: str, max_chars: int = BRAIN_PROVIDER_CONTEXT_CHARS) -> str:
+    """Return a bounded, question-focused packet for external model providers."""
+    data = _brain_load_context(context)
+    if not data:
+        return str(context or "")[:max_chars]
+
+    strict = max_chars <= BRAIN_PROVIDER_RETRY_CONTEXT_CHARS
+    compact = {
+        "journal_scope": data.get("journal_scope"),
+        "question_scope": data.get("question_scope"),
+        "question_scope_stats": data.get("question_scope_stats"),
+        "overall": data.get("overall"),
+        "management": data.get("management"),
+        "target_detection": data.get("target_detection"),
+        "by_strategy": (data.get("by_strategy") or [])[:4 if strict else 8],
+        "by_ticker": (data.get("by_ticker") or [])[:5 if strict else 10],
+        "by_side": data.get("by_side"),
+        "by_exit_window_et": data.get("by_exit_window_et"),
+        "by_hold_time": data.get("by_hold_time"),
+        "by_day": (data.get("by_day") or [])[:6 if strict else 12],
+        "best_trades": (data.get("best_trades") or [])[:2 if strict else 4],
+        "worst_trades": (data.get("worst_trades") or [])[:2 if strict else 4],
+        "recent_trades": (data.get("recent_trades") or [])[:4 if strict else 8],
+        "targeted_matches": (data.get("targeted_matches") or [])[:6 if strict else 12],
+    }
+    if not strict:
+        compact["recent_diary_insights"] = (data.get("recent_diary_insights") or [])[:2]
+        compact["recent_day_reviews"] = (data.get("recent_day_reviews") or [])[:2]
+
+    if data.get("le_playbook"):
+        playbook = data.get("le_playbook") or {}
+        compact["le_playbook"] = {
+            "name": playbook.get("name"),
+            "version": playbook.get("version"),
+            "compliance_version": playbook.get("compliance_version"),
+            "principles": (playbook.get("principles") or [])[:6],
+        }
+    if data.get("le_compliance"):
+        le = data.get("le_compliance") or {}
+        le_summary = dict(le.get("summary") or {})
+        le_summary["rule_stats"] = (le_summary.get("rule_stats") or [])[:13]
+        compact["le_compliance"] = {
+            "summary": le_summary,
+            "audited_trades": (le.get("audited_trades") or [])[:6 if strict else 12],
+        }
+
+    compact = _brain_trim_strings(compact, 220 if strict else 420)
+    raw = json.dumps(compact, separators=(",", ":"), sort_keys=True, default=str)
+    if len(raw) <= max_chars:
+        return raw
+
+    minimal = {
+        "journal_scope": compact.get("journal_scope"),
+        "question_scope": compact.get("question_scope"),
+        "question_scope_stats": compact.get("question_scope_stats"),
+        "overall": compact.get("overall"),
+        "management": compact.get("management"),
+        "target_detection": compact.get("target_detection"),
+        "targeted_matches": (compact.get("targeted_matches") or [])[:3],
+        "worst_trades": (compact.get("worst_trades") or [])[:2],
+        "best_trades": (compact.get("best_trades") or [])[:2],
+        "le_compliance": compact.get("le_compliance"),
+    }
+    minimal = _brain_trim_strings(minimal, 160)
+    raw = json.dumps(minimal, separators=(",", ":"), sort_keys=True, default=str)
+    if len(raw) <= max_chars:
+        return raw
+
+    # Last-resort packet remains valid JSON instead of cutting a JSON string mid-value.
+    emergency = {
+        "journal_scope": (minimal.get("journal_scope") or {}),
+        "question_scope_stats": (minimal.get("question_scope_stats") or {}),
+        "overall": (minimal.get("overall") or {}),
+        "provider_context_compacted": True,
+    }
+    return json.dumps(emergency, separators=(",", ":"), sort_keys=True, default=str)[:max_chars]
+
+
+def _brain_history(messages: list[dict], *, strict: bool = False) -> list[dict]:
+    limit = 2 if strict else BRAIN_PROVIDER_HISTORY_MESSAGES
+    char_limit = 800 if strict else BRAIN_PROVIDER_HISTORY_CHARS
     history = []
-    for msg in messages[-8:]:
+    for msg in (messages or [])[-limit:]:
         role = "assistant" if msg.get("role") == "assistant" else "user"
         content = str(msg.get("content") or "")
-        if len(content) > 4000:
-            content = content[:4000] + "\n[message truncated]"
+        if len(content) > char_limit:
+            content = content[:char_limit] + "\n[message truncated]"
         history.append({"role": role, "content": content})
-    if history:
-        history[-1] = {
-            "role": "user",
-            "content": f"[JOURNAL EVIDENCE]\n{context}\n\n[CURRENT QUESTION]\n{history[-1]['content']}",
+    return history
+
+
+def _groq_brain_response(messages: list[dict], context: str, api_key: str) -> str:
+    last_error = None
+    for strict, budget in (
+        (False, BRAIN_PROVIDER_CONTEXT_CHARS),
+        (True, BRAIN_PROVIDER_RETRY_CONTEXT_CHARS),
+    ):
+        history = _brain_history(messages, strict=strict)
+        provider_context = _brain_provider_context(context, budget)
+        if history:
+            history[-1] = {
+                "role": "user",
+                "content": f"[JOURNAL EVIDENCE]\n{provider_context}\n\n[CURRENT QUESTION]\n{history[-1]['content']}",
+            }
+        payload = {
+            "model": GROQ_MODEL,
+            "messages": [{"role": "system", "content": BRAIN_SYSTEM_PROMPT}, *history],
+            "max_completion_tokens": 2200,
+            "reasoning_effort": "medium",
+            "temperature": 0.1,
         }
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [{"role": "system", "content": BRAIN_SYSTEM_PROMPT}, *history],
-        "max_completion_tokens": 3000,
-        "reasoning_effort": "medium",
-        "temperature": 0.1,
-    }
-    response = httpx.post(
-        GROQ_API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=90.0,
-    )
-    response.raise_for_status()
-    body = response.json()
-    try:
-        return str(body["choices"][0]["message"]["content"]).strip()
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError("Groq returned an unexpected Brain response shape.") from exc
+        response = httpx.post(
+            GROQ_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=90.0,
+        )
+        if response.status_code == 413 and not strict:
+            last_error = RuntimeError("Groq rejected the normal Brain context as too large.")
+            continue
+        response.raise_for_status()
+        body = response.json()
+        try:
+            return str(body["choices"][0]["message"]["content"]).strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError("Groq returned an unexpected Brain response shape.") from exc
+    if last_error:
+        raise last_error
+    raise RuntimeError("Groq Brain request failed.")
 
 
 def _anthropic_brain_response(messages: list[dict], context: str) -> str:
     client = get_client()
-    claude_messages = []
-    for msg in messages[-8:]:
-        role = "assistant" if msg.get("role") == "assistant" else "user"
-        content = str(msg.get("content") or "")
-        if len(content) > 4000:
-            content = content[:4000] + "\n[message truncated]"
-        claude_messages.append({"role": role, "content": content})
+    claude_messages = _brain_history(messages)
+    provider_context = _brain_provider_context(context, BRAIN_PROVIDER_CONTEXT_CHARS)
     if claude_messages:
         claude_messages[-1] = {
             "role": "user",
-            "content": f"[JOURNAL EVIDENCE]\n{context}\n\n[CURRENT QUESTION]\n{claude_messages[-1]['content']}",
+            "content": f"[JOURNAL EVIDENCE]\n{provider_context}\n\n[CURRENT QUESTION]\n{claude_messages[-1]['content']}",
         }
     response = client.messages.create(
         model=MODEL,
-        max_tokens=3000,
+        max_tokens=2200,
         system=BRAIN_SYSTEM_PROMPT,
         messages=claude_messages,
     )
     return response_text(response)
 
 
+def _brain_provider_failure_fallback(question: str, context: str) -> str:
+    data = _brain_load_context(context)
+    scoped = data.get("question_scope_stats") or data.get("overall") or {}
+    overall = data.get("overall") or {}
+    return (
+        "## Journal analysis\n"
+        "I can still answer from the journal analytics even though the language-model interpretation layer was unavailable for this request.\n\n"
+        f"- Trades in scope: **{int(scoped.get('trades') or 0)}**\n"
+        f"- Net P&L: **{_brain_money_text(scoped.get('net_pnl'))}**\n"
+        f"- Win rate: **{_brain_pct(scoped.get('win_rate'))}**\n"
+        f"- Profit factor: **{scoped.get('profit_factor') if scoped.get('profit_factor') is not None else 'N/A'}**\n"
+        f"- Journal range: **{overall.get('date_from') or '—'} to {overall.get('date_to') or '—'}**\n\n"
+        "Try a specific ticker, date, strategy, LE rule, or time window for a deterministic drill-down."
+    )
+
+
 def generate_brain_response(messages: list[dict], context: str) -> str:
-    """Answer from journal evidence with Groq primary and Anthropic fallback."""
+    """Answer from journal evidence without making the external model a single point of failure."""
+    question = _brain_last_question(messages)
+    deterministic = _brain_deterministic_le_answer(question, context)
+    if deterministic:
+        return deterministic
+
     groq_key = _valid_api_key("GROQ_API_KEY")
     anthropic_key = _valid_api_key("ANTHROPIC_API_KEY", "your_anthropic_api_key_here")
     errors = []
@@ -1231,20 +1536,19 @@ def generate_brain_response(messages: list[dict], context: str) -> str:
         try:
             return _groq_brain_response(messages, context, groq_key)
         except Exception as exc:
-            errors.append(f"Groq: {exc}")
+            logger.warning("Brain Groq provider failed: %s", exc)
+            errors.append("groq")
 
     if anthropic_key:
         try:
             return _anthropic_brain_response(messages, context)
         except Exception as exc:
-            errors.append(f"Anthropic: {exc}")
+            logger.warning("Brain Anthropic provider failed: %s", exc)
+            errors.append("anthropic")
 
     if errors:
-        raise RuntimeError("Brain AI failed. " + " | ".join(errors))
-    raise ValueError(
-        "Brain AI is not configured. Add GROQ_API_KEY, or ANTHROPIC_API_KEY as a fallback."
-    )
-
+        return _brain_provider_failure_fallback(question, context)
+    return _brain_provider_failure_fallback(question, context)
 
 WEEKLY_SUMMARY_PROMPT = """You are a professional trading coach producing a week-in-review.
 
