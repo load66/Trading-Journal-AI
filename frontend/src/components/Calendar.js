@@ -347,9 +347,10 @@ function MonthCard({ data, monthIdx, year, onClick, isCurrent, isFuture }) {
   );
 }
 
-function YearView({ year, setYear, accountId, onMonthClick, view, setView }) {
-  const [yearData, setYearData] = useState(null);
+function YearView({ year, setYear, accountId, onMonthClick, view, setView, shareMode, onShareModeChange }) {
+  const [yearData, setYearData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [shareStatus, setShareStatus] = useState('');
   const today = new Date();
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
@@ -359,60 +360,134 @@ function YearView({ year, setYear, accountId, onMonthClick, view, setView }) {
     const params = { year };
     if (accountId != null) params.account_id = accountId;
     yearlyKpisApi.get(params)
-      .then(r => { setYearData(r.data); setLoading(false); })
-      .catch(() => { setYearData(null); setLoading(false); });
+      .then(r => {
+        const months = Array.isArray(r.data) ? r.data : (Array.isArray(r.data?.months) ? r.data.months : []);
+        setYearData(months);
+        setLoading(false);
+      })
+      .catch(() => { setYearData([]); setLoading(false); });
   }, [year, accountId]);
 
-  // Compute year totals from months with data
-  const monthsWithData = yearData ? yearData.filter(m => m.has_data) : [];
-  const yearPnl = monthsWithData.reduce((s, m) => s + m.net_pnl, 0);
-  const totalTrades = monthsWithData.reduce((s, m) => s + m.total_trades, 0);
-  const totalWinners = monthsWithData.reduce((s, m) => s + m.winning_trades, 0);
+  const monthsWithData = yearData.filter(m => m?.has_data);
+  const yearPnl = monthsWithData.reduce((s, m) => s + Number(m.net_pnl || 0), 0);
+  const totalTrades = monthsWithData.reduce((s, m) => s + Number(m.total_trades || 0), 0);
+  const totalWinners = monthsWithData.reduce((s, m) => s + Number(m.winning_trades || 0), 0);
+  const tradingDays = monthsWithData.reduce((s, m) => s + Number(m.trading_days || 0), 0);
+  const profitableMonths = monthsWithData.filter(m => Number(m.net_pnl || 0) > 0).length;
   const yearWinRate = totalTrades > 0 ? (totalWinners / totalTrades * 100).toFixed(1) : '--';
 
-  return (
-    <div>
-      <PageHeader
-        title={<span className="num">{year}</span>}
-        subtitle="Year view. Select a month to open it."
-        actions={<>
-          <button type="button" className="cal-nav" onClick={() => setYear(y => y - 1)} aria-label="Previous year"><ChevronLeft size={18} /></button>
-          <button type="button" className="cal-nav" onClick={() => setYear(y => y + 1)} aria-label="Next year"><ChevronRight size={18} /></button>
-          <button type="button" className="btn btn-secondary" onClick={() => setYear(currentYear)}>This year</button>
-          <ViewToggle view={view} setView={setView} />
-        </>}
-      />
+  const exportYearImage = async () => {
+    if (loading) return;
+    setShareStatus('saving');
+    const spec = buildYearShareSvg({
+      year,
+      yearData,
+      yearPnl,
+      yearWinRate,
+      totalTrades,
+      tradingDays,
+      profitableMonths,
+    });
+    const result = await saveOrShareCalendarImage(spec);
+    if (result === 'error' || result === 'unsupported') setShareStatus('error');
+    else if (result === 'cancelled') setShareStatus('');
+    else setShareStatus(result === 'shared' ? 'shared' : 'saved');
+  };
 
-      {monthsWithData.length > 0 && (
-        <KpiStrip label="Year summary">
-          <KpiCell label="YTD P&L" value={<span className="num">{signedPnl(yearPnl)}</span>} tone={yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : undefined} />
-          <KpiCell label="Win %" value={<span className="num">{yearWinRate !== '--' ? `${yearWinRate}%` : '--'}</span>} tone={Number(yearWinRate) >= 55 ? 'pos' : undefined} />
-          <KpiCell label="Trades" value={<span className="num">{totalTrades.toLocaleString('en-US')}</span>} />
-        </KpiStrip>
-      )}
+  const startYearShare = () => {
+    onShareModeChange(true);
+    void exportYearImage();
+  };
 
+  const yearGrid = (
+    <div className={shareMode ? 'calendar-year-share-grid' : 'calendar-year-grid'}>
       {loading ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 12 }}>
-          {[...Array(12)].map((_, i) => <div key={i} className="skeleton" style={{ height: 136, borderRadius: 8 }} />)}
-        </div>
+        [...Array(12)].map((_, i) => <div key={i} className="skeleton" style={{ height: shareMode ? 96 : 136, borderRadius: 8 }} />)
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 12 }}>
-          {(yearData || []).map((mData, i) => {
-            const isFuture = year > currentYear || (year === currentYear && i + 1 > currentMonth);
-            const isCurrent = year === currentYear && i + 1 === currentMonth;
-            return (
-              <MonthCard
-                key={i}
-                data={mData}
-                monthIdx={i}
-                year={year}
-                onClick={onMonthClick}
-                isCurrent={isCurrent}
-                isFuture={isFuture}
-              />
-            );
-          })}
-        </div>
+        Array.from({ length: 12 }, (_, i) => {
+          const mData = yearData[i];
+          const isFuture = year > currentYear || (year === currentYear && i + 1 > currentMonth);
+          const isCurrent = year === currentYear && i + 1 === currentMonth;
+          return (
+            <MonthCard
+              key={i}
+              data={mData}
+              monthIdx={i}
+              year={year}
+              onClick={onMonthClick}
+              isCurrent={isCurrent}
+              isFuture={isFuture}
+            />
+          );
+        })
+      )}
+    </div>
+  );
+
+  return (
+    <div className={`calendar-year-view${shareMode ? ' calendar-share-mode calendar-year-share-mode' : ''}`}>
+      {shareMode ? (
+        <>
+          <div className="calendar-share-head calendar-share-head-detailed">
+            <div className="calendar-share-title-block">
+              <div className="calendar-share-eyebrow">Yearly Trading Performance</div>
+              <h1><span className="num">{year}</span> Trading Year</h1>
+              <p>See the big picture: total results, consistency, activity, and how each month contributed.</p>
+            </div>
+            <div className="calendar-share-head-actions">
+              <button type="button" className="cal-nav" onClick={() => setYear(y => y - 1)} aria-label="Previous year"><ChevronLeft size={16} /></button>
+              <button type="button" className="cal-nav" onClick={() => setYear(y => y + 1)} aria-label="Next year"><ChevronRight size={16} /></button>
+              <button type="button" className="btn btn-primary btn-sm calendar-share-save" disabled={shareStatus === 'saving' || loading} onClick={exportYearImage}>
+                <Download size={14} /> {shareStatus === 'saving' ? 'Creating…' : 'Save Image'}
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm calendar-share-exit" onClick={() => onShareModeChange(false)}>
+                <X size={14} /> Exit
+              </button>
+            </div>
+          </div>
+
+          <section className="calendar-share-stats calendar-share-stats-detailed" aria-label="Year summary">
+            <ShareMetric label="YTD Net P&L" value={signedPnl(yearPnl)} help="Total profit or loss for the year" tone={yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : ''} />
+            <ShareMetric label="Win Rate" value={yearWinRate === '--' ? '--' : `${yearWinRate}%`} help="Percent of closed trades that won" />
+            <ShareMetric label="Total Trades" value={totalTrades.toLocaleString('en-US')} help="Closed trades recorded this year" />
+            <ShareMetric label="Trading Days" value={tradingDays.toLocaleString('en-US')} help="Days with at least one trade" />
+            <ShareMetric label="Profitable Months" value={`${profitableMonths}/12`} help="Months that finished net positive" />
+          </section>
+
+          {shareStatus === 'saved' && <div className="calendar-share-status" role="status">PNG saved to your device.</div>}
+          {shareStatus === 'shared' && <div className="calendar-share-status" role="status">Image opened in your share sheet.</div>}
+          {shareStatus === 'error' && <div className="calendar-share-status neg" role="alert">Could not create the image on this browser.</div>}
+
+          {yearGrid}
+        </>
+      ) : (
+        <>
+          <PageHeader
+            title={<><span className="num">{year}</span> Trading Year</>}
+            subtitle="Your 12-month performance overview. Tap a month to open its daily calendar."
+            actions={<>
+              <button type="button" className="cal-nav" onClick={() => setYear(y => y - 1)} aria-label="Previous year"><ChevronLeft size={18} /></button>
+              <button type="button" className="cal-nav" onClick={() => setYear(y => y + 1)} aria-label="Next year"><ChevronRight size={18} /></button>
+              <button type="button" className="btn btn-secondary" onClick={() => setYear(currentYear)}>This year</button>
+              <ViewToggle view={view} setView={setView} />
+              <button type="button" className="btn btn-ghost calendar-share-trigger" disabled={loading} onClick={startYearShare}>
+                <Share2 size={15} /> Share Image
+              </button>
+            </>}
+          />
+
+          {monthsWithData.length > 0 && (
+            <KpiStrip label="Year summary">
+              <KpiCell label="YTD Net P&L" value={<span className="num">{signedPnl(yearPnl)}</span>} tone={yearPnl > 0 ? 'pos' : yearPnl < 0 ? 'neg' : undefined} />
+              <KpiCell label="Win Rate" value={<span className="num">{yearWinRate !== '--' ? `${yearWinRate}%` : '--'}</span>} tone={Number(yearWinRate) >= 55 ? 'pos' : undefined} />
+              <KpiCell label="Total Trades" value={<span className="num">{totalTrades.toLocaleString('en-US')}</span>} />
+              <KpiCell label="Trading Days" value={<span className="num">{tradingDays.toLocaleString('en-US')}</span>} />
+              <KpiCell label="Profitable Months" value={<span className="num">{profitableMonths}/12</span>} />
+            </KpiStrip>
+          )}
+
+          {yearGrid}
+        </>
       )}
     </div>
   );
@@ -425,6 +500,7 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
   const [dayData, setDayData] = useState({});
   const [loading, setLoading] = useState(true);
   const [monthKpis, setMonthKpis] = useState(null);
+  const [shareStatus, setShareStatus] = useState('');
 
   useEffect(() => {
     setLoading(true);
@@ -475,72 +551,90 @@ function MonthView({ year, month, setYear, setMonth, accountId, onDayClick, view
     ? (Math.abs(monthKpis.avg_win || 0) / Math.abs(monthKpis.avg_loss)).toFixed(2)
     : '--';
 
+  const exportMonthImage = async () => {
+    if (loading) return;
+    setShareStatus('saving');
+    const spec = buildMonthShareSvg({
+      year,
+      month,
+      weeks,
+      dayData,
+      monthPnl,
+      winRate,
+      profitFactor: monthKpis ? monthKpis.profit_factor : undefined,
+      avgWinLoss,
+      tradingDays,
+    });
+    const result = await saveOrShareCalendarImage(spec);
+    if (result === 'error' || result === 'unsupported') setShareStatus('error');
+    else if (result === 'cancelled') setShareStatus('');
+    else setShareStatus(result === 'shared' ? 'shared' : 'saved');
+  };
+
+  const startMonthShare = () => {
+    onShareModeChange(true);
+    void exportMonthImage();
+  };
+
   return (
     <div className={`calendar-month-view${shareMode ? ' calendar-share-mode' : ''}`}>
       {shareMode ? (
         <>
-          <div className="calendar-share-head">
-            <div>
-              <div className="calendar-share-eyebrow">Trading Calendar</div>
+          <div className="calendar-share-head calendar-share-head-detailed">
+            <div className="calendar-share-title-block">
+              <div className="calendar-share-eyebrow">Monthly Trading Performance</div>
               <h1>{MONTHS[month - 1]} <span className="num">{year}</span></h1>
+              <p>{tradingDays} trading day{tradingDays === 1 ? '' : 's'} · {winRate === '--' ? 'No closed trades yet' : `${winRate}% win rate`} · <strong className={monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : ''}>{signedPnl(monthPnl)} net P&amp;L</strong></p>
             </div>
             <div className="calendar-share-head-actions">
               <button type="button" className="cal-nav" onClick={prevMonth} aria-label="Previous month"><ChevronLeft size={16} /></button>
               <button type="button" className="cal-nav" onClick={nextMonth} aria-label="Next month"><ChevronRight size={16} /></button>
+              <button type="button" className="btn btn-primary btn-sm calendar-share-save" disabled={shareStatus === 'saving' || loading} onClick={exportMonthImage}>
+                <Download size={14} /> {shareStatus === 'saving' ? 'Creating…' : 'Save Image'}
+              </button>
               <button type="button" className="btn btn-ghost btn-sm calendar-share-exit" onClick={() => onShareModeChange(false)}>
                 <X size={14} /> Exit
               </button>
             </div>
           </div>
 
-          <section className="calendar-share-stats" aria-label="Month summary">
-            <div className="calendar-share-stat">
-              <span>MTD</span>
-              <strong className={`num ${monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : ''}`}>{signedPnl(monthPnl)}</strong>
-            </div>
-            <div className="calendar-share-stat">
-              <span>Win</span>
-              <strong className="num">{winRate === '--' ? '--' : `${winRate}%`}</strong>
-            </div>
-            <div className="calendar-share-stat">
-              <span>PF</span>
-              <strong className={`num ${monthKpis && pf != null && pf >= 1 && pf < 1.5 ? 'text-purple' : ''}`}>{monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'}</strong>
-            </div>
-            <div className="calendar-share-stat">
-              <span>Avg W/L</span>
-              <strong className="num">{avgWinLoss}</strong>
-            </div>
-            <div className="calendar-share-stat">
-              <span>Days</span>
-              <strong className="num">{tradingDays}</strong>
-            </div>
+          <section className="calendar-share-stats calendar-share-stats-detailed" aria-label="Month summary">
+            <ShareMetric label="Net P&L" value={signedPnl(monthPnl)} help="Total profit or loss for this month" tone={monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : ''} />
+            <ShareMetric label="Win Rate" value={winRate === '--' ? '--' : `${winRate}%`} help="Percent of closed trades that won" />
+            <ShareMetric label="Profit Factor" value={monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'} help="Gross profit ÷ gross loss" />
+            <ShareMetric label="Avg Win / Loss" value={avgWinLoss} help="Average winner compared with loser" />
+            <ShareMetric label="Trading Days" value={tradingDays} help="Days with at least one trade" />
           </section>
+
+          {shareStatus === 'saved' && <div className="calendar-share-status" role="status">PNG saved to your device.</div>}
+          {shareStatus === 'shared' && <div className="calendar-share-status" role="status">Image opened in your share sheet.</div>}
+          {shareStatus === 'error' && <div className="calendar-share-status neg" role="alert">Could not create the image on this browser.</div>}
         </>
       ) : (
         <>
           <PageHeader
             title={<>{MONTHS[month - 1]} <span className="num">{year}</span></>}
-            subtitle="Select a trading day to open its Day Review."
+            subtitle="Daily P&L calendar. Tap any traded day to open its Day Review."
             actions={<>
               <button type="button" className="cal-nav" onClick={prevMonth} aria-label="Previous month"><ChevronLeft size={18} /></button>
               <button type="button" className="cal-nav" onClick={nextMonth} aria-label="Next month"><ChevronRight size={18} /></button>
               <button type="button" className="btn btn-secondary" onClick={goToday}>This month</button>
               <ViewToggle view={view} setView={setView} />
-              <button type="button" className="btn btn-ghost calendar-share-trigger" onClick={() => onShareModeChange(true)}>
-                <Share2 size={15} /> Share View
+              <button type="button" className="btn btn-ghost calendar-share-trigger" disabled={loading} onClick={startMonthShare}>
+                <Share2 size={15} /> Share Image
               </button>
             </>}
           />
 
           <KpiStrip label="Month summary">
-            <KpiCell label="MTD P&L" value={<span className="num">{signedPnl(monthPnl)}</span>} tone={monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : undefined} />
+            <KpiCell label="Net P&L" value={<span className="num">{signedPnl(monthPnl)}</span>} tone={monthPnl > 0 ? 'pos' : monthPnl < 0 ? 'neg' : undefined} />
             <KpiCell
-              label="Win %"
+              label="Win Rate"
               value={<span className="num">{winRate === '--' ? '--' : `${winRate}%`}</span>}
               tone={monthKpis && monthKpis.win_rate >= 55 ? 'pos' : undefined}
             />
             <KpiCell
-              label="Prof. Factor"
+              label="Profit Factor"
               value={<span className={`num ${monthKpis && pf != null && pf >= 1 && pf < 1.5 ? 'text-purple' : ''}`}>{monthKpis ? (pf == null ? '∞' : Number(pf).toFixed(2)) : '--'}</span>}
               tone={pfTone}
             />
@@ -579,14 +673,19 @@ export default function Calendar({ accountId, onDayClick, shareMode = false, onS
 
   const switchToMonth = (m) => { setMonth(m); setView('month'); };
 
-  useEffect(() => {
-    if (view === 'year' && shareMode) onShareModeChange(false);
-  }, [view, shareMode, onShareModeChange]);
-
   return (
     <div className={`calendar-page${shareMode ? ' calendar-page-share' : ''}`}>
       {view === 'year' ? (
-        <YearView year={year} setYear={setYear} accountId={accountId} onMonthClick={switchToMonth} view={view} setView={setView} />
+        <YearView
+          year={year}
+          setYear={setYear}
+          accountId={accountId}
+          onMonthClick={switchToMonth}
+          view={view}
+          setView={setView}
+          shareMode={shareMode}
+          onShareModeChange={onShareModeChange}
+        />
       ) : (
         <MonthView
           year={year}
