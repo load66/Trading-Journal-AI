@@ -339,7 +339,10 @@ test('Dashboard quick date ranges apply 7D, 30D, and YTD without opening the cal
   await waitFor(() => expect(kpisApi.get).toHaveBeenCalledWith(
     expect.objectContaining({ date_from: fmt(from), date_to: fmt(today) })
   ));
-  expect(within(quick).getByRole('button', { name: 'Last 7 days' })).toHaveAttribute('aria-pressed', 'true');
+  await waitFor(() => expect(
+    within(screen.getByRole('group', { name: 'Quick date ranges' }))
+      .getByRole('button', { name: 'Last 7 days' })
+  ).toHaveAttribute('aria-pressed', 'true'));
 
   const customTrigger = screen.getByRole('button', { expanded: false, name: /Custom/i });
   expect(customTrigger.querySelector('.date-range-label-mobile')).toHaveTextContent('Custom');
@@ -350,8 +353,14 @@ test('Dashboard quick date ranges apply 7D, 30D, and YTD without opening the cal
   fireEvent.click(screen.getByRole('button', { name: 'Close date picker' }));
   expect(screen.queryByRole('dialog', { name: 'Choose a date range' })).not.toBeInTheDocument();
 
-  fireEvent.click(within(quick).getByRole('button', { name: 'All time' }));
-  await waitFor(() => expect(within(quick).getByRole('button', { name: 'All time' })).toHaveAttribute('aria-pressed', 'true'));
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Quick date ranges' }))
+      .getByRole('button', { name: 'All time' })
+  );
+  await waitFor(() => expect(
+    within(screen.getByRole('group', { name: 'Quick date ranges' }))
+      .getByRole('button', { name: 'All time' })
+  ).toHaveAttribute('aria-pressed', 'true'));
 });
 
 test('Brain opens from the header as a dialog and closes on Escape', async () => {
