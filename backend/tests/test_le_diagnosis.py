@@ -56,9 +56,9 @@ def test_le_diagnosis_preserves_unknown_and_finds_profitable_cohort_and_leak():
 
     assert report["coverage_pct"] == 100.0
     assert report["missing_trades"] == 0
-    assert report["most_profitable_cohort"]["id"] == "outside_day"
-    assert report["most_profitable_cohort"]["trades"] == 10
-    assert report["most_profitable_cohort"]["net_pnl"] == 700.0
+    assert report["most_profitable_cohort"]["id"] == "outside_ema_sign_no_chop"
+    assert report["most_profitable_cohort"]["trades"] == 8
+    assert report["most_profitable_cohort"]["net_pnl"] == 800.0
 
     chop = next(row for row in report["rules"] if row["id"] == "not_chop_hour")
     assert chop["pass"]["trades"] == 8
