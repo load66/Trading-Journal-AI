@@ -140,6 +140,8 @@ app.include_router(smoking_gun_router)
 # Isolated public-source bank evidence. Journal /api and /uploads stay protected.
 from bank_verification import router as bank_verification_router
 app.include_router(bank_verification_router)
+from bonus_questions import router as bonus_questions_router
+app.include_router(bonus_questions_router)
 
 
 # ── Dependency ─────────────────────────────────────────────────────────────────
