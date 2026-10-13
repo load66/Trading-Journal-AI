@@ -1,16 +1,27 @@
-# Public bank-bonus evidence service
+# BonusTracker evidence service — reliability and review upgrade
 
-`GET /public/bank-bonus-verification` exposes a fixed public-source catalog. It accepts no user input, source URLs, credentials, trade records, saved account records, or calculation requests. Existing `/api` and `/uploads` authentication remains unchanged. No database tables, policies or trade analytics are modified.
+The fixed public endpoint uses only public discovery titles and approved official bank documents. It has no request parameters, journal database access or account-history input. Existing authentication and calculations are unchanged.
 
-1. Load the existing public BonusTracker offer snapshot.
-2. Match supported institution/product identities, not manually inserted offers. Initial official-source coverage: Wells Fargo Everyday Checking and U.S. Bank business checking. Unsupported banks/products return `needs-review`.
-3. Fetch pinned HTTPS official promotion/fee-document identities. Every redirect is checked against exact approved hosts before requesting it. Response size, timeouts, PDF page count, encrypted PDFs, HTML fallbacks, and bot/error pages are bounded or rejected. TLS verification stays enabled.
-4. Hash normalized source text and record official-document check times separately from feed and AI times.
-5. Reuse the journal's server-side Groq key/model settings; Anthropic is an optional fallback only when already configured. Submit public documents only, without tools or journal context. Model requests and output size are bounded; at most two new AI extractions occur per hourly catalog cycle. Unchanged evidence and identical title/document combinations do not consume another extraction. Source documents are shared within a cycle.
-6. Require a structured response. Every value must occur within its quotation, and every quotation must occur in a fetched document. Fees must be quoted from the fee PDF. Missing, fabricated, oversized, wrong-source, or incomplete output is not accepted. Headline amounts not confirmed by bonus quotations force review.
-7. Reuse AI excerpts only when the offer fingerprint and freshly fetched document hashes match. Revalidate cached citations against current document text. Changed source hashes are flagged. Failed checks do not relabel old evidence as current.
-8. Publish `evidence-found` or `needs-review`, **never verified personal eligibility**. Exact quotation matching is not proof of semantic interpretation, full account/tier applicability, or completeness. Missing fields and source URLs remain visible for review.
+## Source coverage
 
-The read endpoint starts one background job per process at most once per hour. Requests while a job is active share it. It provides no arbitrary AI/URL interface. Deployments restart the in-memory rate window; durable last evidence comes from the public published BonusTracker snapshot. Queued new/changed offers can need a later cycle because the service reads the last published feed. No automatic imports, enrolled-term replacement, deadline calculation, bank-account access or transactions are performed.
+Four product profiles: Wells Fargo Everyday Checking, U.S. Bank business checking (distinguishing Business Essentials and Platinum), U.S. Bank Smartly checking, and Chase Total Checking. Other products remain unsupported. The registry identifies bank documents; it contains no manually maintained bonus amounts, requirements or offers. A profile match does not establish that an RSS post refers to the same promotion. Headline amount mismatches require review.
 
-Tests exercise quote provenance, fee-source separation, URL rejection, product scope, amount conflicts, unchanged-source reuse, outages, script stripping and single-flight behavior. All journal backend tests must pass before promotion. The stale one-time forced analytics rebuild pre-deploy hook must be removed before this deployment; this feature must not run an unrelated historical backfill.
+All redirects must remain on approved HTTPS hosts. Fees must be fetched as PDFs, not HTML fallback pages. Responses are bounded to 2 MB and PDFs to 100 unencrypted pages. fonttools supports embedded-font decoding. Product-first excerpts are limited to 9,000 characters per document; full normalized text validates quotations.
+
+## Provider reliability and accounting
+
+One shared background job starts on a public read at most once per hour per process. Default cycle budget: four new extractions, reduced to two after observed throttling. BANK_AI_CYCLE_LIMIT can set 1–8. Default daily accounted-token budget: 100,000 UTC; BANK_AI_DAILY_TOKEN_BUDGET can set 1,000–1,000,000. These are conservative app controls, not provider quotas or invoices. Successful calls use provider-reported usage; failed calls retain a conservative character-based reservation. Quota headers expose remaining token capacity when available. No key or organization identifiers are returned.
+
+Groq makes at most two requests per extraction. Temporary 429/5xx failures with Retry-After up to 15 seconds get one retry; longer waits are deferred. Long 429 waits stop other Groq calls in the same cycle. Network failures get one bounded retry. HTTP timeout: 35 seconds. An already configured Anthropic connection may be used as fallback; no provider key is introduced by this release.
+
+Queue order favors unattempted work and then oldest attempts. Public snapshots preserve last-attempt times, retry times and daily accounting across process restarts; memory preserves newer state between publications. Unchanged source hashes and exact offer identities reuse revalidated quotations without AI calls. Incomplete results are retried after 24 hours. Extractor version changes invalidate the old cache. Failed documents are fetched once per cycle, then reused as failures.
+
+## Evidence and changes
+
+Fourteen known fields cover bonus, expiration, availability, eligibility, qualifying activity, funding/hold wording, promo/enrollment codes, payout, maintenance fees, waivers, closure fees, keep-open/forfeiture, companion accounts and companion fees. Each value must appear in its quotation; each quotation must appear in its fetched source. Fee fields require the fee PDF. Keeping an account open and bonus forfeiture can appear in promotion terms. No dates or eligibility are inferred.
+
+Before/after comparisons use grounded field wording for the same offer fingerprint. Changes persist for a seven-day UI review window with their original timestamp. A changed quote or extraction does not prove changed bank policy. No saved entry is updated. New/changed discovery posts may wait a publication cycle because the service reads the previously published feed.
+
+## Verification
+
+Tests cover retry caps and waiting periods, token reservations and daily limits, cache freshness, queue fairness, document-failure reuse, approved host isolation, exact quotation provenance, product matching, version invalidation, same-offer change comparisons and the public-only AI request contract. Run the complete backend suite before deployment. Live provider and independently re-fetched source checks are required before claiming production verification.
