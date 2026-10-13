@@ -1,0 +1,16 @@
+# Public bank-bonus evidence service
+
+`GET /public/bank-bonus-verification` exposes a fixed public-source catalog. It accepts no user input, source URLs, credentials, trade records, saved account records, or calculation requests. Existing `/api` and `/uploads` authentication remains unchanged. No database tables, policies or trade analytics are modified.
+
+1. Load the existing public BonusTracker offer snapshot.
+2. Match supported institution/product identities, not manually inserted offers. Initial official-source coverage: Wells Fargo Everyday Checking and U.S. Bank business checking. Unsupported banks/products return `needs-review`.
+3. Fetch pinned HTTPS official promotion/fee-document identities. Every redirect is checked against exact approved hosts before requesting it. Response size, timeouts, PDF page count, encrypted PDFs, HTML fallbacks, and bot/error pages are bounded or rejected. TLS verification stays enabled.
+4. Hash normalized source text and record official-document check times separately from feed and AI times.
+5. Reuse the journal's server-side Groq key/model settings; Anthropic is an optional fallback only when already configured. Submit public documents only, without tools or journal context. Model requests and output size are bounded; at most two supported offer entries are processed per hourly catalog cycle.
+6. Require a structured response. Every value must occur within its quotation, and every quotation must occur in a fetched document. Fees must be quoted from the fee PDF. Missing, fabricated, oversized, wrong-source, or incomplete output is not accepted. Headline amounts not confirmed by bonus quotations force review.
+7. Reuse AI excerpts only when the offer fingerprint and freshly fetched document hashes match. Revalidate cached citations against current document text. Changed source hashes are flagged. Failed checks do not relabel old evidence as current.
+8. Publish `evidence-found` or `needs-review`, **never verified personal eligibility**. Exact quotation matching is not proof of semantic interpretation, full account/tier applicability, or completeness. Missing fields and source URLs remain visible for review.
+
+The read endpoint starts one background job per process at most once per hour. Requests while a job is active share it. It provides no arbitrary AI/URL interface. Deployments restart the in-memory rate window; durable last evidence comes from the public published BonusTracker snapshot. Queued new/changed offers can need a later cycle because the service reads the last published feed. No automatic imports, enrolled-term replacement, deadline calculation, bank-account access or transactions are performed.
+
+Tests exercise quote provenance, fee-source separation, URL rejection, product scope, amount conflicts, unchanged-source reuse, outages, script stripping and single-flight behavior. All journal backend tests must pass before promotion. The stale one-time forced analytics rebuild pre-deploy hook must be removed before this deployment; this feature must not run an unrelated historical backfill.
