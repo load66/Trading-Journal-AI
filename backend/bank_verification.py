@@ -131,8 +131,11 @@ def extract_ai(offer, profile, documents):
     groq = os.getenv('GROQ_API_KEY', '').strip()
     if groq:
         try:
+            model=os.getenv('GROQ_MODEL','openai/gpt-oss-120b')
+            packet={'model':model,'messages':[{'role':'system','content':system},{'role':'user','content':prompt}],'temperature':0,'max_completion_tokens':2000,'response_format':{'type':'json_object'}}
+            if 'gpt-oss' in model:packet['reasoning_effort']='low'
             response = httpx.post('https://api.groq.com/openai/v1/chat/completions', headers={'Authorization': 'Bearer '+groq},
-                json={'model': os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b'), 'messages': [{'role':'system','content':system},{'role':'user','content':prompt}], 'temperature':0, 'max_completion_tokens':2000, 'response_format':{'type':'json_object'}}, timeout=60)
+                json=packet,timeout=60)
             response.raise_for_status(); body=response.json()
             choice=body['choices'][0]
             if choice.get('finish_reason') != 'stop': raise ValueError('AI output incomplete')

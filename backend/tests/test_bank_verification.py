@@ -98,3 +98,21 @@ def test_cycle_budget_and_document_reuse(monkeypatch):
     assert blocked['status']=='needs-review' and not blocked['fields'] and 'budget' in blocked['reason']
     assert b.profile_for('Wells Fargo $500 savings bonus') is None
     assert b.profile_for('US Bank Business Savings Bonus') is None
+
+def test_provider_packet_contains_only_public_evidence(monkeypatch):
+    import json
+    seen={}
+    monkeypatch.setenv('GROQ_API_KEY','synthetic-provider-key')
+    monkeypatch.delenv('ANTHROPIC_API_KEY',raising=False)
+    monkeypatch.setenv('GROQ_MODEL','openai/gpt-oss-120b')
+    class Response:
+        def raise_for_status(self):pass
+        def json(self):return {'choices':[{'finish_reason':'stop','message':{'content':json.dumps(payload())}}]}
+    def post(url,**kwargs):seen.update(url=url,packet=kwargs['json']);return Response()
+    monkeypatch.setattr(b.httpx,'post',post)
+    result,provider=b.extract_ai({'title':'Wells Fargo $325 Checking Bonus'},b.PROFILES['wells-consumer'],docs())
+    assert provider=='groq' and result==payload()
+    assert seen['packet']['reasoning_effort']=='low'
+    user=json.loads(seen['packet']['messages'][1]['content'])
+    assert set(user)=={'offerTitle','product','documents'}
+    assert 'synthetic-provider-key' not in json.dumps(user)
