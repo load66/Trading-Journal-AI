@@ -81,3 +81,18 @@ def test_read_endpoint_has_no_parameters_and_one_job(monkeypatch):
         third=await b.public_bank_bonus_verification()
         assert third['status']=='complete' and b._task is task
     asyncio.run(exercise())
+
+def test_cycle_budget_and_document_reuse(monkeypatch):
+    seen=[]
+    monkeypatch.setattr(b,'fetch_document',lambda role,url:next(d for d in docs() if d['role']==role))
+    def ai(offer,*args):seen.append(offer['title']);return payload(),'groq'
+    monkeypatch.setattr(b,'extract_ai',ai)
+    state={'budget':1,'documents':{},'extractions':{}}
+    first={'title':'Wells Fargo $325 Checking Bonus','url':'https://source.test/one'}
+    one=b.verify_offer(first,run_state=state)
+    two=b.verify_offer({**first,'url':'https://source.test/two'},run_state=state)
+    assert one['fields']==two['fields'] and len(seen)==1 and len(state['documents'])==2
+    blocked=b.verify_offer({'title':'Wells Fargo $125 Checking Bonus','url':'https://source.test/three'},run_state=state)
+    assert blocked['status']=='needs-review' and not blocked['fields'] and 'budget' in blocked['reason']
+    assert b.profile_for('Wells Fargo $500 savings bonus') is None
+    assert b.profile_for('US Bank Business Savings Bonus') is None

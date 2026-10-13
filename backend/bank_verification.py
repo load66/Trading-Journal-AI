@@ -23,9 +23,9 @@ PUBLIC_HOSTS = {'load66.github.io', 'www.wellsfargo.com', 'accountoffers.wellsfa
 FIELDS = ('bonus', 'expiration', 'availability', 'eligibility', 'qualifying_activity', 'payout', 'monthly_fee', 'fee_waiver', 'early_close', 'companion_accounts')
 # Verified institution/document identities, not a manually maintained offer list.
 PROFILES = {
-    'wells-consumer': {'pattern': r'\bwells fargo\b', 'exclude': r'\bbusiness\b', 'product': 'Everyday Checking',
+    'wells-consumer': {'pattern': r'\bwells fargo\b.*\bchecking\b', 'exclude': r'\bbusiness\b', 'product': 'Everyday Checking',
         'sources': [('promotion', 'https://accountoffers.wellsfargo.com/checkingoffer/'), ('fees', 'https://www.wellsfargo.com/fetch-pdf?formNumber=CNS2013&subProductCode=ANY')]},
-    'us-business': {'pattern': r'\bu\.?s\.? bank\b.*\bbusiness\b', 'exclude': r'\bcredit card\b', 'product': 'Business checking; distinguish Business Essentials and Platinum tiers',
+    'us-business': {'pattern': r'\bu\.?s\.? bank\b.*\bbusiness\b.*\bchecking\b', 'exclude': r'\bcredit card\b', 'product': 'Business checking; distinguish Business Essentials and Platinum tiers',
         'sources': [('promotion', 'https://www.usbank.com/business-banking/banking-products/business-bank-accounts/business-checking-account.html'), ('fees', 'https://www.usbank.com/content/dam/usbank/en/documents/pdfs/disclosures/business-pricing-information.pdf')]},
 }
 router = APIRouter()
@@ -163,13 +163,17 @@ def validate_fields(payload, documents):
         accepted[key] = {'value':value,'quote':quote,'sourceUrl':doc['url'],'sourceHash':doc['hash']}
     return accepted, rejected
 
-def verify_offer(offer, old=None):
+def verify_offer(offer, old=None, run_state=None):
     record={'offerFingerprint':fingerprint(offer),'status':'needs-review','fields':{},'sources':[], 'reason':'Official source coverage is not configured for this product.'}
     key=profile_for(str(offer.get('title','')))
     if not key: return record
     profile=PROFILES[key]
     try:
-        docs=[fetch_document(role,url) for role,url in profile['sources']]
+        docs=[]
+        for role,url in profile['sources']:
+            cache=run_state['documents'] if run_state is not None else {}
+            if url not in cache:cache[url]=fetch_document(role,url)
+            docs.append(cache[url])
         record['sources']=[{k:d[k] for k in ('role','url','hash','checkedAt')} for d in docs]
         record['officialCheckedAt']=min(d['checkedAt'] for d in docs)
         source_hash=hashlib.sha256(''.join(d['hash'] for d in docs).encode()).hexdigest()
@@ -180,7 +184,16 @@ def verify_offer(offer, old=None):
             accepted,rejected=validate_fields(fields,docs)
             record.update(fields=accepted,aiCheckedAt=old['aiCheckedAt'],provider=old.get('provider'),rejectedFields=rejected)
         else:
-            payload,provider=extract_ai(offer,profile,docs)
+            memo_key=(key,offer['title'],source_hash)
+            memo=run_state['extractions'] if run_state is not None else {}
+            if memo_key not in memo:
+                if run_state is not None:
+                    if run_state['budget']<=0:
+                        record['reason']='The hourly AI budget is reached. Unchanged evidence uses no AI call; this new extraction is queued for a later cycle.'
+                        return record
+                    run_state['budget']-=1
+                memo[memo_key]=extract_ai(offer,profile,docs)
+            payload,provider=memo[memo_key]
             accepted,rejected=validate_fields(payload,docs)
             record.update(fields=accepted,aiCheckedAt=now(),provider=provider,rejectedFields=rejected)
         record['status']='evidence-found' if record['fields'] else 'needs-review'
@@ -204,15 +217,10 @@ def build_catalog():
     feed=json.loads(raw)
     if feed.get('schemaVersion') not in (1,2) or not isinstance(feed.get('offers'),list): raise ValueError('Invalid public feed')
     old=feed.get('verification',{}).get('records',{})
-    records={}; supported=0
+    records={};run_state={'budget':2,'documents':{},'extractions':{}}
     for offer in feed['offers'][:200]:
         if not isinstance(offer,dict) or not isinstance(offer.get('url'),str) or not isinstance(offer.get('title'),str): continue
-        if profile_for(offer['title']):
-            if supported>=2:
-                records[offer['url']]={'offerFingerprint':fingerprint(offer),'status':'needs-review','fields':{},'sources':[],'reason':'This cycle reached its two-offer AI budget; review is queued for a later source update.'}
-                continue
-            supported+=1
-        records[offer['url']]=verify_offer(offer,old.get(offer['url']))
+        records[offer['url']]=verify_offer(offer,old.get(offer['url']),run_state)
     return {'schemaVersion':1,'status':'complete','checkedAt':now(),'records':records}
 
 def _run():
