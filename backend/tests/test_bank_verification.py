@@ -21,6 +21,8 @@ def test_quotes_must_match_fetched_source():
     assert 'bonus' in b.validate_fields(fake,docs())[1]
     fake=payload();fake['fields']['bonus']['value']='Guaranteed approval'
     assert 'bonus' in b.validate_fields(fake,docs())[1]
+    fake=payload();fake['fields']['bonus']['value']=325
+    assert 'bonus' in b.validate_fields(fake,docs())[1]
 
 def test_fees_cannot_be_sourced_from_promo_summary():
     fake=payload();fake['fields']['monthly_fee']={'value':'$325','quote':'Receive a $325 bonus.','source':'promotion'}

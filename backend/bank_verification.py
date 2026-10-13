@@ -153,7 +153,8 @@ def validate_fields(payload, documents):
     for key in FIELDS:
         item = payload['fields'].get(key)
         if item is None: continue
-        if not isinstance(item, dict): rejected.append(key); continue
+        if not isinstance(item, dict) or not all(isinstance(item.get(k),str) for k in ('value','quote','source')):
+            rejected.append(key); continue
         value, quote, role = normalized(item.get('value')), normalized(item.get('quote')), item.get('source')
         doc = docs.get(role)
         if not doc or not value or len(value)>240 or not quote or len(quote)>500 or value not in quote or quote not in doc['text']:
