@@ -1,4 +1,4 @@
-"""Owner-authenticated explanations of client-supplied bonus facts; no journal access."""
+"""Bounded explanations of client-supplied bonus facts; no journal access."""
 import asyncio
 import hashlib
 import json
@@ -14,6 +14,7 @@ router = APIRouter()
 _lock = asyncio.Lock()
 _usage_day = ''
 _calls = 0
+_anonymous_calls = 0
 _last_call = 0.0
 _cache = {}
 SYSTEM = '''You explain one saved bank bonus. Return JSON only: {"answer":"short plain-language explanation", "factIds":["ids supporting the answer"], "missing":["specific information needed"]}.
@@ -92,7 +93,6 @@ async def provider(packet):
 
 @router.post('/api/bonus-tracker/ask')
 async def ask_bonus(request: Request):
-    global _usage_day, _calls, _last_call
     # This route remains protected even if local development disables the global middleware.
     if not auth_required():
         raise HTTPException(503, 'Secure AI sign-in is not configured.')
@@ -100,6 +100,22 @@ async def ask_bonus(request: Request):
         authorize_header(request.headers.get('Authorization'))
     except AuthError as exc:
         raise HTTPException(exc.status_code, exc.detail)
+    return await answer_request(request)
+
+
+@router.post('/public/bonus-tracker/ask')
+async def ask_bonus_public(request: Request):
+    # Origin is a browser restriction, not authentication. Global attempt limits
+    # below bound provider usage even when a non-browser caller spoofs Origin.
+    if request.headers.get('Origin') != 'https://load66.github.io':
+        raise HTTPException(403, 'Use Ask AI from BonusTracker.')
+    if request.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+        raise HTTPException(415, 'Send a JSON question and saved facts.')
+    return await answer_request(request, anonymous=True)
+
+
+async def answer_request(request: Request, anonymous: bool = False):
+    global _usage_day, _calls, _anonymous_calls, _last_call
     try:
         raw = await request.body()
         if len(raw) > 65000:
@@ -114,15 +130,21 @@ async def ask_bonus(request: Request):
             return {**cached[1], 'cached': True}
         day = datetime.now(timezone.utc).date().isoformat()
         if day != _usage_day:
-            _usage_day, _calls = day, 0
+            _usage_day, _calls, _anonymous_calls = day, 0, 0
         try:
             limit = max(1, min(100, int(os.getenv('BONUS_QUESTION_DAILY_LIMIT', '30'))))
         except ValueError:
             limit = 30
+        # Anonymous usage has a separate non-configurable ceiling within the
+        # existing shared provider budget. Deployment/restart resets counters.
+        if anonymous and _anonymous_calls >= 20:
+            raise HTTPException(429, 'AI allowance reached. Saved-rule answers still work.', headers={'Retry-After': '3600'})
         if _calls >= limit or time.monotonic() - _last_call < 5:
             raise HTTPException(429, 'AI request limit reached. Try again later.', headers={'Retry-After': '60'})
         # Reserve before the request; failures count, with no automatic paid retries.
         _calls += 1
+        if anonymous:
+            _anonymous_calls += 1
         _last_call = time.monotonic()
         try:
             result = await provider(packet)
