@@ -250,3 +250,16 @@ def test_regular_api_request_still_requires_auth(monkeypatch, tmp_path):
         )
 
     assert response.status_code == 401
+
+
+def test_auth_errors_remain_readable_only_to_allowed_frontend(monkeypatch, tmp_path):
+    main=fresh_main(monkeypatch,tmp_path,AUTH_REQUIRED='true',SUPABASE_URL='https://project.supabase.co',AUTHORIZED_USER_ID='owner-uuid',FRONTEND_ORIGINS='https://load66.github.io')
+    from fastapi.testclient import TestClient
+    with TestClient(main.app) as client:
+        denied=client.get('/api/bonus-tracker/backups',headers={'Origin':'https://load66.github.io'})
+        assert denied.status_code==401
+        assert denied.headers['access-control-allow-origin']=='https://load66.github.io'
+        assert denied.json()['error']=='Authentication required'
+        other=client.get('/api/bonus-tracker/backups',headers={'Origin':'https://other.example'})
+        assert other.status_code==401
+        assert 'access-control-allow-origin' not in other.headers
