@@ -95,7 +95,17 @@ async def lifespan(app: FastAPI):
     finally:
         _conn.close()
     Path(UPLOAD_DIR).mkdir(exist_ok=True)
-    yield
+    from bonus_backups import scheduled_recovery_loop
+    import asyncio
+    backup_task = asyncio.create_task(scheduled_recovery_loop())
+    try:
+        yield
+    finally:
+        backup_task.cancel()
+        try:
+            await backup_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Trading Journal AI API", lifespan=lifespan)
@@ -142,6 +152,8 @@ from bank_verification import router as bank_verification_router
 app.include_router(bank_verification_router)
 from bonus_questions import router as bonus_questions_router
 app.include_router(bonus_questions_router)
+from bonus_backups import router as bonus_backups_router
+app.include_router(bonus_backups_router)
 
 
 # ── Dependency ─────────────────────────────────────────────────────────────────
