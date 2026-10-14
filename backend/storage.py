@@ -115,7 +115,7 @@ class DiaryStorage:
 class R2Storage:
     """Private Cloudflare R2 storage using its S3-compatible API."""
 
-    def __init__(self, settings: Settings | None = None):
+    def __init__(self, settings: Settings | None = None, client_config=None):
         self.settings = settings or Settings.from_env()
         self.bucket = self.settings.r2_bucket
         self.client = boto3.client(
@@ -124,6 +124,7 @@ class R2Storage:
             aws_access_key_id=self.settings.r2_access_key_id,
             aws_secret_access_key=self.settings.r2_secret_access_key,
             region_name="auto",
+            **({"config":client_config} if client_config is not None else {}),
         )
 
     @staticmethod
