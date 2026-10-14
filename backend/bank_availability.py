@@ -48,6 +48,7 @@ _lock = threading.Lock()
 _task = None
 _last_started = 0.0
 _priority_urls = []
+_catalog_urls = set()
 _last_priority_at = 0.0
 _result = {'schemaVersion': 1, 'status': 'pending', 'records': {}}
 MAX_AGE = timedelta(hours=24)
@@ -196,11 +197,13 @@ def verify_offer(offer):
 
 
 def build_catalog():
+    global _catalog_urls
     raw, _, _ = evidence.fetch_bytes(evidence.CATALOG_URL)
     feed = json.loads(raw)
     if feed.get('schemaVersion') not in (1,2) or not isinstance(feed.get('offers'),list): raise ValueError('Invalid catalog')
     offers = [o for o in feed['offers'][:200] if isinstance(o,dict) and isinstance(o.get('title'),str) and len(o['title'])<=300 and isinstance(o.get('url'),str) and approved(o['url'],PUBLISHERS)]
     with _lock:
+        _catalog_urls={o['url'] for o in offers}
         priorities = list(_priority_urls)
         old = _result.get('records', {})
     offers.sort(key=lambda o: (priorities.index(o['url']) if o['url'] in priorities else len(priorities), str(old.get(o['url'],{}).get('attemptedAt','')), o['url']))
@@ -258,7 +261,7 @@ async def prioritize_request(request: Request):
     urls=body.get('offers') if isinstance(body,dict) and set(body)=={'offers'} else None
     if not isinstance(urls,list) or len(urls)>8 or any(not isinstance(url,str) or not approved(url,PUBLISHERS) for url in urls): raise HTTPException(400,'Only public catalog offer identifiers are accepted.')
     with _lock:
-        known=set(_result.get('records',{}))
+        known=set(_catalog_urls)
         if any(url not in known for url in urls): raise HTTPException(409,'Offer is not in the current verified catalog yet.')
         changed=urls!=_priority_urls
         if changed:

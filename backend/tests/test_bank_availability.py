@@ -75,7 +75,7 @@ class PriorityRequest:
 
 def test_priority_route_rejects_private_fields_and_unknown_offers(monkeypatch):
     monkeypatch.setattr(a,'auth_required',lambda:True);monkeypatch.setattr(a,'authorize_header',lambda *_:{'sub':'test'})
-    monkeypatch.setattr(a,'_result',{'records':{offer()['url']:{}}});monkeypatch.setattr(a,'_priority_urls',[])
+    monkeypatch.setattr(a,'_result',{'records':{offer()['url']:{}}});monkeypatch.setattr(a,'_catalog_urls',{offer()['url']});monkeypatch.setattr(a,'_priority_urls',[])
     with pytest.raises(a.HTTPException) as error:asyncio.run(a.prioritize_request(PriorityRequest({'offers':[offer()['url']],'accountIds':['private']})))
     assert error.value.status_code==400 and not a._priority_urls
     with pytest.raises(a.HTTPException) as error:asyncio.run(a.prioritize_request(PriorityRequest({'offers':['https://www.doctorofcredit.com/not-current/']})))
@@ -92,7 +92,7 @@ def test_priority_route_requires_existing_owner_auth(monkeypatch):
 
 def test_priority_route_accepts_only_bounded_catalog_identifiers(monkeypatch):
     monkeypatch.setattr(a,'auth_required',lambda:True);monkeypatch.setattr(a,'authorize_header',lambda *_:{'sub':'test'})
-    monkeypatch.setattr(a,'_result',{'records':{offer()['url']:{}}});monkeypatch.setattr(a,'_priority_urls',[])
+    monkeypatch.setattr(a,'_result',{'records':{offer()['url']:{}}});monkeypatch.setattr(a,'_catalog_urls',{offer()['url']});monkeypatch.setattr(a,'_priority_urls',[])
     monkeypatch.setattr(a,'_last_priority_at',0);monkeypatch.setattr(a,'start_if_due',lambda:None)
     r=asyncio.run(a.prioritize_request(PriorityRequest({'offers':[offer()['url']]})))
     assert r['accepted'] and a._priority_urls==[offer()['url']]
