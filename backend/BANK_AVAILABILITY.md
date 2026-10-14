@@ -1,0 +1,11 @@
+# Public promotion scope service
+
+`/public/bank-bonus-availability` serves the fixed published BonusTracker offer catalog. A production background loop refreshes hourly. Six workers check a bounded batch of 40 offers with per-request time/size/redirect limits; queued work rotates through oldest attempts. No journal database, screenshot storage or tracker record is read or modified.
+
+Approved institution identities and scoped official hosts are maintained in `bank_availability.REGISTRY`. Public publisher links discover candidates, never prove availability. Known official promotion fallbacks are preferred and still require matching reward/product/deadline evidence. Unknown institutions require source-identity onboarding. Missing, failed or conflicting evidence is not eligibility. The frontend host trust set must be aligned when onboarding institutions.
+
+A geographic receipt includes exact title/URL fingerprint, source URL, document SHA-256, original scope clauses, check timestamp and a 24-hour expiry. Explicit address/state restrictions are parsed conservatively. Nationwide ATM access, absence of restrictions and general bank footprints cannot imply nationwide promotional availability. Membership, county, ZIP-code and invitation clauses remain additional conditions; matching a state never proves a person eligible. Numeric official promotion deadlines can mark an offer ended; unsupported date syntax remains unconfirmed.
+
+The authenticated owner-only priority endpoint accepts exactly `{ "offers": [public catalog URLs] }`, at most eight items and 4096 bytes. Arbitrary URLs, stale/unknown catalog identifiers and private extra fields are rejected. Priority requests do not change records and are rate-limited; they prioritize the next bounded batch without claiming instant verification. Only public offer metadata is logged, with no tokens or financial data.
+
+Frontend publication retains individual timestamps and exact identities. Stale or unavailable records must not acquire new check timestamps. New public terms never rewrite enrolled records or existing churn calculations. The service is scheduled verification, not a real-time or exhaustive personal eligibility guarantee.
