@@ -98,9 +98,16 @@ async def lifespan(app: FastAPI):
     from bonus_backups import scheduled_recovery_loop
     import asyncio
     backup_task = asyncio.create_task(scheduled_recovery_loop())
+    from bank_availability import scheduled_availability_loop
+    availability_task = asyncio.create_task(scheduled_availability_loop())
     try:
         yield
     finally:
+        availability_task.cancel()
+        try:
+            await availability_task
+        except asyncio.CancelledError:
+            pass
         backup_task.cancel()
         try:
             await backup_task
@@ -154,6 +161,8 @@ app.include_router(smoking_gun_router)
 # Isolated public-source bank evidence. Journal /api and /uploads stay protected.
 from bank_verification import router as bank_verification_router
 app.include_router(bank_verification_router)
+from bank_availability import router as bank_availability_router
+app.include_router(bank_availability_router)
 from bonus_questions import router as bonus_questions_router
 app.include_router(bonus_questions_router)
 from bonus_backups import router as bonus_backups_router
