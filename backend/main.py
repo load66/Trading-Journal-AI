@@ -116,14 +116,7 @@ app = FastAPI(title="Trading Journal AI API", lifespan=lifespan)
 ALLOWED_ORIGINS = list(SETTINGS.frontend_origins)
 LOCALHOST_ANY_PORT = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=LOCALHOST_ANY_PORT,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 
 
 @app.middleware("http")
@@ -137,6 +130,17 @@ async def authentication_middleware(request, call_next):
         except AuthError as exc:
             return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
     return await call_next(request)
+
+
+# CORS must wrap authentication errors so the browser can read 401 and refresh its session.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=LOCALHOST_ANY_PORT,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Serve uploaded diary screenshots (create the folder on first run)

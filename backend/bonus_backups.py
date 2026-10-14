@@ -233,7 +233,7 @@ async def scheduled_recovery_loop():
                 storage=store()
                 if not probed:
                     await run_in_threadpool(probe_storage,storage,uid)
-                    logging.getLogger(__name__).info('bonus_backup_storage_probe_success')
+                    logging.getLogger('uvicorn.error').info('bonus_backup_storage_probe_success')
                     probed=True
                 await run_in_threadpool(scheduled_checkpoint,storage,uid)
         except asyncio.CancelledError:raise
