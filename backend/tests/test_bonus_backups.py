@@ -71,7 +71,7 @@ def test_twelve_hour_checkpoint_survives_restart():
     assert b.scheduled_checkpoint(s,'owner',now)['created']
     assert not b.scheduled_checkpoint(s,'owner',now+timedelta(hours=11))['created']
     assert b.scheduled_checkpoint(s,'owner',now+timedelta(hours=12))['created']
-    assert len(s.objects)==3
+    assert len(s.objects)==1
     assert not b.scheduled_checkpoint(s,'new-owner',now)['created']
 
 def test_routes_require_owner_auth_before_storage(monkeypatch):
@@ -91,3 +91,74 @@ def test_storage_probe_touches_only_disposable_namespace():
     s=MemoryR2();b.save_verified(s,'owner',packet());before=set(s.objects)
     assert b.probe_storage(s,'owner')['readWriteVerified']
     assert set(s.objects)==before
+
+
+def different_packet(n):
+    p=packet(f'{n:032x}')
+    p['snapshot']=p['snapshot'].replace('private notes',f'private notes {n}')
+    p['sha256']=hashlib.sha256(p['snapshot'].encode()).hexdigest()
+    return p
+
+
+def test_retention_is_bounded_and_keeps_previous_distinct_states():
+    s=MemoryR2()
+    s.objects['journal/screenshots/keep.png']={'body':b'image','Metadata':{},'LastModified':datetime.now(timezone.utc)}
+    b.save_verified(s,'other-owner',packet())
+    for n in range(1,15):
+        result=b.save_verified(s,'owner',different_packet(n))
+        assert result['retention']['cleanup']=='complete'
+        assert result['retention']['retainedCopies']<=4
+    assert 'journal/screenshots/keep.png' in s.objects
+    assert b.read_verified(s,'other-owner','a'*32)['backup']['verified']
+    ids={x['id'] for x in b.list_backups(s,'owner')['backups']}
+    assert ids=={f'{n:032x}' for n in (12,13,14)}
+    for ident in ids:assert b.read_verified(s,'owner',ident)['backup']['verified']
+
+
+def test_failed_replacement_does_not_remove_existing_backups():
+    s=MemoryR2()
+    for n in range(1,4):b.save_verified(s,'owner',different_packet(n))
+    before=set(s.objects);s.corrupt=True
+    with pytest.raises(ValueError):b.save_verified(s,'owner',different_packet(4))
+    assert before.issubset(s.objects)
+
+
+def test_cleanup_failure_keeps_new_verified_backup(monkeypatch):
+    s=MemoryR2()
+    for n in range(1,4):b.save_verified(s,'owner',different_packet(n))
+    monkeypatch.setattr(s,'delete_object',lambda **kw:(_ for _ in ()).throw(RuntimeError('unavailable')))
+    result=b.save_verified(s,'owner',different_packet(4))
+    assert result['verified'] and result['retention']['cleanup']=='pending'
+    assert b.read_verified(s,'owner',f'{4:032x}')['backup']['verified']
+    assert len(s.objects)==4
+
+
+def test_current_checkpoint_survives_duplicate_uploads_and_does_not_outrank_newer_data():
+    s=MemoryR2();now=datetime.now(timezone.utc)
+    old=b.save_verified(s,'owner',different_packet(1))
+    checkpoint=b.scheduled_checkpoint(s,'owner',now)['backup']
+    for n in range(2,10):b.save_verified(s,'owner',different_packet(n),checkpoint_now=now)
+    assert b.read_verified(s,'owner',checkpoint['id'])['backup']['verified']
+    assert len(s.objects)<=4
+    assert not b.scheduled_checkpoint(s,'owner',now)['created']
+    # Model an in-flight checkpoint completing after a newer upload.
+    late_id='f'*32
+    b.save_verified(s,'owner',{**different_packet(1),'id':late_id,'reason':'scheduled'},data_at=old['dataAt'],checkpoint_now=now)
+    assert b.list_backups(s,'owner')['backups'][0]['id']==f'{9:032x}'
+
+
+def test_safety_snapshot_keeps_selected_recovery_until_restored_replacement():
+    s=MemoryR2();now=datetime.now(timezone.utc)
+    b.save_verified(s,'owner',different_packet(1))
+    b.scheduled_checkpoint(s,'owner',now)
+    for n in (2,3,4):b.save_verified(s,'owner',different_packet(n),checkpoint_now=now)
+    selected=b.read_verified(s,'owner',f'{2:032x}')
+    safety={**different_packet(5),'reason':'pre-restore'}
+    saved=b.save_verified(s,'owner',safety,checkpoint_now=now)
+    assert saved['retention']['cleanup']=='deferred-for-safety'
+    assert b.read_verified(s,'owner',f'{2:032x}')['snapshot']==selected['snapshot']
+    restored={**different_packet(2),'id':f'{99:032x}'}
+    result=b.save_verified(s,'owner',restored,checkpoint_now=now)
+    assert result['verified'] and result['retention']['retainedCopies']<=4
+    assert b.list_backups(s,'owner')['backups'][0]['id']==restored['id']
+    assert b.read_verified(s,'owner',restored['id'])['snapshot']==selected['snapshot']
