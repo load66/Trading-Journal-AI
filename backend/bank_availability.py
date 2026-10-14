@@ -151,6 +151,9 @@ def interpret(offer, document):
             mode = 'include'
         else: continue
         if codes: rules.append({'mode': mode, 'states': codes, 'quote': quote})
+    includes=[set(r['states']) for r in rules if r['mode']=='include']
+    excludes=set().union(*(set(r['states']) for r in rules if r['mode']=='exclude')) if rules else set()
+    if includes and not (set.intersection(*includes)-excludes):return {'status':'needs-review','reason':'Official geographic clauses conflict.','rules':[],'conditions':[]}
     if len(rules)>8:return {'status':'needs-review','reason':'Official scope requires a more detailed restriction review.','rules':[],'conditions':[]}
     national = next((evidence.normalized(m.group(0)) for m in re.finditer(
         r'[^.!?]{0,60}(?:offer (?:is )?(?:available|valid) nationwide|offer (?:is )?(?:available|valid) (?:in|to residents of) all 50 states)[^.!?]{0,180}[.!?]', text, re.I)

@@ -113,3 +113,7 @@ def test_state_codes_do_not_confuse_uppercase_conjunctions():
     assert a.state_codes('Residents of Missouri OR Kansas only.')==['KS','MO']
     assert a.state_codes('The client must have a physical address in: MO, OR, IN or DC.')==['DC','IN','MO','OR']
     assert a.state_codes('The offer is available IN the United States.')==[]
+
+def test_incompatible_geographic_clauses_never_exclude_every_user():
+    r=a.interpret(offer(),doc('Earn a $500 checking bonus. This offer is valid only for residents of Missouri. This offer is valid only for residents of California.'))
+    assert r['status']=='needs-review' and not r['rules']
