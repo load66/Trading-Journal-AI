@@ -139,3 +139,46 @@ def test_public_cannot_bypass_shared_budget(client,monkeypatch):
     monkeypatch.setattr(b,'_usage_day',b.datetime.now(b.timezone.utc).date().isoformat())
     monkeypatch.setattr(b,'_calls',30)
     assert client.post('/public/bonus-tracker/ask',json=packet(),headers=PUBLIC_HEADERS).status_code==429
+
+
+def test_equivalent_numeric_format_preserves_grounding():
+    facts=[{'id':'terms','text':'Maintain $1,500.00 and receive a $50 bonus.'}]
+    assert b.validate_answer({'answer':'Maintain $1500 and receive $50.00.','factIds':['terms'],'missing':[]},facts)
+    with pytest.raises(ValueError):
+        b.validate_answer({'answer':'Maintain $15000.','factIds':['terms'],'missing':[]},facts)
+
+
+def test_strict_response_contract_uses_known_fact_ids():
+    fmt=b.answer_format(packet(),'openai/gpt-oss-120b')
+    schema=fmt['json_schema']['schema']
+    assert fmt['json_schema']['strict'] is True
+    assert schema['additionalProperties'] is False
+    assert set(schema['required'])=={'answer','factIds','missing'}
+    assert schema['properties']['factIds']['items']['enum']==['terms','close_gate']
+    assert b.answer_format(packet(),'other-model')=={'type':'json_object'}
+
+
+def test_provider_uses_constrained_output(monkeypatch):
+    monkeypatch.setenv('GROQ_API_KEY','synthetic-secret')
+    monkeypatch.setenv('BONUS_QUESTION_MODEL','openai/gpt-oss-120b')
+    requests=[]
+    class FakeClient:
+        def __init__(self,**kw):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def post(self,url,**kw):
+            requests.append(kw['json'])
+            return b.httpx.Response(200,json={'choices':[{'finish_reason':'stop','message':{'content':json.dumps({'answer':'Bonus not received.','factIds':['close_gate'],'missing':[]})}}]},request=b.httpx.Request('POST',url))
+    monkeypatch.setattr(b.httpx,'AsyncClient',FakeClient)
+    assert asyncio.run(b.provider(packet()))['factIds']==['close_gate']
+    assert requests[0]['response_format']['type']=='json_schema'
+    assert len(requests)==1
+
+
+def test_failure_diagnostics_do_not_log_private_details(client,monkeypatch,caplog):
+    async def failed(p):raise ValueError('private account data and secret')
+    monkeypatch.setattr(b,'provider',failed)
+    r=client.post('/api/bonus-tracker/ask',json=packet(),headers={'Authorization':'Bearer owner'})
+    assert r.status_code==503
+    assert 'category=response_validation' in caplog.text
+    assert 'private account' not in caplog.text and 'secret' not in caplog.text

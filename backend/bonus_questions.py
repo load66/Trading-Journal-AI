@@ -2,6 +2,8 @@
 import asyncio
 import hashlib
 import json
+import logging
+from decimal import Decimal
 import os
 import re
 import time
@@ -10,6 +12,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from auth import AuthError, auth_required, authorize_header
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 _lock = asyncio.Lock()
 _usage_day = ''
@@ -62,10 +65,28 @@ def validate_answer(data, facts):
         raise ValueError('Invalid missing information')
     # Reject newly invented numeric values; this is a grounding check, not semantic proof.
     context = '\n'.join(f['text'] for f in facts)
-    values = {x.rstrip('.,') for x in re.findall(r'\d[\d,.%-]*', context)}
-    if any(x.rstrip('.,') not in values for x in re.findall(r'\d[\d,.%-]*', answer)):
+    def numeric_values(text):
+        return {Decimal(x.replace(',', '')) for x in re.findall(r'(?<!\w)\d+(?:,\d{3})*(?:\.\d+)?', text)}
+    if not numeric_values(answer).issubset(numeric_values(context)):
         raise ValueError('Unsupported numeric value')
     return {'answer': answer.strip(), 'factIds': list(dict.fromkeys(citations)), 'missing': missing}
+
+
+def answer_format(packet, model):
+    if model not in ('openai/gpt-oss-120b', 'openai/gpt-oss-20b'):
+        return {'type': 'json_object'}
+    # Constrain IDs and output shape at generation, then validate grounding below.
+    return {'type': 'json_schema', 'json_schema': {
+        'name': 'bonus_answer', 'strict': True, 'schema': {
+            'type': 'object', 'additionalProperties': False,
+            'required': ['answer', 'factIds', 'missing'],
+            'properties': {
+                'answer': {'type': 'string'},
+                'factIds': {'type': 'array', 'items': {'type': 'string', 'enum': [f['id'] for f in packet['facts']]}},
+                'missing': {'type': 'array', 'items': {'type': 'string'}}
+            }
+        }
+    }}
 
 
 async def provider(packet):
@@ -79,7 +100,7 @@ async def provider(packet):
             headers={'Authorization': 'Bearer ' + key},
             json={'model': model, **reasoning,
                   'temperature': 0, 'max_completion_tokens': 2000,
-                  'response_format': {'type': 'json_object'},
+                  'response_format': answer_format(packet, model),
                   'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': json.dumps(packet, ensure_ascii=False)}]})
         if response.status_code == 429:
             raise HTTPException(429, 'AI is busy. Try again later.', headers={'Retry-After': '60'})
@@ -150,7 +171,21 @@ async def answer_request(request: Request, anonymous: bool = False):
             result = await provider(packet)
         except HTTPException:
             raise
-        except Exception:
+        except Exception as exc:
+            # Never log prompts, responses, credentials, bodies or exception text.
+            if isinstance(exc, httpx.HTTPStatusError):
+                category = 'provider_http_' + str(exc.response.status_code)
+            elif isinstance(exc, httpx.TimeoutException):
+                category = 'provider_timeout'
+            elif isinstance(exc, httpx.RequestError):
+                category = 'provider_connection'
+            elif isinstance(exc, json.JSONDecodeError):
+                category = 'response_json'
+            elif isinstance(exc, ValueError):
+                category = 'response_validation'
+            else:
+                category = 'response_contract'
+            logger.warning('bonus_ai_failure category=%s', category)
             raise HTTPException(503, 'AI could not produce a supported answer. Check the saved terms or try again later.')
         if len(_cache) >= 30:
             _cache.clear()
