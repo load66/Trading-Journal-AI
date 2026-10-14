@@ -167,6 +167,8 @@ from bonus_questions import router as bonus_questions_router
 app.include_router(bonus_questions_router)
 from bonus_backups import router as bonus_backups_router
 app.include_router(bonus_backups_router)
+from venza_cloud import router as venza_cloud_router
+app.include_router(venza_cloud_router)
 
 
 # ── Dependency ─────────────────────────────────────────────────────────────────
