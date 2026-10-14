@@ -76,7 +76,7 @@ def receipt(ident, head):
     meta = head.get('Metadata', {})
     return {'id': ident, 'createdAt': meta.get('created-at'), 'sha256': meta.get('sha256'),
             'entryCount': int(meta.get('entry-count','0')), 'bytes': head.get('ContentLength',0),
-            'reason': meta.get('reason',''), 'appVersion': meta.get('app-version',''), 'verified': True}
+            'reason': meta.get('reason',''), 'appVersion': meta.get('app-version',''), 'dataAt':meta.get('data-at',meta.get('created-at')), 'verified': True}
 
 
 def read_verified(storage, uid, ident):
@@ -102,7 +102,7 @@ def read_verified(storage, uid, ident):
     return {'backup': receipt(ident,head), 'snapshot': text}
 
 
-def save_verified(storage, uid, packet):
+def save_verified(storage, uid, packet, data_at=None, checkpoint_now=None):
     if not isinstance(packet,dict) or set(packet) != {'id','sha256','reason','snapshot'}:
         raise ValueError('Unsupported upload fields')
     ident = packet['id']; key = key_for(uid, ident)
@@ -113,7 +113,7 @@ def save_verified(storage, uid, packet):
     if packet['sha256'] != digest:
         raise ValueError('Upload checksum mismatch')
     metadata = {'sha256':digest,'entry-count':str(count),'created-at':datetime.now(timezone.utc).isoformat(),
-                'reason':packet['reason'],'app-version':data['appVersion']}
+                'reason':packet['reason'],'app-version':data['appVersion'],'data-at':data_at or datetime.now(timezone.utc).isoformat()}
     try:
         storage.client.put_object(Bucket=storage.bucket,Key=key,Body=raw,ContentType='application/json',
                                   Metadata=metadata,IfNoneMatch='*')
@@ -123,30 +123,72 @@ def save_verified(storage, uid, packet):
         existing = read_verified(storage,uid,ident)
         if existing['backup']['sha256'] != digest:
             raise HTTPException(409,'This backup identity already contains different data.')
-        return existing['backup']
+        return retain_after_verified(storage,uid,existing['backup'],checkpoint_now)
     # A successful upload alone is insufficient: verify a fresh read before acknowledgment.
-    return read_verified(storage,uid,ident)['backup']
+    return retain_after_verified(storage,uid,read_verified(storage,uid,ident)['backup'],checkpoint_now)
 
 
-def list_backups(storage, uid, offset=0):
-    prefix = f'bonus-tracker-recovery/v1/{uid}/'
-    rows=[]; continuation=None
+def checkpoint_id(uid, now=None):
+    now=now or datetime.now(timezone.utc)
+    slot=int(now.timestamp())//(12*3600)
+    return hashlib.sha256((uid+':scheduled:'+str(slot)).encode()).hexdigest()[:32]
+
+
+def catalog_rows(storage,uid):
+    prefix=f'bonus-tracker-recovery/v1/{uid}/'
+    rows=[];continuation=None
     while True:
         args={'Bucket':storage.bucket,'Prefix':prefix,'MaxKeys':1000}
         if continuation:args['ContinuationToken']=continuation
         result=storage.client.list_objects_v2(**args)
-        rows.extend(x for x in result.get('Contents',[]) if ID.fullmatch(x['Key'][len(prefix):].removesuffix('.json')))
+        for row in result.get('Contents',[]):
+            ident=row['Key'][len(prefix):].removesuffix('.json')
+            if not ID.fullmatch(ident):continue
+            head=storage.client.head_object(Bucket=storage.bucket,Key=row['Key'])
+            rows.append({'key':row['Key'],'lastModified':row['LastModified'],'backup':receipt(ident,head)})
         if not result.get('IsTruncated'):break
         continuation=result.get('NextContinuationToken')
         if not continuation:raise ValueError('Incomplete cloud backup listing')
-    rows.sort(key=lambda x:x['LastModified'],reverse=True)
-    backups=[]
-    for row in rows[offset:offset+50]:
-        ident=row['Key'][len(prefix):].removesuffix('.json')
-        head=storage.client.head_object(Bucket=storage.bucket,Key=row['Key'])
-        # Listed snapshots were verified on upload; restore rechecks the full bytes.
-        backups.append(receipt(ident,head))
-    return {'backups':backups,'total':len(rows),'nextOffset':offset+50 if offset+50<len(rows) else None,'provider':'Cloudflare R2','retained':'Versions retained; this app never automatically deletes backups'}
+    # Checkpoints retain their source data time; an older concurrent checkpoint cannot outrank a new upload.
+    rows.sort(key=lambda x:(x['backup']['dataAt'] or '',x['lastModified']),reverse=True)
+    return rows
+
+
+def prune_verified_versions(storage,uid,new_ident,now=None):
+    rows=catalog_rows(storage,uid)
+    by_id={x['backup']['id']:x for x in rows}
+    ordered=rows
+    keep=set();hashes=set()
+    protected_slot=checkpoint_id(uid,now)
+    if protected_slot in by_id:
+        read_verified(storage,uid,protected_slot)
+        keep.add(protected_slot)
+    for row in ordered:
+        item=row['backup']
+        if item['sha256'] in hashes or len(hashes)>=3:continue
+        verified=read_verified(storage,uid,item['id'])
+        keep.add(item['id']);hashes.add(verified['backup']['sha256'])
+    # Every retained recovery state was read back before any superseded object is removed.
+    for row in rows:
+        if row['backup']['id'] not in keep:
+            storage.client.delete_object(Bucket=storage.bucket,Key=row['key'])
+    return {'maxCopies':4,'retainedCopies':len(keep),'cleanup':'complete'}
+
+
+def retain_after_verified(storage,uid,verified,now=None):
+    if verified.get('reason') in ('pre-restore','pre-reset'):
+        return {**verified,'retention':{'maxCopies':4,'cleanup':'deferred-for-safety'}}
+    try:retention=prune_verified_versions(storage,uid,verified['id'],now)
+    except Exception:
+        import logging
+        logging.getLogger('uvicorn.error').warning('bonus_backup_retention_pending; verified backup retained')
+        retention={'maxCopies':4,'cleanup':'pending'}
+    return {**verified,'retention':retention}
+
+
+def list_backups(storage,uid,offset=0):
+    rows=catalog_rows(storage,uid)
+    return {'backups':[x['backup'] for x in rows[offset:offset+50]],'total':len(rows),'nextOffset':offset+50 if offset+50<len(rows) else None,'provider':'Cloudflare R2','retention':{'maxCopies':4,'distinctStates':3},'retained':'Latest three distinct verified states, plus current twelve-hour checkpoint; maximum four copies after successful cleanup'}
 
 
 async def operation(fn, *args):
@@ -206,18 +248,21 @@ async def get_backup(ident:str,request:Request):
 def scheduled_checkpoint(storage, uid, now=None):
     """A persistent twelve-hour checkpoint of the latest verified uploaded state."""
     now = now or datetime.now(timezone.utc)
-    slot = int(now.timestamp()) // (12*3600)
-    ident = hashlib.sha256((uid+':scheduled:'+str(slot)).encode()).hexdigest()[:32]
+    ident = checkpoint_id(uid,now)
     # The slot identity is stable across process restarts and multiple instances.
     try:
         read_verified(storage,uid,ident)
+        catalog=list_backups(storage,uid)
+        if catalog['backups']:
+            latest=read_verified(storage,uid,catalog['backups'][0]['id'])
+            retain_after_verified(storage,uid,latest['backup'],now)
         return {'created':False,'reason':'already-checkpointed'}
     except HTTPException as exc:
         if exc.status_code != 404:raise
     catalog=list_backups(storage,uid)
     if not catalog['backups']:return {'created':False,'reason':'no-uploaded-data'}
     latest = read_verified(storage,uid,catalog['backups'][0]['id'])
-    result = save_verified(storage,uid,{'id':ident,'reason':'scheduled','snapshot':latest['snapshot'],'sha256':latest['backup']['sha256']})
+    result = save_verified(storage,uid,{'id':ident,'reason':'scheduled','snapshot':latest['snapshot'],'sha256':latest['backup']['sha256']},data_at=latest['backup']['dataAt'],checkpoint_now=now)
     return {'created':True,'backup':result}
 
 
