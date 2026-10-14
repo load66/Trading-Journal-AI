@@ -17,6 +17,7 @@ def client(monkeypatch):
     monkeypatch.setattr(b, '_cache', {})
     monkeypatch.setattr(b, '_usage_day', '')
     monkeypatch.setattr(b, '_calls', 0)
+    monkeypatch.setattr(b, '_anonymous_calls', 0)
     monkeypatch.setattr(b, '_last_call', 0)
     app = FastAPI();app.include_router(b.router)
     return TestClient(app)
@@ -90,3 +91,51 @@ def test_no_journal_or_url_fetch_contract():
     source=Path(b.__file__).read_text()
     assert 'get_db' not in source and 'DATABASE_URL' not in source and 'diary' not in source
     assert "'https://api.groq.com/openai/v1/chat/completions'" in source
+
+
+PUBLIC_HEADERS = {'Origin': 'https://load66.github.io'}
+
+
+def test_public_questions_need_no_signin_and_cache(client, monkeypatch):
+    calls=[]
+    async def fake(p):
+        calls.append(p)
+        return {'answer':'Check the saved closure checks.','factIds':['close_gate'],'missing':[]}
+    monkeypatch.setattr(b,'provider',fake)
+    first=client.post('/public/bonus-tracker/ask',json=packet(),headers=PUBLIC_HEADERS)
+    second=client.post('/public/bonus-tracker/ask',json=packet(),headers=PUBLIC_HEADERS)
+    assert first.status_code==second.status_code==200
+    assert first.json()['cached'] is False and second.json()['cached'] is True
+    assert len(calls)==1 and b._anonymous_calls==1
+    assert client.post('/api/bonus-tracker/ask',json=packet(),headers=PUBLIC_HEADERS).status_code==401
+
+
+def test_public_origin_and_input_gates_precede_provider(client,monkeypatch):
+    calls=[]
+    async def fake(p):calls.append(p);return {}
+    monkeypatch.setattr(b,'provider',fake)
+    for headers in [{},{'Origin':'https://other.example'},{'Origin':'null'}]:
+        assert client.post('/public/bonus-tracker/ask',json=packet(),headers=headers).status_code==403
+    assert client.post('/public/bonus-tracker/ask',content='{}',headers=PUBLIC_HEADERS).status_code==415
+    p=packet();p['notes']='private'
+    assert client.post('/public/bonus-tracker/ask',json=p,headers=PUBLIC_HEADERS).status_code==400
+    assert not calls
+
+
+def test_public_attempt_cap_includes_failures(client,monkeypatch):
+    monkeypatch.setattr(b,'_usage_day',b.datetime.now(b.timezone.utc).date().isoformat())
+    monkeypatch.setattr(b,'_anonymous_calls',19)
+    calls=[]
+    async def fake(p):calls.append(p);raise ValueError('provider secret')
+    monkeypatch.setattr(b,'provider',fake)
+    assert client.post('/public/bonus-tracker/ask',json=packet(),headers=PUBLIC_HEADERS).status_code==503
+    monkeypatch.setattr(b,'_last_call',0)
+    denied=client.post('/public/bonus-tracker/ask',json=packet(),headers=PUBLIC_HEADERS)
+    assert denied.status_code==429 and len(calls)==1 and b._anonymous_calls==20
+    assert 'provider secret' not in denied.text
+
+
+def test_public_cannot_bypass_shared_budget(client,monkeypatch):
+    monkeypatch.setattr(b,'_usage_day',b.datetime.now(b.timezone.utc).date().isoformat())
+    monkeypatch.setattr(b,'_calls',30)
+    assert client.post('/public/bonus-tracker/ask',json=packet(),headers=PUBLIC_HEADERS).status_code==429

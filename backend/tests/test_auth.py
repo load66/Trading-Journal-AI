@@ -115,6 +115,22 @@ def test_health_is_public_but_api_requires_auth(monkeypatch, tmp_path):
         assert protected.status_code == 401
 
 
+def test_public_bonus_questions_leave_journal_protected(monkeypatch, tmp_path):
+    main=fresh_main(monkeypatch,tmp_path,AUTH_REQUIRED='true',SUPABASE_URL='https://project.supabase.co',AUTHORIZED_USER_ID='owner-uuid',FRONTEND_ORIGINS='https://load66.github.io')
+    import bonus_questions as b
+    async def fake(request,anonymous=False):
+        assert anonymous is True
+        return {'answer':'Saved rules only.','factIds':['terms'],'missing':[]}
+    monkeypatch.setattr(b,'answer_request',fake)
+    from fastapi.testclient import TestClient
+    with TestClient(main.app) as client:
+        response=client.post('/public/bonus-tracker/ask',json={},headers={'Origin':'https://load66.github.io'})
+        assert response.status_code==200
+        assert response.headers['access-control-allow-origin']=='https://load66.github.io'
+        for path in ['/api/accounts','/api/bonus-tracker/ask','/uploads/private.png']:
+            assert client.get(path).status_code==401
+
+
 def test_authorized_request_reaches_api(monkeypatch, tmp_path):
     main = fresh_main(
         monkeypatch,
