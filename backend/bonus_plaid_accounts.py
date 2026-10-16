@@ -469,13 +469,17 @@ def sync_owner(uid):
         attempts = doc.setdefault("newItemDiscoveryAttempts", {})
         eligible_missing = {item_id: item for item_id, item in missing.items()
                             if now >= attempts.get(item_id, 0)}
-        first_sync = {item_id: item for item_id, item in known.items()
-                      if item_id in doc.get("items", {}) and
-                      doc["items"][item_id].get("accounts") and
-                      not doc["items"][item_id].get("lastTransactionAttemptAt") and
-                      not doc["items"][item_id].get("cursor") and
-                      now >= doc["items"][item_id].get("nextTransactionSyncAt", 0)}
-        if not eligible_missing and not first_sync:
+        # Independent per-Item budget also handles delayed first-history
+        # backfill, not only the initial request. Legacy Items with a cursor
+        # and no Item-specific deadline still use the owner-wide daily window.
+        due_items = {item_id: item for item_id, item in known.items()
+                     if item_id in doc.get("items", {}) and
+                     doc["items"][item_id].get("accounts") and
+                     (("nextTransactionSyncAt" in doc["items"][item_id] and
+                       now >= doc["items"][item_id]["nextTransactionSyncAt"]) or
+                      (not doc["items"][item_id].get("lastTransactionAttemptAt") and
+                       not doc["items"][item_id].get("cursor")))}
+        if not eligible_missing and not due_items:
             return _public(doc, ledger, uid)
         doc["lease"] = uuid.uuid4().hex
         doc["leaseUntil"] = now + 300
@@ -512,7 +516,7 @@ def sync_owner(uid):
                         state["transactionSyncError"] = exc.detail
                 candidate["items"][item_id] = state
                 candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
-            for item_id, item in first_sync.items():
+            for item_id, item in due_items.items():
                 old = candidate["items"][item_id]
                 try:
                     delta = _sync_item(item["access"], old.get("cursor"))
@@ -632,12 +636,13 @@ def scheduled_sync_once():
             discover_due = any(item_id not in doc.get("items", {}) and
                 now >= doc.get("newItemDiscoveryAttempts", {}).get(item_id, 0)
                 for item_id in owned)
-            initial_due = any(
+            item_due = any(
                 item_id in owned and state.get("accounts") and
-                not state.get("lastTransactionAttemptAt") and not state.get("cursor") and
-                now >= state.get("nextTransactionSyncAt", 0)
+                (("nextTransactionSyncAt" in state and
+                  now >= state["nextTransactionSyncAt"]) or
+                 (not state.get("lastTransactionAttemptAt") and not state.get("cursor")))
                 for item_id, state in doc.get("items", {}).items())
-            if now >= doc.get("nextSyncAt", 0) or discover_due or initial_due:
+            if now >= doc.get("nextSyncAt", 0) or discover_due or item_due:
                 sync_owner(uid)
         except Exception:
             # Private per-owner status reports failures; never log bank data.
