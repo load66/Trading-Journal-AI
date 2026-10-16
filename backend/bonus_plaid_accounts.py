@@ -486,9 +486,16 @@ def sync_owner(uid):
         etag = _write(uid, doc, etag)
         candidate = copy.deepcopy(doc)
         try:
+            discovery_failed = False
             for item_id, item in eligible_missing.items():
-                raw = _provider("/accounts/get", item["access"])
-                state = _merge({}, item_id, item["institution"], raw, None, now)
+                try:
+                    raw = _provider("/accounts/get", item["access"])
+                    state = _merge({}, item_id, item["institution"], raw, None, now)
+                except HTTPException:
+                    # Keep the failed Item eligible for a later bounded retry
+                    # without rolling back other newly linked institutions.
+                    discovery_failed = True
+                    continue
                 candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
                     {a["key"] for a in state["accounts"]})
                 if state["accounts"]:
@@ -522,7 +529,10 @@ def sync_owner(uid):
                     old["transactionSyncError"] = exc.detail
             if eligible_missing:
                 candidate["lastAccountDiscovery"] = now
-            candidate.pop("error", None)
+            if discovery_failed:
+                candidate["error"] = "One or more linked banks need account discovery. Retry after the next provider window."
+            else:
+                candidate.pop("error", None)
         except HTTPException as exc:
             # No partial encrypted writes or lost prior activity on failed
             # account discovery. Retry after the reserved provider interval.
@@ -542,9 +552,23 @@ def sync_owner(uid):
     try:
         monitored = set(candidate.get("monitored", []))
         for item_id, item in known.items():
-            raw = _provider("/accounts/get", item["access"])
             old = candidate["items"].get(item_id, {})
-            exposed = _merge(old, item_id, item["institution"], raw, None, now)
+            try:
+                raw = _provider("/accounts/get", item["access"])
+                if old.get("accounts") and not raw.get("accounts"):
+                    raise HTTPException(502, "This bank did not return its previously linked accounts.")
+                exposed = _merge(old, item_id, item["institution"], raw, None, now)
+            except HTTPException as exc:
+                # A single bank's account-discovery outage must not destroy
+                # saved transactions or prevent other Items from updating.
+                if old:
+                    exposed = copy.deepcopy(old)
+                    exposed["lastTransactionAttemptAt"] = now
+                    exposed["nextTransactionSyncAt"] = now + DAY
+                    exposed["transactionSyncStatus"] = "needs_attention"
+                    exposed["transactionSyncError"] = exc.detail
+                    candidate["items"][item_id] = exposed
+                continue
             discovered = {a["key"] for a in exposed["accounts"]}
             new_accounts = discovered - monitored
             monitored.update(discovered)
