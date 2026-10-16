@@ -427,7 +427,34 @@ def sync_owner(uid):
     if doc.get("leaseUntil", 0) > now:
         raise HTTPException(409, "Plaid synchronization is busy.")
     if now < doc.get("nextSyncAt", 0):
-        return _public(doc, ledger, uid)
+        # A new Item may have been linked after this owner's previous daily
+        # transaction sync. Discover ONLY its account names/balances. Do not
+        # re-run Transactions or resync older Items within the daily budget.
+        missing = {item_id: item for item_id, item in known.items()
+                   if item_id not in doc.get("items", {})}
+        if not missing or now < doc.get("nextNewItemDiscoveryAt", 0):
+            return _public(doc, ledger, uid)
+        doc["lease"] = uuid.uuid4().hex
+        doc["leaseUntil"] = now + 300
+        doc["nextNewItemDiscoveryAt"] = now + DAY
+        etag = _write(uid, doc, etag)
+        candidate = copy.deepcopy(doc)
+        try:
+            for item_id, item in missing.items():
+                raw = _provider("/accounts/get", item["access"])
+                candidate["items"][item_id] = _merge(
+                    {}, item_id, item["institution"], raw, None, now)
+            candidate["lastAccountDiscovery"] = now
+            candidate.pop("error", None)
+        except HTTPException as exc:
+            # Never persist partially discovered Items or expose any provider
+            # credentials. Fail once, then let the daily budget decide retry.
+            candidate = doc
+            candidate["error"] = exc.detail
+        candidate.pop("lease", None)
+        candidate.pop("leaseUntil", None)
+        _write(uid, candidate, etag)
+        return _public(candidate, ledger, uid)
     doc["lease"] = uuid.uuid4().hex
     doc["leaseUntil"] = now + 300
     doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
