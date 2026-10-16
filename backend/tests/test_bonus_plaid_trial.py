@@ -101,7 +101,7 @@ def test_exact_global_lifetime_cap_and_no_slot_recycling(setup, monkeypatch):
         assert response.status_code == 200
         owner = "a" if n % 2 else "b"
         assert exchange(client, response.json()["session"], owner=owner,
-                        token="pub-" + str(n)).status_code == 200
+                        token="public-token-" + str(n)).status_code == 200
     status = client.get("/api/bonus-tracker/plaid", headers={"Authorization": "Bearer a"}).json()
     assert status["used"] == 10 and status["remaining"] == 0 and status["limit"] == 10
     assert status["paidUpgradeAllowed"] is False
