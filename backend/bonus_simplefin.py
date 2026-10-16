@@ -104,6 +104,8 @@ def read_state(uid):
 
 def write_state(uid, state, etag):
     state = migrate_state(state)
+    # Empty account groups have no shard to reconstruct; normalize before CAS comparison.
+    state['transactions'] = {k: rows for k, rows in state.get('transactions', {}).items() if rows}
     s = store()
     old_manifest = list(state.get('historyShards', []))
     manifest = finance_history.store_shards(s.client, s.bucket, key(uid),
