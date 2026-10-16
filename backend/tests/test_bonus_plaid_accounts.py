@@ -329,3 +329,112 @@ def test_initial_provider_error_preserves_discovery_and_suspends_retry(monkeypat
     assert calls == ["/accounts/get", "/transactions/sync"]
     adapter.sync_owner("alice")
     assert calls == ["/accounts/get", "/transactions/sync"], "Do not retry a failed new-Item sync immediately"
+
+
+def test_two_new_banks_added_same_day_get_independent_first_syncs(monkeypatch):
+    from copy import deepcopy
+    storage = adapter._default()
+    storage["nextSyncAt"] = NOW + 7200
+    ledger = {"items": {
+        "onepay-item": {"owner": "alice", "institution": "OnePay", "access": "onepay"},
+        "xmoney-item": {"owner": "alice", "institution": "X Money", "access": "xmoney"}
+    }}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (ledger, "tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "tag"))
+    def persist(uid, doc, tag):
+        storage.clear()
+        storage.update(deepcopy(doc))
+        return "tag"
+    monkeypatch.setattr(adapter, "_write", persist)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def provider(endpoint, token, **kwargs):
+        calls.append((endpoint, token))
+        if endpoint == "/accounts/get":
+            return {"accounts": [{**account(), "account_id": token + "-checking"}]}
+        return {"added": [{**fixture(ident=token + "-deposit"),
+                            "account_id": token + "-checking"}],
+                "modified": [], "removed": [],
+                "next_cursor": token + "-cursor", "has_more": False}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    # First link in the provider window.
+    del ledger["items"]["xmoney-item"]
+    first = adapter.sync_owner("alice")
+    assert len(first["accounts"]) == 1
+    assert len(first["transactions"][adapter._account_key("onepay-item", "onepay-checking")]) == 1
+    assert calls == [("/accounts/get", "onepay"), ("/transactions/sync", "onepay")]
+    # Second independent bank links minutes later while owner-wide clock is locked.
+    ledger["items"]["xmoney-item"] = {"owner": "alice", "institution": "X Money", "access": "xmoney"}
+    second = adapter.sync_owner("alice")
+    assert len(second["accounts"]) == 2
+    assert len(second["transactions"][adapter._account_key("xmoney-item", "xmoney-checking")]) == 1
+    assert calls == [("/accounts/get", "onepay"), ("/transactions/sync", "onepay"),
+                     ("/accounts/get", "xmoney"), ("/transactions/sync", "xmoney")]
+    assert storage["nextSyncAt"] == NOW + 7200
+    assert not storage["newItemDiscoveryAttempts"]
+    adapter.sync_owner("alice")
+    assert len(calls) == 4, "Neither linked bank may re-consume its same-day first-sync budget"
+
+
+def test_automatic_scheduler_wakes_for_uninitialized_item_during_cooldown(monkeypatch):
+    from copy import deepcopy
+    ledger = {"items": {
+        "existing": {"owner": "alice", "access": "existing", "institution": "Old bank"},
+        "new-onepay": {"owner": "alice", "access": "new", "institution": "OnePay"}
+    }}
+    doc = adapter._default()
+    doc["nextSyncAt"] = NOW + 7200
+    doc["items"]["existing"] = adapter._merge(
+        {}, "existing", "Old bank", {"accounts": [account()]}, None, NOW - 60)
+    doc["items"]["existing"]["cursor"] = "old-cursor"
+    monkeypatch.setattr(adapter.quota, "_ready", lambda: True)
+    monkeypatch.setattr(adapter.quota, "_read", lambda: (ledger, "tag"))
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (ledger, "tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(doc), "tag"))
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    called = []
+    monkeypatch.setattr(adapter, "sync_owner", lambda uid: called.append(uid))
+    adapter.scheduled_sync_once()
+    assert called == ["alice"], "A newly linked bank must be discovered without a user refresh"
+    called.clear()
+    doc["newItemDiscoveryAttempts"]["new-onepay"] = NOW + 86400
+    adapter.scheduled_sync_once()
+    assert called == [], "An attempted bank must not repeatedly consume provider calls"
+    doc["items"]["new-onepay"] = adapter._merge({}, "new-onepay", "OnePay",
+        {"accounts": [account()]}, None, NOW)
+    doc["newItemDiscoveryAttempts"].clear()
+    adapter.scheduled_sync_once()
+    assert called == ["alice"], "A discovered bank lacking first transactions must be initialized"
+
+
+def test_one_bank_transaction_failure_does_not_rollback_other_bank(monkeypatch):
+    from copy import deepcopy
+    storage = adapter._default()
+    storage["nextSyncAt"] = 0
+    ledger = {"items": {
+        "old-failing": {"owner": "alice", "institution": "Unavailable", "access": "bad"},
+        "good-bank": {"owner": "alice", "institution": "Available", "access": "good"}
+    }}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (ledger, "tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "tag"))
+    def persist(uid, doc, tag):
+        storage.clear()
+        storage.update(deepcopy(doc))
+        return "tag"
+    monkeypatch.setattr(adapter, "_write", persist)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    def provider(endpoint, token, **kwargs):
+        if endpoint == "/accounts/get":
+            return {"accounts": [{**account(), "account_id": token + "-checking"}]}
+        if token == "bad":
+            raise HTTPException(502, "Institution unavailable")
+        return {"added": [{**fixture(ident="good-deposit"), "account_id": "good-checking"}],
+                "modified": [], "removed": [], "next_cursor": "good-cursor", "has_more": False}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    result = adapter.sync_owner("alice")
+    by_name = {x["bank"]: x for x in result["accounts"]}
+    assert by_name["Unavailable"]["transactionSyncStatus"] == "needs_attention"
+    assert by_name["Available"]["transactionSyncStatus"] == "ready"
+    assert len(result["transactions"][adapter._account_key("good-bank", "good-checking")]) == 1
+    assert storage["items"]["good-bank"]["cursor"] == "good-cursor"
+    assert storage["items"]["old-failing"]["nextTransactionSyncAt"] == NOW + adapter.DAY
