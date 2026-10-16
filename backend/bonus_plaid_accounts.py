@@ -472,8 +472,8 @@ def sync_owner(uid):
     doc["lease"] = uuid.uuid4().hex
     doc["leaseUntil"] = now + 300
     doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
-    if doc.get("monitored"):
-        doc["transactionNextSyncAt"] = now + DAY
+    # Automatically linked accounts consume the same bounded daily transaction budget.
+    doc["transactionNextSyncAt"] = now + DAY
     etag = _write(uid, doc, etag)
     candidate = copy.deepcopy(doc)
     try:
