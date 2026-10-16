@@ -23,7 +23,7 @@ def test_plaid_credit_and_debit_signs():
     debit=adapter._transaction(fixture(amount=15.75,name="Example Fee"),NOW)
     assert credit["amount"]=="500"
     assert debit["amount"]=="-15.75"
-    assert credit["kind"]=="other_deposit"
+    assert credit["kind"]=="deposit"  # deposits become candidates via conservative signals
     assert debit["kind"]=="withdrawal"
 
 def test_invalid_money_and_date_fail_closed():
@@ -92,6 +92,7 @@ def test_provider_redacts_ids_from_public_snapshot():
     serialized=__import__("json").dumps(shown)
     assert "private" not in serialized and "item1" not in serialized
     assert '"example"' not in serialized and '"tx1"' not in serialized
+    assert next(iter(shown["transactions"][key].values()))["signals"]==["possible_direct_deposit"]
     assert shown["authoritativeMilestones"] is False
     assert adapter._public(saved,ledger,"bob")["accounts"]==[]
 
