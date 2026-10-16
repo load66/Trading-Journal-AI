@@ -140,8 +140,8 @@ def test_new_connection_syncs_every_account_automatically_and_only_once_daily(mo
     assert len(payload["transactions"][second_key]) == 1
     assert all(len(a["connectionHandle"]) == 64 for a in payload["accounts"])
     assert calls == ["/accounts/get", "/transactions/sync"]
-    assert storage["transactionNextSyncAt"] == NOW + adapter.DAY
-    assert storage["nextSyncAt"] == NOW + adapter.DAY
+    assert storage["transactionNextSyncAt"] == NOW + adapter.SYNC_INTERVAL
+    assert storage["nextSyncAt"] == NOW + adapter.SYNC_INTERVAL
     assert payload["authoritativeMilestones"] is False
     repeat = client.post("/api/bonus-tracker/plaid/accounts/sync", headers=headers)
     assert repeat.status_code == 200
@@ -230,3 +230,41 @@ def test_failed_new_item_discovery_preserves_existing_data_and_provider_budget(m
     assert storage["nextNewItemDiscoveryAt"] == NOW + adapter.DAY
     assert adapter.sync_owner("alice")["accounts"] == response["accounts"]
     assert calls == ["/accounts/get"], "Never retry repeatedly within the daily budget"
+
+
+def test_plaid_account_removal_preserves_other_accounts_and_item(monkeypatch):
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    from copy import deepcopy
+    first=account()
+    second={**first,"account_id":"secondary","name":"Synthetic credit card"}
+    first_key=adapter._account_key("item","example")
+    second_key=adapter._account_key("item","secondary")
+    doc=adapter._default()
+    doc["items"]["item"]=adapter._merge({},"item","Synthetic bank",
+        {"accounts":[first,second]},(
+            {"a":fixture(ident="a"),"b":{**fixture(ident="b"),"account_id":"secondary"}},
+            {},set(),"cursor1"),NOW)
+    doc["monitored"]=[first_key,second_key]
+    ledger={"items":{"item":{"owner":"alice","access":"synthetic-token",
+                              "institution":"Synthetic bank"}}}
+    monkeypatch.setattr(adapter.quota,"_ledger",lambda:(ledger,"tag"))
+    monkeypatch.setattr(adapter,"owner",lambda request:"alice")
+    monkeypatch.setattr(adapter,"_read",lambda uid:(deepcopy(doc),"tag"))
+    def write(uid,value,etag):
+        doc.clear();doc.update(deepcopy(value))
+        return "tag"
+    monkeypatch.setattr(adapter,"_write",write)
+    app=FastAPI();app.include_router(adapter.router);client=TestClient(app)
+    removed=client.delete("/api/bonus-tracker/plaid/accounts/individual/"+second_key)
+    assert removed.status_code==200
+    payload=removed.json()
+    assert [a["key"] for a in payload["accounts"]]==[first_key]
+    assert second_key in payload["removedAccounts"]
+    assert len(doc["items"]["item"]["transactions"])==1
+    assert doc["items"]["item"]["cursor"]=="cursor1"
+    assert "item" in ledger["items"]
+    assert first_key in doc["monitored"] and second_key not in doc["monitored"]
+    restored=client.post("/api/bonus-tracker/plaid/accounts/individual/"+second_key+"/restore")
+    assert restored.status_code==200
+    assert second_key not in doc["removedAccounts"]
