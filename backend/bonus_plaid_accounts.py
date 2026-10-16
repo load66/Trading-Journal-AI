@@ -135,7 +135,9 @@ def _account(item_id, institution, row, now):
                                balance.get("unofficial_currency_code"), 8),
             "balance": _money(balance.get("current")),
             "availableBalance": _money(balance.get("available")),
-            "balanceDate": now,
+            # /accounts/get balances are potentially cached by Plaid. Do not
+            # invent a provider freshness timestamp when one is not supplied.
+            "balanceDate": None, "observedAt": now,
             "provider": "plaid",
             "accountType": clean(row.get("type"), 32),
             "accountSubtype": clean(row.get("subtype"), 40)}
@@ -308,10 +310,9 @@ def monitor(body: Monitored, request: Request):
         raise HTTPException(400, "Select only your discovered Plaid accounts.")
     doc["monitored"] = list(body.accounts)
     doc["nextSyncAt"] = 0
-    for state in doc["items"].values():
+    for item_id, state in doc["items"].items():
         state["transactions"] = {k: v for k, v in state.get("transactions", {}).items()
-                                 if _account_key(next((item_id for item_id, item in doc["items"].items()
-                                 if item is state), ""), v.get("account", "")) in requested}
+                                 if _account_key(item_id, v.get("account", "")) in requested}
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
 
