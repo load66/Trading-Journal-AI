@@ -48,6 +48,7 @@ def _key(uid):
 
 def _default():
     return {"version": 1, "items": {}, "monitored": [], "lastSuccess": None, "nextSyncAt": 0, "mappings": {},
+            "newItemDiscoveryAttempts": {},
             "evidenceReviews": {}, "accountProfiles": {}, "transactionReviews": {}}
 
 
@@ -465,8 +466,9 @@ def sync_owner(uid):
         # account balance but no activity until an unrelated bank's next window.
         missing = {item_id: item for item_id, item in known.items()
                    if item_id not in doc.get("items", {})}
-        can_discover = now >= doc.get("nextNewItemDiscoveryAt", 0)
-        eligible_missing = missing if can_discover else {}
+        attempts = doc.setdefault("newItemDiscoveryAttempts", {})
+        eligible_missing = {item_id: item for item_id, item in missing.items()
+                            if now >= attempts.get(item_id, 0)}
         first_sync = {item_id: item for item_id, item in known.items()
                       if item_id in doc.get("items", {}) and
                       doc["items"][item_id].get("accounts") and
@@ -478,7 +480,9 @@ def sync_owner(uid):
         doc["lease"] = uuid.uuid4().hex
         doc["leaseUntil"] = now + 300
         if eligible_missing:
-            doc["nextNewItemDiscoveryAt"] = now + DAY
+            doc["nextNewItemDiscoveryAt"] = now + DAY  # legacy visibility
+            for item_id in eligible_missing:
+                attempts[item_id] = now + DAY
         etag = _write(uid, doc, etag)
         candidate = copy.deepcopy(doc)
         try:
@@ -500,6 +504,7 @@ def sync_owner(uid):
                         state["transactionSyncStatus"] = "needs_attention"
                         state["transactionSyncError"] = exc.detail
                 candidate["items"][item_id] = state
+                candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
             for item_id, item in first_sync.items():
                 old = candidate["items"][item_id]
                 try:
@@ -623,8 +628,9 @@ def scheduled_sync_once():
             now = time.time()
             owned = {item_id for item_id, item in ledger["items"].items()
                      if item.get("owner") == uid and not item.get("disconnectedAt")}
-            discover_due = any(item_id not in doc.get("items", {}) for item_id in owned) and (
-                now >= doc.get("nextNewItemDiscoveryAt", 0))
+            discover_due = any(item_id not in doc.get("items", {}) and
+                now >= doc.get("newItemDiscoveryAttempts", {}).get(item_id, 0)
+                for item_id in owned)
             initial_due = any(
                 item_id in owned and state.get("accounts") and
                 not state.get("lastTransactionAttemptAt") and not state.get("cursor") and
