@@ -605,3 +605,67 @@ def test_product_link_input_validation_and_scope(setup, monkeypatch):
                     json={'mappings': {'f'*64: {**original, 'productId': 'checking'}}})
     assert unknown.status_code == 400
     assert c.put(path, json={'mappings': {k: {**original, 'productId': 'checking'}}}).status_code == 401
+
+
+
+def test_product_assignment_preserves_review_decisions_but_resets_requirement_associations(
+        setup, monkeypatch):
+    """Choosing share savings cannot erase bank evidence or attach checking DD progress."""
+    s = seed()
+    a = account(transactions=[
+        txn('salary', '500', 'Payroll Direct Deposit'),
+        txn('fee', '-8', 'Monthly Service Fee')])
+    key = b.account_key(a)
+    b.merge(s, data(a), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    h = {'Authorization': 'Bearer synthetic'}
+    mapping = {'entryId': 'cycle1', 'bank': 'Synthetic CU', 'opened': '2026-10-01'}
+    endpoint = '/api/bonus-tracker/simplefin/evidence-review'
+    sel = '/api/bonus-tracker/simplefin/selection'
+    base = {'account': key, **mapping}
+    payday = {**base, 'transaction': b.public_ref(key, 'salary'),
+              'decision': 'reviewed', 'requirementId': 'dd_main'}
+    assert c.put(endpoint, headers=h, json=payday).status_code == 200
+    fee = {**base, 'transaction': b.public_ref(key, 'fee'),
+           'decision': 'dismissed'}
+    assert c.put(endpoint, headers=h, json=fee).status_code == 200
+
+    # Adding an account-product label retains the review state, but drops
+    # product-specific requirement matches pending explicit reconfirmation.
+    chosen = c.put(sel, headers=h,
+                   json={'mappings': {key: {**mapping, 'productId': 'checking'}}})
+    assert chosen.status_code == 200, chosen.text
+    receipts = chosen.json()['evidenceReviews'][key]
+    assert receipts[payday['transaction']]['status'] == 'reviewed'
+    assert receipts[payday['transaction']]['requirementId'] is None
+    assert receipts[fee['transaction']]['status'] == 'dismissed'
+    assert payday['transaction'] in chosen.json()['transactions'][key]
+
+    # The optional product field must not break submitting a new review.
+    after = c.put(endpoint, headers=h, json=payday)
+    assert after.status_code == 200, after.text
+    assert after.json()['evidenceReviews'][key][payday['transaction']]['requirementId'] == 'dd_main'
+
+    # Idempotent saving of the same product leaves explicit review associations intact.
+    unchanged = c.put(sel, headers=h,
+                      json={'mappings': {key: {**mapping, 'productId': 'checking'}}})
+    assert unchanged.status_code == 200
+    assert unchanged.json()['evidenceReviews'][key][payday['transaction']]['requirementId'] == 'dd_main'
+
+    # A correction from checking to companion savings must not auto-attach the
+    # reviewed checking deposit to the same promotion requirement.
+    corrected = c.put(sel, headers=h,
+                      json={'mappings': {key: {**mapping, 'productId': 'share'}}})
+    assert corrected.status_code == 200
+    assert corrected.json()['evidenceReviews'][key][payday['transaction']]['status'] == 'reviewed'
+    assert corrected.json()['evidenceReviews'][key][payday['transaction']]['requirementId'] is None
+    assert corrected.json()['evidenceReviews'][key][fee['transaction']]['status'] == 'dismissed'
+    assert corrected.json()['transactions'][key][payday['transaction']]['amount'] == '500.00'
+
+    # Different cycles must never inherit the old review receipts.
+    changed_cycle = c.put(sel, headers=h, json={
+        'mappings': {key: {**mapping, 'opened': '2026-10-11', 'productId': 'checking'}}})
+    assert changed_cycle.status_code == 200
+    assert not changed_cycle.json().get('evidenceReviews', {}).get(key)
+    assert b.read_state('owner')[0]['evidenceReviews'] == {}
