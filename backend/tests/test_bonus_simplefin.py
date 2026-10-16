@@ -105,7 +105,7 @@ def test_sync_cadence_and_no_unselected_fetch(setup,monkeypatch):
     assert b.sync('owner')['connected']
     b.sync('owner');assert len(calls)==1 and len(calls[0])==1
     s,tag=b.read_state('owner');s['mappings']={};s['nextSyncAt']=0;b.write_state('owner',s,tag)
-    b.sync('owner');assert len(calls)==1
+    b.sync('owner');assert len(calls)==2  # Accounts still sync without a bonus mapping.
 
 def test_failed_sync_is_throttled_and_retains_evidence(setup,monkeypatch):
     s=seed();b.merge(s,data(account(transactions=[txn()])),NOW);b.write_state('owner',s,None)
@@ -244,11 +244,8 @@ def test_monitor_unlinked_account_sync_and_opt_out_deletes_history(setup, monkey
         fetched.append([a['id'] for a in selected])
         return data(account(transactions=[txn('activity', '-12.50', 'Coffee shop')]))
     monkeypatch.setattr(b, 'get_data', fake_get_data)
-    assert c.post(p + '/sync', headers=h).json().get('lastSuccess') is None
-    enrolled = c.put(p + '/monitoring', headers=h, json={'accounts': [k]})
-    assert enrolled.status_code == 200
-    assert enrolled.json()['monitoredAccounts'] == [k]
     synced = c.post(p + '/sync', headers=h).json()
+    assert synced['monitoredAccounts'] == [k], 'First connection must enable transaction history automatically'
     assert fetched == [['a']]
     assert synced['transactions'][k][b.public_ref(k,'activity')]['kind'] == 'withdrawal'
     assert synced['lastSuccess'] == NOW

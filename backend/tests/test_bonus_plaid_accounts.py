@@ -97,73 +97,56 @@ def test_provider_redacts_ids_from_public_snapshot():
     assert adapter._public(saved,ledger,"bob")["accounts"]==[]
 
 
-def test_authenticated_readonly_routes_and_monitoring(monkeypatch):
+def test_new_connection_syncs_every_account_automatically_and_only_once_daily(monkeypatch):
     from fastapi import FastAPI, HTTPException
     from fastapi.testclient import TestClient
     from copy import deepcopy
-    from types import SimpleNamespace
     import bonus_plaid_trial as quota
-    key=adapter._account_key("sample-item","example")
-    storage={"version":1,"items":{},"monitored":[],"lastSuccess":None,"nextSyncAt":0}
-    item={"sample-item":{"owner":"alice","institution":"Synthetic Bank","access":"fake-access"}}
-    monkeypatch.setattr(quota,"_ready",lambda:True)
-    monkeypatch.setattr(quota,"_ledger",lambda:({"items":item}, "tag"))
-    monkeypatch.setattr(adapter,"owner",lambda request:
-        "alice" if request.headers.get("Authorization")=="Bearer example"
-        else (_ for _ in ()).throw(HTTPException(401,"Not signed in")))
-    monkeypatch.setattr(adapter,"_read",lambda uid:(deepcopy(storage),"tag"))
+
+    first_key = adapter._account_key("sample-item", "example")
+    second_key = adapter._account_key("sample-item", "unselected")
+    storage = adapter._default()
+    items = {"sample-item": {"owner": "alice", "institution": "Synthetic Bank", "access": "fake-access"}}
+    monkeypatch.setattr(quota, "_ready", lambda: True)
+    monkeypatch.setattr(quota, "_ledger", lambda: ({"items": items}, "tag"))
+    monkeypatch.setattr(adapter, "owner", lambda request:
+                        "alice" if request.headers.get("Authorization") == "Bearer example"
+                        else (_ for _ in ()).throw(HTTPException(401, "Not signed in")))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "tag"))
     def save(uid, doc, tag):
         storage.clear()
         storage.update(deepcopy(doc))
         return "tag"
-    monkeypatch.setattr(adapter,"_write",save)
-    monkeypatch.setattr(adapter.time,"time",lambda:NOW)
-    calls=[]
+    monkeypatch.setattr(adapter, "_write", save)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
     def provider(endpoint, token, **kwargs):
         calls.append(endpoint)
-        if endpoint=="/accounts/get":
-            return {"accounts":[account(), {**account(),"account_id":"unselected"}]}
-        return {"added":[fixture(), {**fixture(ident="private-other"),"account_id":"unselected"}],"modified":[],"removed":[],
-                "next_cursor":"latest","has_more":False}
-    monkeypatch.setattr(adapter,"_provider",provider)
-    app=FastAPI()
+        if endpoint == "/accounts/get":
+            return {"accounts": [account(), {**account(), "account_id": "unselected"}]}
+        return {"added": [fixture(), {**fixture(ident="private-other"), "account_id": "unselected"}],
+                "modified": [], "removed": [], "next_cursor": "latest", "has_more": False}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    app = FastAPI()
     app.include_router(adapter.router)
-    client=TestClient(app)
-    h={"Authorization":"Bearer example"}
-    assert client.get("/api/bonus-tracker/plaid/accounts").status_code==401
-    assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
-        json={"accounts":[key]},headers=h).status_code==400
-    first=client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h)
-    assert first.status_code==200 and len(first.json()["accounts"])==2
-    assert calls==["/accounts/get"]
-    storage["items"]["sample-item"]["cursor"]="cursor-from-previous-unmonitored-period"
-    assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
-        json={"accounts":[key,key]},headers=h).status_code==400
-    enabled=client.put("/api/bonus-tracker/plaid/accounts/monitoring",
-        json={"accounts":[key]},headers=h)
-    assert enabled.status_code==200
-    assert storage["items"]["sample-item"]["cursor"]=="", "Newly monitored accounts must backfill rather than skip history"
-    result=client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h)
-    assert result.status_code==200
-    assert calls==["/accounts/get","/accounts/get","/transactions/sync"]
-    assert len(result.json()["transactions"][key])==1
-    assert result.json()["authoritativeMilestones"] is False
-    assert set(storage["items"]["sample-item"]["transactions"]) == {"tx1"}, \
-        "Unselected account activity must never be retained in private storage"
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer example"}
+    response = client.post("/api/bonus-tracker/plaid/accounts/sync", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["accounts"]) == 2
+    assert set(payload["monitoredAccounts"]) == {first_key, second_key}
+    assert len(payload["transactions"][first_key]) == 1
+    assert len(payload["transactions"][second_key]) == 1
+    assert all(len(a["connectionHandle"]) == 64 for a in payload["accounts"])
+    assert calls == ["/accounts/get", "/transactions/sync"]
     assert storage["transactionNextSyncAt"] == NOW + adapter.DAY
-    # Neither a no-op save nor deselect/reselect may buy another provider call.
-    for selected in ([key], [], [key]):
-        assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
-            json={"accounts":selected},headers=h).status_code==200
-        assert storage["nextSyncAt"] == NOW + adapter.DAY
-        assert client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h).status_code==200
-        assert len(calls)==3
-
-    again=client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h)
-    assert again.status_code==200 and len(calls)==3
-    assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
-        json={"accounts":[]},headers=h).status_code==200
-    assert client.get("/api/bonus-tracker/plaid/accounts",headers=h).json()["transactions"]=={}
+    assert storage["nextSyncAt"] == NOW + adapter.DAY
+    assert payload["authoritativeMilestones"] is False
+    repeat = client.post("/api/bonus-tracker/plaid/accounts/sync", headers=headers)
+    assert repeat.status_code == 200
+    assert calls == ["/accounts/get", "/transactions/sync"]
+    assert adapter._public(storage, {"items": items}, "other-owner")["accounts"] == []
 
 
 def test_new_bank_discovers_accounts_without_repeating_daily_transaction_sync(monkeypatch):
@@ -206,6 +189,7 @@ def test_new_bank_discovers_accounts_without_repeating_daily_transaction_sync(mo
     assert response["nextSyncAt"] == NOW + 7200
     assert storage["items"]["previous-item"]["accounts"] == prior["accounts"]
     assert not storage["items"]["new-item"]["transactions"]
+    assert adapter._account_key("new-item", "new-checking") in storage["monitored"]
     assert "private-new" not in str(response)
     assert adapter.sync_owner("alice")["accounts"] == response["accounts"]
     assert calls == [("/accounts/get", "private-new")], "Never repeat a successful discovery"

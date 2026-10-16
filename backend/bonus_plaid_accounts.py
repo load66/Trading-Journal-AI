@@ -28,6 +28,12 @@ MAX_BYTES = 8 * 1024 * 1024
 MAX_PAGES = 25
 MAX_ROWS = 10000
 router = APIRouter(prefix="/api/bonus-tracker/plaid")
+
+
+def connection_handle(uid, item_id):
+    return hashlib.sha256((uid + "\0" + item_id).encode()).hexdigest()
+
+
 ROUTES = frozenset(("/accounts/get", "/transactions/sync"))
 
 
@@ -260,7 +266,7 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
 
 def _view(doc, ledger, uid):
     accessible = {item_id for item_id, row in ledger["items"].items()
-                  if isinstance(row, dict) and row.get("owner") == uid}
+                  if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt")}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
             "monitoredAccounts": list(doc.get("monitored", [])),
             **{key: copy.deepcopy(doc.get(key, {})) for key in
@@ -273,7 +279,8 @@ def _view(doc, ledger, uid):
             continue
         for account in state.get("accounts", []):
             key = account["key"]
-            view["accounts"].append({k: v for k, v in account.items() if k != "id"})
+            view["accounts"].append({**{k: v for k, v in account.items() if k != "id"},
+                                     "connectionHandle": connection_handle(uid, item_id)})
             if key in permitted:
                 view["transactions"][key] = {
                     raw: {k: v for k, v in row.items() if k not in ("id", "account")}
@@ -411,6 +418,11 @@ def monitor(body: Monitored, request: Request):
     return _public(doc, ledger, uid)
 
 
+@router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
+def disconnect_account_item(handle: str, request: Request):
+    return quota.disconnect_item(handle, request)
+
+
 @router.post("/accounts/sync", dependencies=[Depends(_private)])
 def sync(request: Request):
     return sync_owner(owner(request))
@@ -419,7 +431,7 @@ def sync(request: Request):
 def sync_owner(uid):
     ledger, _ = quota._ledger()
     known = {item_id: row for item_id, row in ledger["items"].items()
-             if row.get("owner") == uid}
+             if row.get("owner") == uid and not row.get("disconnectedAt")}
     if not known:
         raise HTTPException(409, "Connect a Plaid fallback institution first.")
     doc, etag = _read(uid)
@@ -444,6 +456,8 @@ def sync_owner(uid):
                 raw = _provider("/accounts/get", item["access"])
                 candidate["items"][item_id] = _merge(
                     {}, item_id, item["institution"], raw, None, now)
+                candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
+                    {a["key"] for a in candidate["items"][item_id]["accounts"]})
             candidate["lastAccountDiscovery"] = now
             candidate.pop("error", None)
         except HTTPException as exc:
@@ -458,8 +472,8 @@ def sync_owner(uid):
     doc["lease"] = uuid.uuid4().hex
     doc["leaseUntil"] = now + 300
     doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
-    if doc.get("monitored"):
-        doc["transactionNextSyncAt"] = now + DAY
+    # Automatically linked accounts consume the same bounded daily transaction budget.
+    doc["transactionNextSyncAt"] = now + DAY
     etag = _write(uid, doc, etag)
     candidate = copy.deepcopy(doc)
     try:
@@ -468,8 +482,14 @@ def sync_owner(uid):
             raw = _provider("/accounts/get", item["access"])
             old = candidate["items"].get(item_id, {})
             exposed = _merge(old, item_id, item["institution"], raw, None, now)
-            if monitored.intersection({a["key"] for a in exposed["accounts"]}):
-                # Do not call Transactions for unmonitored accounts.
+            discovered = {a["key"] for a in exposed["accounts"]}
+            new_accounts = discovered - monitored
+            monitored.update(discovered)
+            candidate["monitored"] = sorted(monitored)
+            if new_accounts and old.get("cursor"):
+                # A preexisting cursor may have skipped activity for newly linked accounts.
+                old = {**old, "cursor": ""}
+            if discovered:
                 changes = _sync_item(item["access"], old.get("cursor"))
                 exposed = _merge(old, item_id, item["institution"], raw, changes, now)
             # Plaid returns an Item-wide delta, even when only one account is
@@ -509,7 +529,7 @@ def scheduled_sync_once():
     for uid in owners:
         try:
             doc, _ = _read(uid)
-            if doc.get("monitored") and time.time() >= doc.get("nextSyncAt", 0):
+            if time.time() >= doc.get("nextSyncAt", 0):
                 sync_owner(uid)
         except Exception:
             # Private per-owner status reports failures; never log bank data.

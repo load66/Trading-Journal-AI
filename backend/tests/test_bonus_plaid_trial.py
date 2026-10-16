@@ -207,3 +207,39 @@ def test_exchange_rechecks_lifetime_counter_before_provider(setup, monkeypatch):
     plaid._write(doc, tag)
     assert exchange(client, session).status_code == 409
     assert calls == ["/link/token/create"]
+
+
+def test_disconnect_one_bank_revokes_credential_without_recycling_trial_slot(setup, monkeypatch):
+    import bonus_plaid_accounts as activity
+    client, memory = setup
+    monkeypatch.setattr(activity, "store", lambda: memory)
+    calls = []
+    def provider(endpoint, payload):
+        calls.append(endpoint)
+        if endpoint == "/link/token/create":
+            return {"link_token": "synthetic-link"}
+        if endpoint == "/item/public_token/exchange":
+            return {"item_id": "item-one", "access_token": "synthetic-access"}
+        assert endpoint == "/item/remove" and payload["access_token"] == "synthetic-access"
+        return {"removed": True}
+    monkeypatch.setattr(plaid, "_provider", provider)
+
+    session = start(client).json()["session"]
+    assert exchange(client, session).status_code == 200
+    before = client.get("/api/bonus-tracker/plaid", headers={"Authorization": "Bearer a"}).json()
+    handle = before["connected"][0]["handle"]
+    assert len(handle) == 64 and before["used"] == 1
+    forbidden = client.delete("/api/bonus-tracker/plaid/items/" + handle,
+                              headers={"Authorization": "Bearer b"})
+    assert forbidden.status_code == 404
+    removed = client.delete("/api/bonus-tracker/plaid/items/" + handle,
+                            headers={"Authorization": "Bearer a"})
+    assert removed.status_code == 200 and removed.json()["disconnected"] is True
+    after = client.get("/api/bonus-tracker/plaid", headers={"Authorization": "Bearer a"}).json()
+    assert after["used"] == 1 and after["remaining"] == 9 and after["connected"] == []
+    ledger, _ = plaid._read()
+    assert "access" not in ledger["items"]["item-one"]
+    assert ledger["items"]["item-one"]["disconnectedAt"] > 0
+    assert calls.count("/item/remove") == 1
+    assert client.delete("/api/bonus-tracker/plaid/items/" + handle,
+                         headers={"Authorization": "Bearer a"}).status_code == 404
