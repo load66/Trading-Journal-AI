@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from bonus_backups import owner, store
+import bonus_finance_history as finance_history
 from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, public_ref,
     public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
@@ -74,16 +75,33 @@ def _read(uid):
             raise ValueError()
         doc.setdefault("excluded", [])
         doc.setdefault("removedAccounts", {})
+        if doc.get("historyShards"):
+            records = finance_history.read_shards(s.client, s.bucket, _key(uid),
+                doc["historyShards"], cipher(), MAX_BYTES)
+            for item_id, transactions in records.items():
+                if item_id not in doc["items"]:
+                    raise HTTPException(503, "Private financial history references an unavailable connection.")
+                doc["items"][item_id]["transactions"] = transactions
         return doc, r["ETag"]
     except Exception:
         raise HTTPException(503, "Plaid activity integrity check failed. Sync disabled.") from None
 
 
 def _write(uid, doc, etag):
-    raw = cipher().encrypt(json.dumps(doc, separators=(",", ":"), sort_keys=True).encode())
-    if len(raw) > MAX_BYTES:
-        raise HTTPException(413, "Plaid activity exceeds its safe storage limit.")
     s = store()
+    old_manifest = list(doc.get("historyShards", []))
+    for item in doc.get("items", {}).values():
+        item.setdefault("transactions", {})
+    records = {item_id:item["transactions"] for item_id,item in doc.get("items", {}).items()}
+    manifest = finance_history.store_shards(s.client, s.bucket, _key(uid), records,
+                                             old_manifest, cipher(), MAX_BYTES)
+    doc["historyShards"] = manifest
+    root = copy.deepcopy(doc)
+    for item in root.get("items", {}).values():
+        item["transactions"] = {}
+    raw = cipher().encrypt(json.dumps(root, separators=(",", ":"), sort_keys=True).encode())
+    if len(raw) > MAX_BYTES:
+        raise HTTPException(413, "Plaid activity metadata exceeds its safe storage limit.")
     args = {"Bucket": s.bucket, "Key": _key(uid), "Body": raw,
             "ContentType": "application/octet-stream",
             **({"IfMatch": etag} if etag else {"IfNoneMatch": "*"})}
@@ -96,6 +114,7 @@ def _write(uid, doc, etag):
     seen, new_tag = _read(uid)
     if seen != doc:
         raise HTTPException(503, "Plaid activity save could not be verified.")
+    finance_history.prune_old_shards(s.client, s.bucket, _key(uid), old_manifest, manifest)
     return new_tag
 
 
