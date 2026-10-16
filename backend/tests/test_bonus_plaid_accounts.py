@@ -53,3 +53,44 @@ def test_transaction_revision_and_provider_removal():
 def test_readonly_provider_route_allowlist():
     assert adapter.ROUTES == frozenset(("/accounts/get","/transactions/sync"))
     assert adapter.MAX_PAGES<=25
+
+
+def test_paginated_delta_cursor_and_removal(monkeypatch):
+    seen=[]
+    def provider(endpoint, access, **kwargs):
+        assert endpoint=="/transactions/sync"
+        seen.append(kwargs["cursor"])
+        if kwargs["cursor"]=="":
+            return {"added":[fixture(ident="a")],"modified":[],"removed":[],
+                    "next_cursor":"next1","has_more":True}
+        return {"added":[],"modified":[fixture(ident="b")],
+                "removed":[{"transaction_id":"retired"}],
+                "next_cursor":"final","has_more":False}
+    monkeypatch.setattr(adapter,"_provider",provider)
+    added,modified,removed,cursor=adapter._sync_item("synthetic","")
+    assert seen==["","next1"]
+    assert list(added)==["a"] and list(modified)==["b"]
+    assert removed=={"retired"}
+    assert cursor=="final"
+
+def test_incomplete_pagination_never_claims_success(monkeypatch):
+    monkeypatch.setattr(adapter,"MAX_PAGES",2)
+    monkeypatch.setattr(adapter,"_provider",lambda *args,**kwargs:{
+        "added":[],"modified":[],"removed":[],"next_cursor":"loop","has_more":True})
+    with pytest.raises(HTTPException) as error:
+        adapter._sync_item("synthetic","")
+    assert error.value.status_code==502
+
+def test_provider_redacts_ids_from_public_snapshot():
+    key=adapter._account_key("item1","example")
+    row=adapter._merge({},"item1","Example",{"accounts":[account()]},(
+        {"tx1":fixture()}, {},set(),"cursor1"),NOW)
+    saved={"version":1,"items":{"item1":row},"monitored":[key],"lastSuccess":NOW}
+    ledger={"items":{"item1":{"owner":"alice","access":"private","institution":"Example"}}}
+    shown=adapter._public(saved,ledger,"alice")
+    assert len(shown["accounts"])==1 and len(shown["transactions"][key])==1
+    serialized=__import__("json").dumps(shown)
+    assert "private" not in serialized and "item1" not in serialized
+    assert '"example"' not in serialized and '"tx1"' not in serialized
+    assert shown["authoritativeMilestones"] is False
+    assert adapter._public(saved,ledger,"bob")["accounts"]==[]
