@@ -33,6 +33,7 @@ def _private(response: Response):
 
 def _ready():
     return (os.getenv("PLAID_TRIAL_ENABLED") == "true"
+            and os.getenv("PLAID_TRIAL_PLAN_VERIFIED") == "true"
             and os.getenv("PLAID_TRIAL_BASELINE_CONFIRMED") == "true"
             and os.getenv("PLAID_TRIAL_PIPELINE_READY") == "true"
             and bool(os.getenv("PLAID_CLIENT_ID")) and bool(os.getenv("PLAID_SECRET")))
