@@ -318,7 +318,10 @@ def monitor(body: Monitored, request: Request):
         raise HTTPException(400, "Select only your discovered Plaid accounts.")
     new_accounts = requested - set(doc.get("monitored", []))
     doc["monitored"] = list(body.accounts)
-    doc["nextSyncAt"] = 0
+    # First selection may follow account-only discovery. Once Transactions was
+    # attempted, preference changes must never reset its daily provider budget.
+    if new_accounts and doc.get("transactionNextSyncAt", 0) <= time.time():
+        doc["nextSyncAt"] = 0
     for item_id, state in doc["items"].items():
         # An account added to monitoring must not inherit an Item cursor that
         # skipped its older transactions while that account was unmonitored.
@@ -347,6 +350,8 @@ def sync(request: Request):
     doc["lease"] = uuid.uuid4().hex
     doc["leaseUntil"] = now + 300
     doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
+    if doc.get("monitored"):
+        doc["transactionNextSyncAt"] = now + DAY
     etag = _write(uid, doc, etag)
     candidate = copy.deepcopy(doc)
     try:
@@ -359,6 +364,12 @@ def sync(request: Request):
                 # Do not call Transactions for unmonitored accounts.
                 changes = _sync_item(item["access"], old.get("cursor"))
                 exposed = _merge(old, item_id, item["institution"], raw, changes, now)
+            # Plaid returns an Item-wide delta, even when only one account is
+            # selected. Discard unselected activity before encrypted persistence.
+            exposed["transactions"] = {
+                ident: row for ident, row in exposed.get("transactions", {}).items()
+                if _account_key(item_id, row.get("account", "")) in monitored
+            }
             candidate["items"][item_id] = exposed
         candidate["lastSuccess"] = now
         candidate.pop("error", None)

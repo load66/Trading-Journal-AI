@@ -122,8 +122,8 @@ def test_authenticated_readonly_routes_and_monitoring(monkeypatch):
     def provider(endpoint, token, **kwargs):
         calls.append(endpoint)
         if endpoint=="/accounts/get":
-            return {"accounts":[account()]}
-        return {"added":[fixture()],"modified":[],"removed":[],
+            return {"accounts":[account(), {**account(),"account_id":"unselected"}]}
+        return {"added":[fixture(), {**fixture(ident="private-other"),"account_id":"unselected"}],"modified":[],"removed":[],
                 "next_cursor":"latest","has_more":False}
     monkeypatch.setattr(adapter,"_provider",provider)
     app=FastAPI()
@@ -134,7 +134,7 @@ def test_authenticated_readonly_routes_and_monitoring(monkeypatch):
     assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
         json={"accounts":[key]},headers=h).status_code==400
     first=client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h)
-    assert first.status_code==200 and len(first.json()["accounts"])==1
+    assert first.status_code==200 and len(first.json()["accounts"])==2
     assert calls==["/accounts/get"]
     storage["items"]["sample-item"]["cursor"]="cursor-from-previous-unmonitored-period"
     assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
@@ -148,6 +148,17 @@ def test_authenticated_readonly_routes_and_monitoring(monkeypatch):
     assert calls==["/accounts/get","/accounts/get","/transactions/sync"]
     assert len(result.json()["transactions"][key])==1
     assert result.json()["authoritativeMilestones"] is False
+    assert set(storage["items"]["sample-item"]["transactions"]) == {"tx1"}, \
+        "Unselected account activity must never be retained in private storage"
+    assert storage["transactionNextSyncAt"] == NOW + adapter.DAY
+    # Neither a no-op save nor deselect/reselect may buy another provider call.
+    for selected in ([key], [], [key]):
+        assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
+            json={"accounts":selected},headers=h).status_code==200
+        assert storage["nextSyncAt"] == NOW + adapter.DAY
+        assert client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h).status_code==200
+        assert len(calls)==3
+
     again=client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h)
     assert again.status_code==200 and len(calls)==3
     assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
