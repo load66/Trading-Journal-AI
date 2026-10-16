@@ -521,3 +521,44 @@ def test_one_initial_discovery_error_does_not_hide_another_new_bank(monkeypatch)
     assert storage["nextSyncAt"] == NOW + 3600
     adapter.sync_owner("alice")
     assert len(calls) == 3, "The failing bank cannot bypass its rate limit"
+
+
+def test_delayed_initial_history_retries_on_its_own_due_date(monkeypatch):
+    from copy import deepcopy
+    storage = adapter._default()
+    storage["nextSyncAt"] = NOW + 17 * 3600
+    original = adapter._merge({}, "onepay-item", "OnePay",
+        {"accounts": [account()]},
+        ({}, {}, set(), "first-empty-cursor"), NOW - DAY - 1)
+    assert original["transactionSyncStatus"] == "awaiting_provider_data"
+    storage["items"]["onepay-item"] = original
+    key = adapter._account_key("onepay-item", "example")
+    storage["monitored"] = [key]
+    ledger = {"items": {"onepay-item": {
+        "owner": "alice", "institution": "OnePay", "access": "private"}}}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (ledger, "etag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "etag"))
+    def save(uid, doc, tag):
+        storage.clear()
+        storage.update(deepcopy(doc))
+        return "etag"
+    monkeypatch.setattr(adapter, "_write", save)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def provider(endpoint, token, **kw):
+        calls.append((endpoint, kw.get("cursor")))
+        assert token == "private"
+        if endpoint == "/transactions/sync":
+            assert kw["cursor"] == "first-empty-cursor"
+            return {"added": [fixture(ident="backfill-arrived")], "modified": [],
+                    "removed": [], "next_cursor": "after-backfill", "has_more": False}
+        return {"accounts": [account()]}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    response = adapter.sync_owner("alice")
+    assert len(response["transactions"][key]) == 1
+    assert response["accounts"][0]["transactionSyncStatus"] == "ready"
+    assert storage["items"]["onepay-item"]["nextTransactionSyncAt"] == NOW + DAY
+    assert storage["nextSyncAt"] == NOW + 17 * 3600
+    calls_before = len(calls)
+    adapter.sync_owner("alice")
+    assert len(calls) == calls_before, "A fresh backfill must not be fetched twice"
