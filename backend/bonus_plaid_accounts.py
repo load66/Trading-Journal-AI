@@ -112,7 +112,10 @@ def _money(v):
         x = Decimal(str(v))
         if not x.is_finite() or abs(x) > 10**12:
             raise ValueError()
-        return str(x)
+        # Canonical text ensures equal provider values have equal fingerprints.
+        if x == 0:
+            return "0"
+        return format(x.normalize(), "f")
     except (ValueError, InvalidOperation):
         raise HTTPException(502, "Provider supplied invalid money data.") from None
 
