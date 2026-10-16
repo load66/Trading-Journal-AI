@@ -317,7 +317,7 @@ def _view(doc, ledger, uid):
                                      "connectionHandle": connection_handle(uid, item_id)})
             if key in permitted:
                 view["transactions"][key] = {
-                    raw: {k: v for k, v in row.items() if k not in ("id", "account")}
+                    raw: {k: v for k, v in row.items() if k not in ("id", "account", "pendingTransactionId")}
                     for raw, row in state.get("transactions", {}).items()
                     if row.get("account") == account["id"]}
     allowed = {a["key"] for a in view["accounts"]}
