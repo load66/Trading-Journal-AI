@@ -109,6 +109,9 @@ def test_successful_sync_permanently_discards_obsolete_receipts(setup, monkeypat
     put("transaction-review", {"account": key, "transaction": review["transaction"], "category": "income"})
     monkeypatch.setattr(adapter, "_provider", lambda *args, **kwargs: {"accounts": [account()]})
     monkeypatch.setattr(adapter, "_sync_item", lambda *args: ({}, {}, {"tx1"}, "next"))
+    # The Item already used its daily transaction allowance at NOW. Advance
+    # to its next permitted window before asserting that removals are fetched.
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW + adapter.DAY + 1)
     adapter.sync_owner("alice")
     assert not state["evidenceReviews"].get(key) and not state["transactionReviews"].get(key)
     # Reappearance with the same ID and content needs a fresh review.
