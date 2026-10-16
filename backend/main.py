@@ -138,7 +138,8 @@ async def authentication_middleware(request, call_next):
     path = request.url.path
     protected = path == "/api" or path.startswith("/api/") or path.startswith("/uploads/")
     is_cors_preflight = request.method == "OPTIONS"
-    private_simplefin = path == "/api/bonus-tracker/simplefin" or path.startswith("/api/bonus-tracker/simplefin/")
+    private_simplefin = (path == "/api/bonus-tracker/simplefin" or path.startswith("/api/bonus-tracker/simplefin/")
+                         or path == "/api/bonus-tracker/plaid" or path.startswith("/api/bonus-tracker/plaid/"))
     if protected and auth_required() and not is_cors_preflight:
         try:
             authorize_header(request.headers.get("Authorization"))
@@ -188,6 +189,8 @@ from bonus_backups import router as bonus_backups_router
 app.include_router(bonus_backups_router)
 from bonus_simplefin import router as bonus_simplefin_router
 app.include_router(bonus_simplefin_router)
+from bonus_plaid_trial import router as bonus_plaid_trial_router
+app.include_router(bonus_plaid_trial_router)
 from venza_cloud import router as venza_cloud_router
 app.include_router(venza_cloud_router)
 
