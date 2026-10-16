@@ -36,7 +36,8 @@ def setup(monkeypatch):
     return m
 
 def account(conn='one',ident='a',transactions=None):
-    return {'id':ident,'conn_id':conn,'name':'Checking','currency':'USD','balance':'50.00','balance-date':NOW-300,'transactions':transactions or []}
+    return {'id':ident,'conn_id':conn,'name':'Checking','currency':'USD','balance':'50.00',
+            'available-balance':'45.00','balance-date':NOW-300,'transactions':transactions or []}
 
 def data(*accounts):return {'accounts':list(accounts),'connections':[{'conn_id':'one','name':'Synthetic CU'}],'errlist':[]}
 
@@ -75,7 +76,8 @@ def test_encryption_isolation_and_conflicting_write(setup):
 def test_merge_signs_pending_duplicate_corrections_and_missing(setup):
     s=seed();k=b.account_key(account())
     b.merge(s,data(account(transactions=[txn(),txn(),txn('pending','200',pending=True),txn('pay','500','Payroll'),txn('transfer','900','Transfer from savings'),txn('interest','.17','Dividend Deposit')])),NOW)
-    assert len(s['transactions'][k])==4
+    assert len(s['transactions'][k])==5
+    assert s['transactions'][k]['pending']['pending'] is True
     assert s['transactions'][k]['t1']['kind']=='possible_bonus'
     assert s['transactions'][k]['pay']['kind']=='other_deposit'
     assert s['transactions'][k]['transfer']['kind']=='other_deposit'
@@ -83,12 +85,13 @@ def test_merge_signs_pending_duplicate_corrections_and_missing(setup):
     assert s['transactions'][k]['t1']['changedAt']==NOW+1
     assert s['transactions'][k]['reversal']['kind']=='possible_reversal'
     b.merge(s,data(),NOW+2)
-    assert k in s['missingAccounts'] and len(s['transactions'][k])==5
+    assert k in s['missingAccounts'] and len(s['transactions'][k])==6
 
 def test_exact_account_scope_same_id_different_connection(setup):
     s=seed();b.merge(s,data(account('two',transactions=[txn('wrong')])),NOW)
     assert not s['transactions']
     assert b.account_key(account('one'))!=b.account_key(account('two'))
+    assert [a['key'] for a in s['accounts']] == [b.account_key(account('one'))]
 
 def test_invalid_amount_does_not_commit_partial_merge(setup,monkeypatch):
     s=seed();b.write_state('owner',s,None)
@@ -118,7 +121,7 @@ def client(monkeypatch):
 
 def test_auth_all_endpoints_and_disconnect_tombstone(setup,monkeypatch):
     c=client(monkeypatch);prefix='/api/bonus-tracker/simplefin';h={'Authorization':'Bearer synthetic'}
-    for method,path,payload in [('get','',None),('post','/sync',None),('post','/discover',None),('delete','',None),('post','/connect',{'setup_token':TOKEN}),('put','/selection',{'mappings':{}}),('put','/monitoring',{'accounts':[]})]:
+    for method,path,payload in [('get','',None),('post','/sync',None),('post','/discover',None),('delete','',None),('post','/connect',{'setup_token':TOKEN}),('post','/reconnect',{'setup_token':TOKEN}),('put','/selection',{'mappings':{}}),('put','/monitoring',{'accounts':[]}),('put','/account-profiles',{'profiles':{}}),('put','/transaction-review',{'account':'a'*64,'transaction':'b'*64,'category':'other'})]:
         assert getattr(c,method)(prefix+path,**({'json':payload} if payload else {})).status_code==401
     b.write_state('owner',seed(),None)
     r=c.delete(prefix,headers=h);assert r.status_code==200 and not r.json()['connected']
@@ -133,6 +136,45 @@ def test_connect_preserves_claimed_access_after_discovery_failure(setup,monkeypa
     assert r.status_code==200 and r.json()['connected'] and r.json()['error']=='Try later'
     assert b.read_state('owner')[0]['access']==ACCESS
     assert ACCESS not in r.text and TOKEN not in r.text
+
+
+def test_reconnect_replaces_access_and_preserves_financial_history(setup, monkeypatch):
+    s = seed(); k = b.account_key(account()); s['monitoredAccounts'] = [k]
+    s['accountProfiles'] = {k: {'kind':'checking','order':0,'balanceMode':'asset'}}
+    b.merge(s, data(account(transactions=[txn()])), NOW)
+    b.write_state('owner', s, None)
+    replacement = 'https://replacement:new-secret@beta-bridge.simplefin.org/simplefin'
+    monkeypatch.setattr(b, 'network', lambda *a, **kw: replacement.encode())
+    c = client(monkeypatch); h = {'Authorization':'Bearer synthetic'}
+    result = c.post('/api/bonus-tracker/simplefin/reconnect', headers=h,
+                    json={'setup_token':TOKEN})
+    assert result.status_code == 200
+    payload = result.json()
+    assert payload['connected'] and payload['status'] == 'connected'
+    assert payload['nextSyncAt'] == 0
+    assert payload['mappings'] == s['mappings']
+    assert payload['monitoredAccounts'] == [k]
+    assert payload['accountProfiles'][k]['kind'] == 'checking'
+    assert payload['transactions'][k][b.public_ref(k,'t1')]['kind'] == 'possible_bonus'
+    stored = b.read_state('owner')[0]
+    assert stored['access'] == replacement
+    assert ACCESS not in result.text and replacement not in result.text and TOKEN not in result.text
+
+
+def test_failed_reconnect_keeps_existing_access_and_evidence(setup, monkeypatch):
+    s = seed(); k = b.account_key(account()); b.merge(s, data(account(transactions=[txn()])), NOW)
+    b.write_state('owner', s, None)
+    def fail(*a, **kw):
+        raise HTTPException(403, 'Replacement rejected')
+    monkeypatch.setattr(b, 'network', fail)
+    c = client(monkeypatch); h = {'Authorization':'Bearer synthetic'}
+    result = c.post('/api/bonus-tracker/simplefin/reconnect', headers=h,
+                    json={'setup_token':TOKEN})
+    assert result.status_code == 200
+    assert result.json()['status'] == 'attention'
+    stored = b.read_state('owner')[0]
+    assert stored['access'] == ACCESS
+    assert 't1' in stored['transactions'][k]
 
 def test_mapping_changes_clear_previous_cycle_and_keep_other_accounts(setup,monkeypatch):
     s=seed();b.merge(s,data(account(transactions=[txn()])),NOW);b.write_state('owner',s,None)
@@ -163,7 +205,7 @@ def test_wrong_key_fails_closed(setup,monkeypatch):
     assert e.value.status_code==503
 
 
-def test_network_never_follows_redirects_or_sends_credentials_in_url(monkeypatch):
+def test_network_never_follows_redirects_or_sends_credentials_in_url(setup,monkeypatch):
     called=[]
     def network(url,**kw):
         called.append((url,kw));return json.dumps(data(account())).encode()
@@ -172,7 +214,8 @@ def test_network_never_follows_redirects_or_sends_credentials_in_url(monkeypatch
     assert 'secret' not in called[0][0] and '@' not in called[0][0]
     assert called[0][1]['auth']==('synthetic','secret')
     assert ('account','a') in called[0][1]['params']
-    assert not any(k=='pending' for k,v in called[0][1]['params'])
+    assert ('pending','1') in called[0][1]['params']
+    assert int(dict(called[0][1]['params'])['start-date']) == NOW-90*b.DAY
 
 
 def test_private_routes_disable_caching(setup,monkeypatch):
@@ -207,7 +250,7 @@ def test_monitor_unlinked_account_sync_and_opt_out_deletes_history(setup, monkey
     assert enrolled.json()['monitoredAccounts'] == [k]
     synced = c.post(p + '/sync', headers=h).json()
     assert fetched == [['a']]
-    assert synced['transactions'][k]['activity']['kind'] == 'withdrawal'
+    assert synced['transactions'][k][b.public_ref(k,'activity')]['kind'] == 'withdrawal'
     assert synced['lastSuccess'] == NOW
     c.post(p + '/sync', headers=h)
     assert len(fetched) == 1  # Same 24-hour provider budget.
@@ -230,7 +273,7 @@ def test_monitored_account_survives_bonus_unlink_without_reclassifying(setup, mo
     assert result.status_code == 200
     assert result.json()['mappings'] == {}
     assert k in result.json()['transactions']
-    assert result.json()['transactions'][k]['t1']['kind'] == 'possible_bonus'
+    assert result.json()['transactions'][k][b.public_ref(k,'t1')]['kind'] == 'possible_bonus'
 
 
 def test_monitor_rejects_unknown_duplicate_or_unconnected_accounts(setup, monkeypatch):
@@ -267,3 +310,58 @@ def test_missing_monitored_account_flags_attention_without_deleting_evidence(set
     assert s['status'] == 'attention'
     assert s['missingAccounts'] == [k]
     assert k in s['transactions']
+
+
+def test_profiles_available_balance_history_and_net_worth_inputs_are_owner_private(setup, monkeypatch):
+    s = seed(); k = b.account_key(account()); b.merge(s, data(account()), NOW); b.write_state('owner', s, None)
+    c = client(monkeypatch); h = {'Authorization':'Bearer synthetic'}; p = '/api/bonus-tracker/simplefin'
+    r = c.put(p + '/account-profiles', headers=h, json={'profiles':{k:{'kind':'checking','order':3,'balanceMode':'asset'}}})
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload['accountProfiles'][k] == {'kind':'checking','order':3,'balanceMode':'asset'}
+    assert payload['accounts'][0]['availableBalance'] == '45.00'
+    assert payload['balanceHistory'][k][-1]['balance'] == '50.00'
+    raw = setup.items[b.key('owner')][0]
+    assert b'checking' not in raw and b'45.00' not in raw
+    for kind in ('credit_card','brokerage','retirement','loan','mortgage','other_asset','other_liability'):
+        assert c.put(p + '/account-profiles', headers=h, json={'profiles':{k:{'kind':kind,'order':0,'balanceMode':'exclude'}}}).status_code == 200
+
+
+def test_transaction_enrichment_review_and_provider_revision_invalidates_review(setup, monkeypatch):
+    s = seed(); k = b.account_key(account()); s['monitoredAccounts'] = [k]
+    b.merge(s, data(account(transactions=[txn('coffee','-6.25','POS Coffee 123456'),
+                                          txn('salary','900','Employer Direct Deposit')])), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch); h = {'Authorization':'Bearer synthetic'}; p = '/api/bonus-tracker/simplefin'
+    public = c.get(p, headers=h).json(); ref = b.public_ref(k,'coffee')
+    assert public['transactions'][k][ref]['merchant'] == 'Coffee'
+    assert public['transactions'][k][b.public_ref(k,'salary')]['signals'] == ['possible_direct_deposit']
+    reviewed = c.put(p + '/transaction-review', headers=h,
+                     json={'account':k,'transaction':ref,'category':'dining'})
+    assert reviewed.status_code == 200
+    assert reviewed.json()['transactions'][k][ref]['category'] == 'dining'
+    assert reviewed.json()['transactions'][k][ref]['categorySource'] == 'user'
+    stored, tag = b.read_state('owner')
+    b.merge(stored, data(account(transactions=[txn('coffee','-7.00','POS Coffee 123456')])), NOW+1)
+    b.write_state('owner', stored, tag)
+    changed = c.get(p, headers=h).json()['transactions'][k][ref]
+    assert changed['categorySource'] == 'automatic' and changed['changedAt'] == NOW+1
+    assert changed['revisions'][-1]['amount'] == '-6.25'
+    serialized = json.dumps(c.get(p, headers=h).json())
+    assert '"coffee"' not in serialized and '"salary"' not in serialized
+    assert 'transactionReviews' not in serialized and 'audit' not in serialized
+
+
+def test_high_confidence_internal_transfer_and_recurring_detection(setup):
+    left = account('one','a',[txn('out','-100','Transfer payment')])
+    right = account('two','b',[txn('in','100','Transfer payment')])
+    recurring = account('three','c',[txn('m1','-12.99','STREAM SERVICE'),
+                                     {**txn('m2','-12.99','STREAM SERVICE'),'posted':NOW-30*b.DAY}])
+    s = b.empty_state(); s['accounts'] = b.normalize_accounts(data(left,right,recurring))
+    s['monitoredAccounts'] = [a['key'] for a in s['accounts']]
+    b.merge(s, data(left,right,recurring), NOW)
+    public = b.public_state(s)
+    lkey, rkey, skey = [a['key'] for a in s['accounts']]
+    assert public['transactions'][lkey][b.public_ref(lkey,'out')]['confidence'] == 'high'
+    assert 'matched_internal_transfer' in public['transactions'][rkey][b.public_ref(rkey,'in')]['signals']
+    assert public['transactions'][skey][b.public_ref(skey,'m1')]['category'] == 'subscription'
