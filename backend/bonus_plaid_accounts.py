@@ -24,6 +24,8 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
 import bonus_plaid_trial as quota
 
 DAY = 86400
+SYNC_INTERVAL = 3 * 3600
+MANUAL_COOLDOWN = 30 * 60
 MAX_BYTES = 8 * 1024 * 1024
 MAX_PAGES = 25
 MAX_ROWS = 10000
@@ -47,7 +49,7 @@ def _key(uid):
 
 
 def _default():
-    return {"version": 1, "items": {}, "monitored": [], "lastSuccess": None, "nextSyncAt": 0, "mappings": {},
+    return {"version": 1, "items": {}, "monitored": [], "excluded": [], "removedAccounts": {}, "lastSuccess": None, "nextSyncAt": 0, "mappings": {},
             "evidenceReviews": {}, "accountProfiles": {}, "transactionReviews": {}}
 
 
@@ -68,6 +70,10 @@ def _read(uid):
                 or not isinstance(doc.get("items"), dict)
                 or not isinstance(doc.get("monitored"), list)):
             raise ValueError()
+        if not isinstance(doc.get("excluded", []), list) or not isinstance(doc.get("removedAccounts", {}), dict):
+            raise ValueError()
+        doc.setdefault("excluded", [])
+        doc.setdefault("removedAccounts", {})
         return doc, r["ETag"]
     except Exception:
         raise HTTPException(503, "Plaid activity integrity check failed. Sync disabled.") from None
@@ -184,6 +190,8 @@ def _transaction(row, now):
     return {"id": ident, "account": account, "posted": _posted(row.get("date")),
             "amount": amount, "description": description,
             "pending": pending, "kind": classify(amount, description),
+            "pendingTransactionId": row.get("pending_transaction_id") if isinstance(row.get("pending_transaction_id"), str) else None,
+            "displayAt": _posted(row.get("date")),
             "currency": clean(row.get("iso_currency_code") or
                               row.get("unofficial_currency_code"), 8),
             "observedAt": now, "lastObservedAt": now}
@@ -244,6 +252,10 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
         transactions.pop(ident, None)
     for ident, row in {**added, **modified}.items():
         converted = _transaction(row, now)
+        if not converted["pending"] and converted.get("pendingTransactionId"):
+            previous = transactions.get(converted["pendingTransactionId"])
+            if previous and previous.get("pending"):
+                transactions.pop(converted["pendingTransactionId"], None)
         existing = transactions.get(ident)
         if existing:
             converted["observedAt"] = existing.get("observedAt", now)
@@ -256,10 +268,9 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
                     if k in existing:
                         converted[k] = existing[k]
         transactions[ident] = converted
-    cutoff = now - 90 * DAY
-    out["transactions"] = {k: v for k, v in transactions.items()
-                          if isinstance(v, dict) and v.get("posted", 0) >= cutoff
-                          and not v.get("pending")}
+    # Keep settled history until the encrypted history store safely partitions it.
+    # Plaid removed deltas and matched pending-to-posted transitions are authoritative.
+    out["transactions"] = {k: v for k, v in transactions.items() if isinstance(v, dict)}
     out["cursor"] = cursor
     return out
 
@@ -267,7 +278,9 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
 def _view(doc, ledger, uid):
     accessible = {item_id for item_id, row in ledger["items"].items()
                   if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt")}
+    removed_accounts = doc.get("removedAccounts", {})
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
+            "removedAccounts": copy.deepcopy(removed_accounts),
             "monitoredAccounts": list(doc.get("monitored", [])),
             **{key: copy.deepcopy(doc.get(key, {})) for key in
                ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
@@ -279,6 +292,8 @@ def _view(doc, ledger, uid):
             continue
         for account in state.get("accounts", []):
             key = account["key"]
+            if key in removed_accounts:
+                continue
             view["accounts"].append({**{k: v for k, v in account.items() if k != "id"},
                                      "connectionHandle": connection_handle(uid, item_id)})
             if key in permitted:
@@ -401,6 +416,7 @@ def monitor(body: Monitored, request: Request):
         raise HTTPException(400, "Select only your discovered Plaid accounts.")
     new_accounts = requested - set(doc.get("monitored", []))
     doc["monitored"] = list(body.accounts)
+    doc["excluded"] = sorted(all_accounts - requested)
     for field in ("mappings", "evidenceReviews", "transactionReviews"):
         doc[field] = {key: value for key, value in doc.get(field, {}).items() if key in requested}
     # First selection may follow account-only discovery. Once Transactions was
@@ -418,6 +434,38 @@ def monitor(body: Monitored, request: Request):
     return _public(doc, ledger, uid)
 
 
+@router.delete("/accounts/individual/{account_key}", dependencies=[Depends(_private)])
+def remove_account(account_key: str, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    account = next((a for a in view["accounts"] if a["key"] == account_key), None)
+    if not account or len(account_key) != 64:
+        raise HTTPException(404, "Account was not found.")
+    doc.setdefault("removedAccounts", {})[account_key] = {
+        "name": clean(account.get("name"), 90), "bank": clean(account.get("bank"), 100)}
+    doc["monitored"] = [k for k in doc["monitored"] if k != account_key]
+    doc["excluded"] = sorted(set(doc.get("excluded", [])) | {account_key})
+    for field in ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews"):
+        doc.get(field, {}).pop(account_key, None)
+    for item_id, item in doc["items"].items():
+        item["accounts"] = [a for a in item.get("accounts", []) if a["key"] != account_key]
+        item["transactions"] = {k:v for k,v in item.get("transactions", {}).items()
+            if _account_key(item_id, v.get("account", "")) != account_key}
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+@router.post("/accounts/individual/{account_key}/restore", dependencies=[Depends(_private)])
+def restore_account(account_key: str, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    if account_key not in doc.get("removedAccounts", {}) or len(account_key) != 64:
+        raise HTTPException(404, "Removed account not found.")
+    doc["removedAccounts"].pop(account_key)
+    doc["excluded"] = [k for k in doc.get("excluded", []) if k != account_key]
+    doc["nextSyncAt"] = 0  # Provider discovery can restore without reconnecting.
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
 @router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
 def disconnect_account_item(handle: str, request: Request):
     return quota.disconnect_item(handle, request)
@@ -425,10 +473,10 @@ def disconnect_account_item(handle: str, request: Request):
 
 @router.post("/accounts/sync", dependencies=[Depends(_private)])
 def sync(request: Request):
-    return sync_owner(owner(request))
+    return sync_owner(owner(request), manual=True)
 
 
-def sync_owner(uid):
+def sync_owner(uid, manual=False):
     ledger, _ = quota._ledger()
     known = {item_id: row for item_id, row in ledger["items"].items()
              if row.get("owner") == uid and not row.get("disconnectedAt")}
@@ -438,7 +486,7 @@ def sync_owner(uid):
     now = int(time.time())
     if doc.get("leaseUntil", 0) > now:
         raise HTTPException(409, "Plaid synchronization is busy.")
-    if now < doc.get("nextSyncAt", 0):
+    if now < doc.get("nextSyncAt", 0) and (not manual or now < doc.get("lastAttempt", 0) + MANUAL_COOLDOWN):
         # A new Item may have been linked after this owner's previous daily
         # transaction sync. Discover ONLY its account names/balances. Do not
         # re-run Transactions or resync older Items within the daily budget.
@@ -456,8 +504,10 @@ def sync_owner(uid):
                 raw = _provider("/accounts/get", item["access"])
                 candidate["items"][item_id] = _merge(
                     {}, item_id, item["institution"], raw, None, now)
+                ignored = set(candidate.get("excluded", [])) | set(candidate.get("removedAccounts", {}))
+                candidate["items"][item_id]["accounts"] = [a for a in candidate["items"][item_id]["accounts"] if a["key"] not in candidate.get("removedAccounts", {})]
                 candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
-                    {a["key"] for a in candidate["items"][item_id]["accounts"]})
+                    ({a["key"] for a in candidate["items"][item_id]["accounts"]} - ignored))
             candidate["lastAccountDiscovery"] = now
             candidate.pop("error", None)
         except HTTPException as exc:
@@ -471,9 +521,10 @@ def sync_owner(uid):
         return _public(candidate, ledger, uid)
     doc["lease"] = uuid.uuid4().hex
     doc["leaseUntil"] = now + 300
-    doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
+    doc["nextSyncAt"] = now + SYNC_INTERVAL  # reserve provider budget before remote call
+    doc["lastAttempt"] = now
     # Automatically linked accounts consume the same bounded daily transaction budget.
-    doc["transactionNextSyncAt"] = now + DAY
+    doc["transactionNextSyncAt"] = now + SYNC_INTERVAL
     etag = _write(uid, doc, etag)
     candidate = copy.deepcopy(doc)
     try:
@@ -482,14 +533,16 @@ def sync_owner(uid):
             raw = _provider("/accounts/get", item["access"])
             old = candidate["items"].get(item_id, {})
             exposed = _merge(old, item_id, item["institution"], raw, None, now)
+            ignored = set(candidate.get("excluded", [])) | set(candidate.get("removedAccounts", {}))
+            exposed["accounts"] = [a for a in exposed["accounts"] if a["key"] not in candidate.get("removedAccounts", {})]
             discovered = {a["key"] for a in exposed["accounts"]}
-            new_accounts = discovered - monitored
-            monitored.update(discovered)
+            new_accounts = discovered - monitored - ignored
+            monitored.update(discovered - ignored)
             candidate["monitored"] = sorted(monitored)
             if new_accounts and old.get("cursor"):
                 # A preexisting cursor may have skipped activity for newly linked accounts.
                 old = {**old, "cursor": ""}
-            if discovered:
+            if discovered & monitored:
                 changes = _sync_item(item["access"], old.get("cursor"))
                 exposed = _merge(old, item_id, item["institution"], raw, changes, now)
             # Plaid returns an Item-wide delta, even when only one account is
