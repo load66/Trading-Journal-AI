@@ -168,7 +168,9 @@ def _transaction(row, now):
         raise HTTPException(502, "Provider transaction amount is unavailable.")
     # Plaid-positive means debit, unlike SimpleFIN-positive which means credit.
     amount = _money(-Decimal(debit))
-    description = clean(row.get("merchant_name") or row.get("name"), 450)
+    # Prefer bank-provided transaction wording over Plaid merchant normalization:
+    # payroll, transfer and fee evidence may be lost in a shortened merchant label.
+    description = clean(row.get("original_description") or row.get("name") or row.get("merchant_name"), 450)
     pending = row.get("pending") is True
     return {"id": ident, "account": account, "posted": _posted(row.get("date")),
             "amount": amount, "description": description,
