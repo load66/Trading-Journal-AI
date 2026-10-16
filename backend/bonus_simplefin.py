@@ -250,6 +250,10 @@ def public_state(s):
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'transactions', 'warnings', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error')
     out = {k: s[k] for k in fields if k in s}
+    # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
+    out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
+                       for a in s.get('accounts', [])]
+    out['monitoredAccounts'] = list(s.get('monitoredAccounts', []))
     out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True)
     return out
 
