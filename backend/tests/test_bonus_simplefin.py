@@ -661,7 +661,7 @@ def test_product_assignment_preserves_review_decisions_but_resets_requirement_as
     assert corrected.json()['evidenceReviews'][key][payday['transaction']]['status'] == 'reviewed'
     assert corrected.json()['evidenceReviews'][key][payday['transaction']]['requirementId'] is None
     assert corrected.json()['evidenceReviews'][key][fee['transaction']]['status'] == 'dismissed'
-    assert corrected.json()['transactions'][key][payday['transaction']]['amount'] == '500.00'
+    assert b.Decimal(corrected.json()['transactions'][key][payday['transaction']]['amount']) == b.Decimal('500.00')
 
     # Different cycles must never inherit the old review receipts.
     changed_cycle = c.put(sel, headers=h, json={
