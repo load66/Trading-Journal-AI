@@ -8,6 +8,7 @@ import os
 import re
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit, urlunsplit, unquote
 
 import httpx
@@ -28,6 +29,37 @@ router = APIRouter(prefix='/api/bonus-tracker/simplefin', dependencies=[Depends(
 DAY = 86400
 MAX_STATE = 8 * 1024 * 1024
 HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
+ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card', 'brokerage',
+                           'retirement', 'loan', 'mortgage', 'other_asset', 'other_liability'))
+BALANCE_MODES = frozenset(('exclude', 'asset', 'liability'))
+TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilities', 'groceries',
+                                    'dining', 'transportation', 'shopping', 'health', 'entertainment',
+                                    'fees', 'taxes', 'travel', 'subscription', 'transfer', 'refund',
+                                    'bonus', 'other'))
+
+
+def empty_state():
+    return {'version': 2, 'accounts': [], 'mappings': {}, 'monitoredAccounts': [],
+            'transactions': {}, 'accountProfiles': {}, 'transactionReviews': {},
+            'balanceHistory': {}, 'audit': []}
+
+
+def migrate_state(value):
+    if not isinstance(value, dict) or not isinstance(value.get('accounts', []), list):
+        raise HTTPException(503, 'Private financial data needs review before it can be used.')
+    state = value
+    for field in ('mappings', 'transactions', 'accountProfiles', 'transactionReviews', 'balanceHistory'):
+        if not isinstance(state.get(field, {}), dict):
+            raise HTTPException(503, 'Private financial data needs review before it can be used.')
+        state.setdefault(field, {})
+    if not isinstance(state.get('monitoredAccounts', []), list):
+        raise HTTPException(503, 'Private financial data needs review before it can be used.')
+    state.setdefault('monitoredAccounts', [])
+    if not isinstance(state.get('audit', []), list):
+        raise HTTPException(503, 'Private financial data needs review before it can be used.')
+    state.setdefault('audit', [])
+    state['version'] = 2
+    return state
 
 
 def cipher():
@@ -47,18 +79,19 @@ def read_state(uid):
         r = s.client.get_object(Bucket=s.bucket, Key=key(uid))
     except ClientError as e:
         if e.response['Error']['Code'] in ('NoSuchKey', '404'):
-            return {'version': 1, 'accounts': [], 'mappings': {}, 'monitoredAccounts': [], 'transactions': {}}, None
+            return empty_state(), None
         raise HTTPException(503, 'Private bank-sync storage is temporarily unavailable.') from None
     raw = r['Body'].read(MAX_STATE + 1)
     if len(raw) > MAX_STATE:
         raise HTTPException(503, 'Private bank-sync storage needs review.')
     try:
-        return json.loads(cipher().decrypt(raw)), r['ETag']
+        return migrate_state(json.loads(cipher().decrypt(raw))), r['ETag']
     except (InvalidToken, ValueError):
         raise HTTPException(503, 'Bank-sync storage could not be decrypted. Do not reconnect yet.') from None
 
 
 def write_state(uid, state, etag):
+    state = migrate_state(state)
     raw = cipher().encrypt(json.dumps(state, sort_keys=True).encode())
     if len(raw) > MAX_STATE:
         raise HTTPException(413, 'Bank-sync history exceeded its safe storage limit.')
@@ -128,11 +161,12 @@ def get_data(access, selected=None, balances=False):
     p = safe_url(access)
     endpoint = urlunsplit(('https', p.hostname, p.path.rstrip('/') + '/accounts', '', ''))
     now = int(time.time())
-    params = [('version', '2'), ('start-date', str(now - 30 * DAY)), ('end-date', str(now + 1))]
+    params = [('version', '2'), ('start-date', str(now - 90 * DAY)), ('end-date', str(now + 1))]
     if balances:
         params.append(('balances-only', '1'))
     else:
         params.extend(('account', x['id']) for x in selected)
+        params.append(('pending', '1'))
     raw = network(endpoint, auth=(unquote(p.username), unquote(p.password)), params=params)
     try:
         data = json.loads(raw)
@@ -172,6 +206,7 @@ def normalize_accounts(data):
         result.append({'key': account_key(a), 'id': a['id'], 'connection': str(a.get('conn_id', '')),
                        'name': clean(a.get('name')), 'bank': clean(c.get('name') or a.get('conn_name') or a.get('org', {}).get('name')),
                        'currency': clean(a.get('currency'), 40), 'balance': clean(a.get('balance'), 40),
+                       'availableBalance': clean(a.get('available-balance'), 40) if a.get('available-balance') is not None else None,
                        'balanceDate': a.get('balance-date') if isinstance(a.get('balance-date'), (int, float)) else None})
     if len({a['key'] for a in result}) != len(result):
         raise HTTPException(502, 'SimpleFIN returned conflicting account identities.')
@@ -179,7 +214,6 @@ def normalize_accounts(data):
 
 
 def money(value):
-    from decimal import Decimal, InvalidOperation
     try:
         n = Decimal(str(value))
         if not n.is_finite() or abs(n) > 10**12:
@@ -187,6 +221,125 @@ def money(value):
         return str(n)
     except (InvalidOperation, ValueError):
         raise HTTPException(502, 'SimpleFIN returned an invalid transaction amount.') from None
+
+
+def record_balances(state, accounts, observed_at):
+    history = state.setdefault('balanceHistory', {})
+    for account in accounts:
+        try:
+            balance = money(account.get('balance'))
+        except HTTPException:
+            continue
+        row = {'at': account.get('balanceDate') or observed_at, 'observedAt': observed_at,
+               'balance': balance, 'currency': account.get('currency') or ''}
+        available = account.get('availableBalance')
+        if available not in (None, ''):
+            try:
+                row['availableBalance'] = money(available)
+            except HTTPException:
+                pass
+        rows = history.setdefault(account['key'], [])
+        if rows and all(rows[-1].get(k) == row.get(k) for k in ('at', 'balance', 'availableBalance', 'currency')):
+            continue
+        rows.append(row)
+        history[account['key']] = rows[-400:]
+
+
+def public_ref(account, transaction):
+    return hashlib.sha256((account + '\0' + transaction).encode()).hexdigest()
+
+
+def merchant_name(description):
+    text = re.sub(r'\b(?:pos|debit|credit|purchase|payment|ach|card|online|pending)\b', ' ', description, flags=re.I)
+    text = re.sub(r'[#*]?\d{4,}', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip(' -_/')
+    return clean(text.title(), 80) or 'Transaction'
+
+
+def automatic_category(row):
+    if row.get('pending'):
+        return 'unreviewed', 'low', []
+    amount = Decimal(row['amount'])
+    text = row['description'].lower()
+    if row.get('kind') == 'possible_bonus':
+        return 'bonus', 'high', ['possible_bonus']
+    if row.get('kind') == 'possible_reversal':
+        return 'unreviewed', 'high', ['possible_reversal']
+    if re.search(r'\bpayroll\b|\bsalary\b|\bdirect dep(?:osit)?\b', text) and amount > 0:
+        return 'income', 'high', ['possible_direct_deposit']
+    if amount < 0 and re.search(r'\bfee\b|service charge|maintenance charge|overdraft', text):
+        return 'fees', 'high', ['possible_fee']
+    if amount > 0 and re.search(r'\brefund\b|\breimbursement\b|\breturn\b', text):
+        return 'refund', 'medium', ['possible_refund']
+    if re.search(r'\btransfer\b|\bxfer\b|credit card payment|payment thank you', text):
+        return 'transfer', 'medium', ['possible_transfer']
+    patterns = (
+        ('groceries', r'grocery|supermarket|walmart|target|aldi|costco|sam.s club'),
+        ('dining', r'restaurant|cafe|coffee|doordash|ubereats|grubhub'),
+        ('transportation', r'fuel|gas station|uber|lyft|parking|toll'),
+        ('utilities', r'electric|water utility|internet|wireless|phone bill'),
+        ('health', r'pharmacy|medical|dental|hospital|clinic'),
+        ('travel', r'airlines?|hotel|airbnb|rental car'),
+    )
+    if amount < 0:
+        for category, pattern in patterns:
+            if re.search(pattern, text):
+                return category, 'medium', []
+    return 'unreviewed', 'low', []
+
+
+def enrich_transactions(state, result):
+    reviews = state.get('transactionReviews', {})
+    records = []
+    for account, rows in state.get('transactions', {}).items():
+        public_rows = {}
+        for raw_id, source in rows.items():
+            row = copy.deepcopy(source)
+            ref = public_ref(account, raw_id)
+            row['id'] = ref
+            category, confidence, signals = automatic_category(row)
+            review = reviews.get(account, {}).get(raw_id)
+            if isinstance(review, dict) and review.get('category') in TRANSACTION_CATEGORIES:
+                category, confidence = review['category'], 'confirmed'
+                row['categorySource'] = 'user'
+            else:
+                row['categorySource'] = 'automatic'
+            row.update(category=category, confidence=confidence, signals=signals,
+                       merchant=merchant_name(row.get('description', '')),
+                       stalePending=bool(row.get('pending') and row.get('lastObservedAt', 0) < int(time.time()) - 7 * DAY))
+            public_rows[ref] = row
+            records.append((account, raw_id, row))
+        result.setdefault('transactions', {})[account] = public_rows
+
+    # Mark a transfer high confidence only when both connected-account entries explicitly agree.
+    for i, (account, _, row) in enumerate(records):
+        if row.get('pending') or row.get('categorySource') == 'user':
+            continue
+        amount = Decimal(row['amount'])
+        if amount == 0 or not re.search(r'\btransfer\b|\bxfer\b|\bpayment\b', row['description'], re.I):
+            continue
+        for other_account, _, other in records[i + 1:]:
+            if (account == other_account or other.get('pending') or other.get('categorySource') == 'user'
+                    or Decimal(other['amount']) != -amount or abs(other['posted'] - row['posted']) > 3 * DAY
+                    or not re.search(r'\btransfer\b|\bxfer\b|\bpayment\b', other['description'], re.I)):
+                continue
+            row.update(category='transfer', confidence='high')
+            other.update(category='transfer', confidence='high')
+            row['signals'] = sorted(set(row['signals'] + ['matched_internal_transfer']))
+            other['signals'] = sorted(set(other['signals'] + ['matched_internal_transfer']))
+
+    groups = {}
+    for _, _, row in records:
+        if row.get('pending') or Decimal(row['amount']) >= 0:
+            continue
+        groups.setdefault((row['merchant'].lower(), row['amount']), []).append(row)
+    for rows in groups.values():
+        ordered = sorted(rows, key=lambda r: r['posted'])
+        if any(20 * DAY <= b['posted'] - a['posted'] <= 40 * DAY for a, b in zip(ordered, ordered[1:])):
+            for row in ordered:
+                row['signals'] = sorted(set(row['signals'] + ['possible_recurring']))
+                if row['category'] == 'unreviewed':
+                    row.update(category='subscription', confidence='medium')
 
 
 def classify(amount, description):
@@ -205,10 +358,13 @@ def classify(amount, description):
 
 
 def merge(state, data, now):
-    fresh = normalize_accounts(data)
-    fresh_by_key = {a['key']: a for a in fresh}
     old_by_key = {a['key']: a for a in state['accounts']}
-    state['accounts'] = [fresh_by_key.get(k, a) for k, a in old_by_key.items()]
+    # Account IDs can collide across provider connections. A transaction sync may update only
+    # accounts already discovered for this owner; discovery is the only operation that adds accounts.
+    fresh = [a for a in normalize_accounts(data) if a['key'] in old_by_key]
+    fresh_by_key = {a['key']: a for a in fresh}
+    state['accounts'] = list(fresh) + [a for k, a in old_by_key.items() if k not in fresh_by_key]
+    record_balances(state, fresh, now)
     watched = set(state['mappings']) | set(state.get('monitoredAccounts', []))
     state['missingAccounts'] = sorted(k for k in watched if k not in fresh_by_key)
     warnings = [clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)]
@@ -220,21 +376,28 @@ def merge(state, data, now):
             continue
         rows = copy.deepcopy(state['transactions'].get(k, {}))
         for t in a.get('transactions', []):
-            if not isinstance(t, dict) or t.get('pending') is True or not isinstance(t.get('posted'), (int, float)) or not 0 < t['posted'] <= now + 300:
+            if not isinstance(t, dict) or not isinstance(t.get('posted'), (int, float)) or not 0 < t['posted'] <= now + 300:
                 continue
             if not isinstance(t.get('id'), str) or not t['id']:
                 raise HTTPException(502, 'SimpleFIN returned a transaction without a stable identity.')
             amount = money(t.get('amount'))
             desc = clean(t.get('description'), 500)
             row = {'id': t['id'], 'posted': t['posted'], 'amount': amount, 'description': desc,
-                   'kind': classify(amount, desc), 'observedAt': now}
+                   'kind': classify(amount, desc), 'pending': t.get('pending') is True,
+                   'observedAt': now, 'lastObservedAt': now}
             prior = rows.get(t['id'])
             if prior:
                 row['observedAt'] = prior['observedAt']
-                if any(prior.get(f) != row[f] for f in ('posted', 'amount', 'description')):
+                if any(prior.get(f) != row[f] for f in ('posted', 'amount', 'description', 'pending')):
                     row['changedAt'] = now
+                    revisions = list(prior.get('revisions', []))
+                    revisions.append({f: prior.get(f) for f in ('posted', 'amount', 'description', 'pending')})
+                    row['revisions'] = revisions[-5:]
+                    state.get('transactionReviews', {}).get(k, {}).pop(t['id'], None)
                 elif prior.get('changedAt'):
                     row['changedAt'] = prior['changedAt']
+                    if prior.get('revisions'):
+                        row['revisions'] = prior['revisions']
             rows[t['id']] = row
         # Missing rows never imply reversal/deletion; preserve 90 days of observed history.
         state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
@@ -247,13 +410,16 @@ def merge(state, data, now):
 
 def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
-    fields = ('accounts', 'mappings', 'monitoredAccounts', 'transactions', 'warnings', 'missingAccounts', 'lastSuccess',
-              'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error')
-    out = {k: s[k] for k in fields if k in s}
+    fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'missingAccounts', 'lastSuccess',
+              'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error',
+              'accountProfiles', 'balanceHistory')
+    out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
     out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
                        for a in s.get('accounts', [])]
     out['monitoredAccounts'] = list(s.get('monitoredAccounts', []))
+    out['transactions'] = {}
+    enrich_transactions(s, out)
     out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True)
     return out
 
@@ -272,7 +438,11 @@ def reserve(uid, operation):
 def finish(uid, s, tag):
     s.pop('lease', None)
     s.pop('leaseUntil', None)
-    s.pop('operation', None)
+    operation = s.pop('operation', None)
+    if operation:
+        # Bounded encrypted audit metadata; never include credentials, balances or transaction text.
+        s['audit'] = (s.get('audit', []) + [{'operation': operation, 'at': int(time.time()),
+                                             'status': s.get('status', 'unknown')}])[-100:]
     write_state(uid, s, tag)
     return public_state(s)
 
@@ -329,6 +499,43 @@ class MonitoringBody(BaseModel):
     accounts: list[str] = Field(max_length=50)
 
 
+class AccountProfile(BaseModel):
+    kind: str
+    order: int = Field(ge=0, le=499)
+    balanceMode: str = 'exclude'
+
+    @field_validator('kind')
+    @classmethod
+    def valid_kind(cls, value):
+        if value not in ACCOUNT_KINDS:
+            raise ValueError('Unsupported account type')
+        return value
+
+    @field_validator('balanceMode')
+    @classmethod
+    def valid_balance_mode(cls, value):
+        if value not in BALANCE_MODES:
+            raise ValueError('Unsupported balance treatment')
+        return value
+
+
+class AccountProfilesBody(BaseModel):
+    profiles: dict[str, AccountProfile] = Field(max_length=500)
+
+
+class TransactionReviewBody(BaseModel):
+    account: str = Field(pattern=r'^[0-9a-f]{64}$')
+    transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
+    category: str
+
+    @field_validator('category')
+    @classmethod
+    def valid_category(cls, value):
+        if value not in TRANSACTION_CATEGORIES:
+            raise ValueError('Unsupported transaction category')
+        return value
+
+
 @router.get('')
 def status(request: Request):
     uid = owner(request)
@@ -358,10 +565,35 @@ def connect(body: ConnectBody, request: Request):
         s['nextDiscoveryAt'] = int(time.time()) + DAY
         data = get_data(access, balances=True)
         s['accounts'] = normalize_accounts(data)
+        record_balances(s, s['accounts'], int(time.time()))
         s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
                          [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
         if s['warnings']:
             s['status'] = 'attention'
+    except (HTTPException, UnicodeError) as e:
+        s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
+        s['status'] = 'attention'
+    return finish(uid, s, tag)
+
+
+@router.post('/reconnect')
+def reconnect(body: ConnectBody, request: Request):
+    """Replace rejected provider access while retaining owner history, profiles and mappings."""
+    uid = owner(request)
+    cipher()
+    url = claim_url(body.setup_token)
+    s, tag = reserve(uid, 'reconnect')
+    if not s.get('access'):
+        finish(uid, s, tag)
+        raise HTTPException(409, 'Connect SimpleFIN first.')
+    try:
+        access = network(url, method='POST').decode().strip()
+        safe_url(access)
+        s['access'] = access
+        s['status'] = 'connected'
+        s['nextSyncAt'] = 0
+        s['nextDiscoveryAt'] = 0
+        s.pop('error', None)
     except (HTTPException, UnicodeError) as e:
         s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
         s['status'] = 'attention'
@@ -391,6 +623,7 @@ def discover(request: Request):
             if a['key'] in watched and a['key'] not in current:
                 fresh.append(a)
         s['accounts'] = fresh
+        record_balances(s, [a for a in fresh if a['key'] in current], now)
         s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
                          [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
         s['status'] = 'attention' if s['warnings'] or s.get('missingAccounts') else 'connected'
@@ -438,6 +671,39 @@ def monitor(body: MonitoringBody, request: Request):
     return finish(uid, s, tag)
 
 
+@router.put('/account-profiles')
+def account_profiles(body: AccountProfilesBody, request: Request):
+    uid = owner(request)
+    s, tag = reserve(uid, 'account-profiles')
+    allowed = {a['key'] for a in s['accounts']}
+    if not set(body.profiles).issubset(allowed) or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in body.profiles):
+        finish(uid, s, tag)
+        raise HTTPException(400, 'Choose accounts from the current connection.')
+    supplied = {k: v.model_dump() for k, v in body.profiles.items()}
+    # Keep profiles for temporarily missing accounts; replace current connected-account profiles atomically.
+    s['accountProfiles'] = {k: v for k, v in s.get('accountProfiles', {}).items() if k not in allowed}
+    s['accountProfiles'].update(supplied)
+    return finish(uid, s, tag)
+
+
+@router.put('/transaction-review')
+def transaction_review(body: TransactionReviewBody, request: Request):
+    uid = owner(request)
+    s, tag = reserve(uid, 'transaction-review')
+    rows = s.get('transactions', {}).get(body.account, {})
+    matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
+    if len(matches) != 1:
+        finish(uid, s, tag)
+        raise HTTPException(400, 'Choose a saved transaction from this account.')
+    raw = matches[0]
+    if body.category == 'unreviewed':
+        s.setdefault('transactionReviews', {}).setdefault(body.account, {}).pop(raw, None)
+    else:
+        s.setdefault('transactionReviews', {}).setdefault(body.account, {})[raw] = {
+            'category': body.category, 'reviewedAt': int(time.time())}
+    return finish(uid, s, tag)
+
+
 @router.post('/sync')
 def sync_endpoint(request: Request):
     return sync(owner(request))
@@ -448,7 +714,9 @@ def disconnect(request: Request):
     uid = owner(request)
     s, tag = reserve(uid, 'disconnect')
     # Tombstone instead of delete so concurrent stale writes cannot recreate credentials.
-    return finish(uid, {'version': 1, 'accounts': [], 'mappings': {}, 'monitoredAccounts': [], 'transactions': {}, 'status': 'disconnected'}, tag)
+    tombstone = empty_state()
+    tombstone['status'] = 'disconnected'
+    return finish(uid, tombstone, tag)
 
 
 async def scheduled_simplefin_loop():
