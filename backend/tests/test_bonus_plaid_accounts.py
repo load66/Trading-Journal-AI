@@ -164,3 +164,85 @@ def test_authenticated_readonly_routes_and_monitoring(monkeypatch):
     assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
         json={"accounts":[]},headers=h).status_code==200
     assert client.get("/api/bonus-tracker/plaid/accounts",headers=h).json()["transactions"]=={}
+
+
+def test_new_bank_discovers_accounts_without_repeating_daily_transaction_sync(monkeypatch):
+    from copy import deepcopy
+    old_key = adapter._account_key("previous-item", "example")
+    prior = adapter._merge({}, "previous-item", "Existing Bank",
+                           {"accounts": [account()]}, None, NOW - 120)
+    storage = adapter._default()
+    storage["items"]["previous-item"] = prior
+    storage["monitored"] = [old_key]
+    storage["lastSuccess"] = NOW - 120
+    storage["nextSyncAt"] = NOW + 7200
+    quota = {"items": {
+        "previous-item": {"owner": "alice", "institution": "Existing Bank",
+                          "access": "private-old"},
+        "new-item": {"owner": "alice", "institution": "One Pay",
+                     "access": "private-new"}
+    }}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (quota, "quota-tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "data-tag"))
+    def save(uid, candidate, etag):
+        storage.clear()
+        storage.update(deepcopy(candidate))
+        return "data-tag"
+    monkeypatch.setattr(adapter, "_write", save)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def fetch(endpoint, token, **kwargs):
+        calls.append((endpoint, token))
+        assert endpoint == "/accounts/get" and token == "private-new"
+        return {"accounts": [{**account(), "account_id": "new-checking",
+                              "name": "One Pay checking"}]}
+    monkeypatch.setattr(adapter, "_provider", fetch)
+
+    response = adapter.sync_owner("alice")
+    assert len(response["accounts"]) == 2
+    assert any(a["bank"] == "One Pay" for a in response["accounts"])
+    assert calls == [("/accounts/get", "private-new")]
+    assert response["lastSuccess"] == NOW - 120
+    assert response["nextSyncAt"] == NOW + 7200
+    assert storage["items"]["previous-item"]["accounts"] == prior["accounts"]
+    assert not storage["items"]["new-item"]["transactions"]
+    assert "private-new" not in str(response)
+    assert adapter.sync_owner("alice")["accounts"] == response["accounts"]
+    assert calls == [("/accounts/get", "private-new")], "Never repeat a successful discovery"
+
+
+def test_failed_new_item_discovery_preserves_existing_data_and_provider_budget(monkeypatch):
+    from copy import deepcopy
+    prior = adapter._merge({}, "previous-item", "Existing Bank",
+                           {"accounts": [account()]}, None, NOW - 90)
+    storage = adapter._default()
+    storage["items"]["previous-item"] = prior
+    storage["nextSyncAt"] = NOW + 7200
+    quota = {"items": {
+        "previous-item": {"owner": "alice", "institution": "Existing Bank",
+                          "access": "private-old"},
+        "new-item": {"owner": "alice", "institution": "One Pay",
+                     "access": "private-new"}
+    }}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (quota, "quota-tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "data-tag"))
+    def save(uid, candidate, etag):
+        storage.clear()
+        storage.update(deepcopy(candidate))
+        return "data-tag"
+    monkeypatch.setattr(adapter, "_write", save)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def failed_provider(endpoint, token, **kwargs):
+        calls.append(endpoint)
+        raise HTTPException(502, "Account discovery temporarily unavailable.")
+    monkeypatch.setattr(adapter, "_provider", failed_provider)
+    response = adapter.sync_owner("alice")
+    assert response["accounts"][0]["bank"] == "Existing Bank"
+    assert len(response["accounts"]) == 1
+    assert storage["items"]["previous-item"] == prior
+    assert "new-item" not in storage["items"]
+    assert storage["nextSyncAt"] == NOW + 7200
+    assert storage["nextNewItemDiscoveryAt"] == NOW + adapter.DAY
+    assert adapter.sync_owner("alice")["accounts"] == response["accounts"]
+    assert calls == ["/accounts/get"], "Never retry repeatedly within the daily budget"
