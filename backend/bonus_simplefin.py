@@ -27,6 +27,8 @@ def private_response(response: Response):
 from fastapi import Depends
 router = APIRouter(prefix='/api/bonus-tracker/simplefin', dependencies=[Depends(private_response)])
 DAY = 86400
+SYNC_INTERVAL = 6 * 3600
+MANUAL_COOLDOWN = 2 * 3600
 MAX_STATE = 8 * 1024 * 1024
 HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
 ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card', 'brokerage',
@@ -41,6 +43,7 @@ TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilitie
 def empty_state():
     return {'version': 2, 'accounts': [], 'mappings': {}, 'monitoredAccounts': [],
             'transactions': {}, 'accountProfiles': {}, 'transactionReviews': {},
+            'excludedAccounts': [], 'removedAccounts': {},
             'balanceHistory': {}, 'evidenceReviews': {}, 'audit': []}
 
 
@@ -55,6 +58,10 @@ def migrate_state(value):
     if not isinstance(state.get('monitoredAccounts', []), list):
         raise HTTPException(503, 'Private financial data needs review before it can be used.')
     state.setdefault('monitoredAccounts', [])
+    if not isinstance(state.get('excludedAccounts', []), list) or not isinstance(state.get('removedAccounts', {}), dict):
+        raise HTTPException(503, 'Private financial preferences need review.')
+    state.setdefault('excludedAccounts', [])
+    state.setdefault('removedAccounts', {})
     if not isinstance(state.get('audit', []), list):
         raise HTTPException(503, 'Private financial data needs review before it can be used.')
     state.setdefault('audit', [])
@@ -426,11 +433,12 @@ def merge(state, data, now):
     old_by_key = {a['key']: a for a in state['accounts']}
     # Account IDs can collide across provider connections. A transaction sync may update only
     # accounts already discovered for this owner; discovery is the only operation that adds accounts.
-    fresh = [a for a in normalize_accounts(data) if a['key'] in old_by_key]
+    removed = set(state.get('removedAccounts', {}))
+    fresh = [a for a in normalize_accounts(data) if a['key'] in old_by_key and a['key'] not in removed]
     fresh_by_key = {a['key']: a for a in fresh}
     state['accounts'] = list(fresh) + [a for k, a in old_by_key.items() if k not in fresh_by_key]
     record_balances(state, fresh, now)
-    watched = set(state['mappings']) | set(state.get('monitoredAccounts', []))
+    watched = (set(state['mappings']) | set(state.get('monitoredAccounts', []))) - set(state.get('excludedAccounts', [])) - removed
     state['missingAccounts'] = sorted(k for k in watched if k not in fresh_by_key)
     warnings = [clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)]
     warnings += [clean(e) for e in data.get('errors', []) if isinstance(e, str)]
@@ -440,19 +448,31 @@ def merge(state, data, now):
         if k not in watched:
             continue
         rows = copy.deepcopy(state['transactions'].get(k, {}))
+        observed_ids = set()
         for t in a.get('transactions', []):
-            if not isinstance(t, dict) or not isinstance(t.get('posted'), (int, float)) or not 0 < t['posted'] <= now + 300:
+            if not isinstance(t, dict) or not isinstance(t.get('posted'), (int, float)):
+                continue
+            posted = t['posted']
+            pending = t.get('pending') is True or posted == 0
+            if posted < 0 or posted > now + 300:
                 continue
             if not isinstance(t.get('id'), str) or not t['id']:
                 raise HTTPException(502, 'SimpleFIN returned a transaction without a stable identity.')
+            observed_ids.add(t['id'])
             amount = money(t.get('amount'))
             desc = clean(t.get('description'), 500)
-            row = {'id': t['id'], 'posted': t['posted'], 'amount': amount, 'description': desc,
-                   'kind': classify(amount, desc), 'pending': t.get('pending') is True,
+            transacted = t.get('transacted_at')
+            if not isinstance(transacted, (int, float)) or not 0 < transacted <= now + 300:
+                transacted = None
+            row = {'id': t['id'], 'posted': posted, 'amount': amount, 'description': desc,
+                   'kind': classify(amount, desc), 'pending': pending,
+                   'transactedAt': transacted, 'displayAt': posted or transacted or now,
                    'observedAt': now, 'lastObservedAt': now}
             prior = rows.get(t['id'])
             if prior:
                 row['observedAt'] = prior['observedAt']
+                if not row['posted'] and not row['transactedAt']:
+                    row['displayAt'] = prior.get('displayAt', prior['observedAt'])
                 if any(prior.get(f) != row[f] for f in ('posted', 'amount', 'description', 'pending')):
                     row['changedAt'] = now
                     revisions = list(prior.get('revisions', []))
@@ -465,8 +485,10 @@ def merge(state, data, now):
                     if prior.get('revisions'):
                         row['revisions'] = prior['revisions']
             rows[t['id']] = row
-        # Missing rows never imply reversal/deletion; preserve 90 days of observed history.
-        state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
+        # Remove vanished pending rows only on complete retrieval; never infer reversal.
+        if not warnings:
+            rows = {i: r for i, r in rows.items() if not r.get('pending') or i in observed_ids}
+        state['transactions'][k] = rows
         state.setdefault('evidenceReviews', {})[k] = {
             i: v for i, v in state.get('evidenceReviews', {}).get(k, {}).items()
             if i in state['transactions'][k] and isinstance(v, dict)
@@ -482,12 +504,13 @@ def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error',
-              'accountProfiles', 'balanceHistory')
+              'accountProfiles', 'balanceHistory', 'removedAccounts')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
     out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
                        for a in s.get('accounts', [])]
-    out['monitoredAccounts'] = list(s.get('monitoredAccounts', []))
+    out['monitoredAccounts'] = [k for k in s.get('monitoredAccounts', [])
+                                if k not in s.get('excludedAccounts', []) and k not in s.get('removedAccounts', {})]
     out['transactions'] = {}
     enrich_transactions(s, out)
     out['evidenceReviews'] = public_evidence_reviews(s)
@@ -518,23 +541,24 @@ def finish(uid, s, tag):
     return public_state(s)
 
 
-def sync(uid):
+def sync(uid, manual=False):
     s, tag = reserve(uid, 'sync')
     if not s.get('access'):
         finish(uid, s, tag)
         raise HTTPException(409, 'Connect SimpleFIN first.')
     now = int(time.time())
-    if now < s.get('nextSyncAt', 0):
+    if now < s.get('nextSyncAt', 0) and (not manual or now < s.get('lastAttempt', 0) + MANUAL_COOLDOWN):
         return finish(uid, s, tag)
-    # Linking authorizes read-only activity for every returned account. No separate toggle.
-    s['monitoredAccounts'] = sorted({a['key'] for a in s['accounts']})
-    watched = set(s['mappings']) | set(s['monitoredAccounts'])
+    # Newly discovered accounts monitor by default; explicit opt-outs survive every sync.
+    ignored = set(s.get('excludedAccounts', [])) | set(s.get('removedAccounts', {}))
+    s['monitoredAccounts'] = sorted({a['key'] for a in s['accounts']} - ignored)
+    watched = set(s['monitoredAccounts'])
     selected = [a for a in s['accounts'] if a['key'] in watched]
     if not selected:
         return finish(uid, s, tag)
     s['lastAttempt'] = now
     # Reserve the next attempt before network I/O. Restart/timeout cannot exhaust provider quotas.
-    s['nextSyncAt'] = now + DAY
+    s['nextSyncAt'] = now + SYNC_INTERVAL
     tag = write_state(uid, s, tag)
     try:
         candidate = merge(copy.deepcopy(s), get_data(s['access'], selected), now)
@@ -664,12 +688,13 @@ def connect(body: ConnectBody, request: Request):
         s['nextDiscoveryAt'] = int(time.time()) + DAY
         data = get_data(access, balances=True)
         s['accounts'] = normalize_accounts(data)
-        s['monitoredAccounts'] = sorted(a['key'] for a in s['accounts'])
+        s['monitoredAccounts'] = sorted(a['key'] for a in s['accounts']
+                                         if a['key'] not in s.get('removedAccounts', {}))
         observed = int(time.time())
         record_balances(s, s['accounts'], observed)
         # Reserve the daily provider budget before automatic first import.
         if s['accounts']:
-            s['lastAttempt'], s['nextSyncAt'] = observed, observed + DAY
+            s['lastAttempt'], s['nextSyncAt'] = observed, observed + SYNC_INTERVAL
             tag = write_state(uid, s, tag)
             try:
                 s = merge(copy.deepcopy(s), get_data(access, s['accounts']), observed)
@@ -725,8 +750,9 @@ def discover(request: Request):
     tag = write_state(uid, s, tag)
     try:
         data = get_data(s['access'], balances=True)
-        fresh = normalize_accounts(data)
-        watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
+        fresh = [a for a in normalize_accounts(data) if a['key'] not in s.get('removedAccounts', {})]
+        ignored = set(s.get('excludedAccounts', [])) | set(s.get('removedAccounts', {}))
+        watched = set(s.get('monitoredAccounts', [])) - ignored
         s['missingAccounts'] = sorted(k for k in watched if k not in {a['key'] for a in fresh})
         current = {a['key']: a for a in fresh}
         # Preserve missing matched accounts so an omitted response cannot silently delete a match.
@@ -734,14 +760,16 @@ def discover(request: Request):
             if a['key'] in watched and a['key'] not in current:
                 fresh.append(a)
         s['accounts'] = fresh
-        s['monitoredAccounts'] = sorted({a['key'] for a in fresh})
+        s['monitoredAccounts'] = sorted({a['key'] for a in fresh} - ignored)
         s.pop('error', None)
         record_balances(s, [a for a in fresh if a['key'] in current], now)
         if fresh and now >= s.get('nextSyncAt', 0):
-            s['lastAttempt'], s['nextSyncAt'] = now, now + DAY
+            s['lastAttempt'], s['nextSyncAt'] = now, now + SYNC_INTERVAL
             tag = write_state(uid, s, tag)
             try:
-                s = merge(copy.deepcopy(s), get_data(s['access'], fresh), now)
+                selected = [a for a in fresh if a['key'] in s['monitoredAccounts']]
+                if selected:
+                    s = merge(copy.deepcopy(s), get_data(s['access'], selected), now)
                 s.pop('error', None)
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
@@ -805,13 +833,47 @@ def monitor(body: MonitoringBody, request: Request):
         finish(uid, s, tag)
         raise HTTPException(400, 'Choose unique accounts from the current connection.')
     s['monitoredAccounts'] = sorted(chosen)
+    s['excludedAccounts'] = sorted(allowed - chosen)
     s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in chosen or k in s['mappings']}
+                         if k in chosen}
     s['evidenceReviews'] = {k: v for k, v in s.get('evidenceReviews', {}).items()
                             if k in s['transactions']}
     # First opt-in can begin immediately. Existing provider attempts remain rate-limited.
     if chosen and not s.get('lastAttempt') and not s.get('nextSyncAt'):
         s['nextSyncAt'] = 0
+    return finish(uid, s, tag)
+
+
+@router.delete('/accounts/{account_key}')
+def remove_account(account_key: str, request: Request):
+    """Remove one account's financial records; keep the upstream institution linked."""
+    uid = owner(request)
+    s, tag = reserve(uid, 'remove-account')
+    a = next((a for a in s['accounts'] if a['key'] == account_key), None)
+    if not a or not re.fullmatch(r'[0-9a-f]{64}', account_key):
+        finish(uid, s, tag)
+        raise HTTPException(404, 'Account is not available in this connection.')
+    s.setdefault('removedAccounts', {})[account_key] = {
+        'name': clean(a.get('name'), 90), 'bank': clean(a.get('bank'), 100)}
+    s['accounts'] = [item for item in s['accounts'] if item['key'] != account_key]
+    s['monitoredAccounts'] = [k for k in s['monitoredAccounts'] if k != account_key]
+    for field in ('transactions', 'mappings', 'evidenceReviews', 'transactionReviews',
+                  'accountProfiles', 'balanceHistory'):
+        s.get(field, {}).pop(account_key, None)
+    s['excludedAccounts'] = sorted(set(s.get('excludedAccounts', [])) | {account_key})
+    return finish(uid, s, tag)
+
+
+@router.post('/accounts/{account_key}/restore')
+def restore_account(account_key: str, request: Request):
+    uid = owner(request)
+    s, tag = reserve(uid, 'restore-account')
+    if not re.fullmatch(r'[0-9a-f]{64}', account_key) or account_key not in s.get('removedAccounts', {}):
+        finish(uid, s, tag)
+        raise HTTPException(404, 'Removed account not found.')
+    s['removedAccounts'].pop(account_key)
+    s['excludedAccounts'] = [k for k in s.get('excludedAccounts', []) if k != account_key]
+    s['nextDiscoveryAt'] = 0  # Require explicit Discover accounts to restore metadata.
     return finish(uid, s, tag)
 
 
@@ -906,7 +968,7 @@ def evidence_review(body: EvidenceReviewBody, request: Request):
 
 @router.post('/sync')
 def sync_endpoint(request: Request):
-    return sync(owner(request))
+    return sync(owner(request), manual=True)
 
 
 @router.delete('')
