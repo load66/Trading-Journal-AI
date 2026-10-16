@@ -444,7 +444,7 @@ def classify(amount, description):
 
 
 def merge(state, data, now):
-    old_by_key = {a['key']: a for a in state['accounts']}
+    old_by_key = {a['key']: a for a in state['accounts'] if a['key'] not in state.get('removedAccounts', {})}
     # Account IDs can collide across provider connections. A transaction sync may update only
     # accounts already discovered for this owner; discovery is the only operation that adds accounts.
     removed = set(state.get('removedAccounts', {}))
