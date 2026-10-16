@@ -103,9 +103,9 @@ def test_sync_cadence_and_no_unselected_fetch(setup,monkeypatch):
     def fetch(access,selected):calls.append(selected);return data(account(transactions=[txn()]))
     monkeypatch.setattr(b,'get_data',fetch)
     assert b.sync('owner')['connected']
-    b.sync('owner');assert len(calls)==2 and len(calls[0])==1
+    b.sync('owner');assert len(calls)==1 and len(calls[0])==1
     s,tag=b.read_state('owner');s['mappings']={};s['nextSyncAt']=0;b.write_state('owner',s,tag)
-    b.sync('owner');assert len(calls)==1
+    b.sync('owner');assert len(calls)==2  # Accounts still sync without a bonus mapping.
 
 def test_failed_sync_is_throttled_and_retains_evidence(setup,monkeypatch):
     s=seed();b.merge(s,data(account(transactions=[txn()])),NOW);b.write_state('owner',s,None)
