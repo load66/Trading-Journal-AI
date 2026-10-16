@@ -531,7 +531,7 @@ def sync_owner(uid, manual=False):
         # and no Item-specific deadline still use the owner-wide daily window.
         due_items = {item_id: item for item_id, item in known.items()
                      if item_id in doc.get("items", {}) and
-                     any(a["key"] not in set(doc.get("excluded", [])) | set(doc.get("removedAccounts", {})) for a in doc["items"][item_id].get("accounts", [])) and
+                     doc["items"][item_id].get("accounts") and
                      (("nextTransactionSyncAt" in doc["items"][item_id] and
                        now >= doc["items"][item_id]["nextTransactionSyncAt"]) or
                       (not doc["items"][item_id].get("lastTransactionAttemptAt") and
@@ -580,9 +580,6 @@ def sync_owner(uid, manual=False):
                 candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
             for item_id, item in due_items.items():
                 old = candidate["items"][item_id]
-                ignored = set(candidate.get("excluded", [])) | set(candidate.get("removedAccounts", {}))
-                candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
-                    ({a["key"] for a in old.get("accounts", [])} - ignored))
                 try:
                     delta = _sync_item(item["access"], old.get("cursor"))
                     # Refresh real bank balances alongside first-time history;
@@ -709,7 +706,7 @@ def scheduled_sync_once():
                 now >= doc.get("newItemDiscoveryAttempts", {}).get(item_id, 0)
                 for item_id in owned)
             item_due = any(
-                item_id in owned and any(a["key"] not in set(doc.get("excluded", [])) | set(doc.get("removedAccounts", {})) for a in state.get("accounts", [])) and
+                item_id in owned and state.get("accounts") and
                 (("nextTransactionSyncAt" in state and
                   now >= state["nextTransactionSyncAt"]) or
                  (not state.get("lastTransactionAttemptAt") and not state.get("cursor")))
