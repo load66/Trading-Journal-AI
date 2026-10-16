@@ -38,6 +38,7 @@ def setup(monkeypatch):
     monkeypatch.setattr(plaid, "store", lambda: memory)
     monkeypatch.setenv("SIMPLEFIN_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("PLAID_TRIAL_ENABLED", "true")
+    monkeypatch.setenv("PLAID_TRIAL_PLAN_VERIFIED", "true")
     monkeypatch.setenv("PLAID_TRIAL_BASELINE_CONFIRMED", "true")
     monkeypatch.setenv("PLAID_TRIAL_PIPELINE_READY", "true")
     monkeypatch.setenv("PLAID_TRIAL_PRIOR_ITEMS", "0")
@@ -178,3 +179,31 @@ def test_no_upgrade_endpoints_can_be_invoked():
     assert "Production-access application" in (plaid.__doc__ or "")
     with pytest.raises(HTTPException):
         plaid._provider("/production/access/apply", {})
+
+
+def test_expired_link_never_recycles_possible_item_capacity(setup, monkeypatch):
+    client, _ = setup
+    monkeypatch.setenv("PLAID_TRIAL_PRIOR_ITEMS", "9")
+    calls = []
+    monkeypatch.setattr(plaid, "_provider", lambda endpoint, body: (
+        calls.append(endpoint) or {"link_token": "synthetic"}))
+    session = start(client).json()["session"]
+    monkeypatch.setattr(plaid.time, "time", lambda: 1792134000 + plaid.TTL + 10)
+    assert start(client, institution="Another bank").status_code == 409
+    assert exchange(client, session).status_code == 409
+    assert len(calls) == 1
+    result = client.get("/api/bonus-tracker/plaid", headers={"Authorization": "Bearer a"}).json()
+    assert result["used"] == 9 and result["reserved"] == 1 and result["remaining"] == 0
+
+
+def test_exchange_rechecks_lifetime_counter_before_provider(setup, monkeypatch):
+    client, _ = setup
+    calls = []
+    monkeypatch.setattr(plaid, "_provider", lambda endpoint, body: (
+        calls.append(endpoint) or {"link_token": "synthetic"}))
+    session = start(client).json()["session"]
+    doc, tag = plaid._read()
+    doc["used"] = 10
+    plaid._write(doc, tag)
+    assert exchange(client, session).status_code == 409
+    assert calls == ["/link/token/create"]

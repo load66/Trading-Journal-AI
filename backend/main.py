@@ -102,11 +102,18 @@ async def lifespan(app: FastAPI):
     availability_task = asyncio.create_task(scheduled_availability_loop())
     from bonus_simplefin import scheduled_simplefin_loop
     simplefin_task = asyncio.create_task(scheduled_simplefin_loop())
+    from bonus_plaid_accounts import scheduled_plaid_loop
+    plaid_task = asyncio.create_task(scheduled_plaid_loop())
     from bonus_plaid_sandbox import run_configured_check
     sandbox_check_task = asyncio.create_task(asyncio.to_thread(run_configured_check))
     try:
         yield
     finally:
+        plaid_task.cancel()
+        try:
+            await plaid_task
+        except asyncio.CancelledError:
+            pass
         sandbox_check_task.cancel()
         try:
             await sandbox_check_task
@@ -198,6 +205,8 @@ from bonus_simplefin import router as bonus_simplefin_router
 app.include_router(bonus_simplefin_router)
 from bonus_plaid_trial import router as bonus_plaid_trial_router
 app.include_router(bonus_plaid_trial_router)
+from bonus_plaid_accounts import router as bonus_plaid_accounts_router
+app.include_router(bonus_plaid_accounts_router)
 from venza_cloud import router as venza_cloud_router
 app.include_router(venza_cloud_router)
 

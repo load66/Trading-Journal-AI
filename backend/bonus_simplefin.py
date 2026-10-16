@@ -731,15 +731,8 @@ def discover(request: Request):
     return finish(uid, s, tag)
 
 
-@router.put('/selection')
-def select(body: SelectionBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'selection')
-    allowed = {a['key'] for a in s['accounts']}
-    if not s.get('access') or not set(body.mappings).issubset(allowed):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose accounts from the current connection.')
-    mappings = {k: v.model_dump(exclude_none=True) for k, v in body.mappings.items()}
+def apply_mapping_selection(s, mappings):
+    """Shared provider-independent, exact-cycle mapping transition."""
     # Product assignments are optional metadata; correcting them must not erase
     # already observed posted transactions or consume an extra provider sync.
     previous_mappings = s['mappings']
@@ -760,6 +753,18 @@ def select(body: SelectionBody, request: Request):
             for raw, review in reviews.items() if isinstance(review, dict)}
     s['mappings'] = mappings
     s['evidenceReviews'] = retained
+
+
+@router.put('/selection')
+def select(body: SelectionBody, request: Request):
+    uid = owner(request)
+    s, tag = reserve(uid, 'selection')
+    allowed = {a['key'] for a in s['accounts']}
+    if not s.get('access') or not set(body.mappings).issubset(allowed):
+        finish(uid, s, tag)
+        raise HTTPException(400, 'Choose accounts from the current connection.')
+    mappings = {k: v.model_dump(exclude_none=True) for k, v in body.mappings.items()}
+    apply_mapping_selection(s, mappings)
     return finish(uid, s, tag)
 
 
@@ -819,17 +824,13 @@ def transaction_review(body: TransactionReviewBody, request: Request):
     return finish(uid, s, tag)
 
 
-@router.put('/evidence-review')
-def evidence_review(body: EvidenceReviewBody, request: Request):
-    """Private, revision-bound receipts; never changes a promotion milestone."""
-    uid = owner(request)
-    s, tag = reserve(uid, 'evidence-review')
+def apply_evidence_decision(s, body, public=None):
+    """Shared revision-bound review receipt; never changes Tracker milestones."""
     mapping = s.get('mappings', {}).get(body.account)
     cycle = {'entryId': body.entryId, 'bank': body.bank, 'opened': body.opened}
     rows = s.get('transactions', {}).get(body.account, {})
     matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
     if (not s.get('access') or not same_bonus_cycle(mapping, cycle) or len(matches) != 1):
-        finish(uid, s, tag)
         raise HTTPException(400, 'The account, transaction or bonus cycle no longer matches.')
     raw = matches[0]
     row = rows[raw]
@@ -837,14 +838,12 @@ def evidence_review(body: EvidenceReviewBody, request: Request):
     try:
         opened = date.fromisoformat(body.opened)
     except ValueError:
-        finish(uid, s, tag)
         raise HTTPException(400, 'The bonus opening date is invalid.')
     if (row.get('pending') or row.get('posted', 0) < (
             opened - date(1970, 1, 1)).days * DAY
             or row.get('posted', 0) > time.time() + 300):
-        finish(uid, s, tag)
         raise HTTPException(400, 'This transaction is not posted in the saved bonus cycle.')
-    public = public_state(s)
+    public = public_state(s) if public is None else public
     candidate = public.get('transactions', {}).get(body.account, {}).get(body.transaction)
     signals = candidate.get('signals', []) if candidate else []
     recognized = ('possible_bonus', 'possible_direct_deposit', 'possible_fee',
@@ -853,11 +852,9 @@ def evidence_review(body: EvidenceReviewBody, request: Request):
     is_deposit = (amount > 0 and 'possible_direct_deposit' in signals
                   and candidate.get('kind') != 'possible_bonus')
     if body.requirementId is not None and (body.decision != 'reviewed' or not is_deposit):
-        finish(uid, s, tag)
         raise HTTPException(400, 'A requirement may be associated only with a reviewed deposit candidate.')
     if (not any(signal in signals for signal in recognized)
             and candidate.get('kind') not in ('possible_bonus', 'possible_reversal')):
-        finish(uid, s, tag)
         raise HTTPException(400, 'This transaction has no supported review evidence.')
     reviews = s.setdefault('evidenceReviews', {}).setdefault(body.account, {})
     if body.decision == 'clear':
@@ -868,6 +865,18 @@ def evidence_review(body: EvidenceReviewBody, request: Request):
             'fingerprint': evidence_fingerprint(row),
             'status': body.decision, 'reviewedAt': int(time.time()),
             'requirementId': body.requirementId if body.decision == 'reviewed' else None}
+
+
+@router.put('/evidence-review')
+def evidence_review(body: EvidenceReviewBody, request: Request):
+    """Private, revision-bound receipts; never changes a promotion milestone."""
+    uid = owner(request)
+    s, tag = reserve(uid, 'evidence-review')
+    try:
+        apply_evidence_decision(s, body)
+    except HTTPException:
+        finish(uid, s, tag)
+        raise
     return finish(uid, s, tag)
 
 
