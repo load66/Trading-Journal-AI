@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from bonus_backups import owner, store
-from bonus_simplefin import cipher, clean, classify, evidence_fingerprint, money
+from bonus_simplefin import cipher, clean, classify, evidence_fingerprint, automatic_category, merchant_name
 import bonus_plaid_trial as quota
 
 DAY = 86400
@@ -271,6 +271,9 @@ def _public(doc, ledger, uid):
                     opaque = hashlib.sha256((key + "\0" + row["id"]).encode()).hexdigest()
                     sanitized = {k: v for k, v in row.items() if k not in ("id", "account")}
                     sanitized["id"] = opaque
+                    category, confidence, signals = automatic_category(row)
+                    sanitized.update(category=category, confidence=confidence, signals=signals,
+                                     categorySource="automatic", merchant=merchant_name(row.get("description", "")))
                     transactions.setdefault(key, {})[opaque] = sanitized
     return {"provider": "plaid", "evidenceOnly": True, "configured": True,
             "connected": bool(accessible), "accounts": accounts, "transactions": transactions,
