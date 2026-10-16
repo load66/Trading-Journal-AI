@@ -18,12 +18,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from bonus_backups import owner, store
+import bonus_finance_history as finance_history
 from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, public_ref,
     public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
 
 DAY = 86400
+SYNC_INTERVAL = 3 * 3600
+MANUAL_COOLDOWN = 30 * 60
 MAX_BYTES = 8 * 1024 * 1024
 MAX_PAGES = 25
 MAX_ROWS = 10000
@@ -48,7 +51,7 @@ def _key(uid):
 
 def _default():
     return {"version": 1, "items": {}, "monitored": [], "lastSuccess": None, "nextSyncAt": 0, "mappings": {},
-            "newItemDiscoveryAttempts": {},
+            "newItemDiscoveryAttempts": {}, "excluded": [], "removedAccounts": {},
             "evidenceReviews": {}, "accountProfiles": {}, "transactionReviews": {}}
 
 
@@ -69,16 +72,35 @@ def _read(uid):
                 or not isinstance(doc.get("items"), dict)
                 or not isinstance(doc.get("monitored"), list)):
             raise ValueError()
+        if not isinstance(doc.get("excluded", []), list) or not isinstance(doc.get("removedAccounts", {}), dict):
+            raise ValueError()
+        doc.setdefault("excluded", [])
+        doc.setdefault("removedAccounts", {})
+        if doc.get("historyShards"):
+            records = finance_history.read_shards(s.client, s.bucket, _key(uid),
+                doc["historyShards"], cipher(), MAX_BYTES)
+            for item_id, transactions in records.items():
+                if item_id not in doc["items"]:
+                    raise HTTPException(503, "Private history references an unavailable Plaid Item.")
+                doc["items"][item_id]["transactions"] = transactions
         return doc, r["ETag"]
     except Exception:
         raise HTTPException(503, "Plaid activity integrity check failed. Sync disabled.") from None
 
 
 def _write(uid, doc, etag):
-    raw = cipher().encrypt(json.dumps(doc, separators=(",", ":"), sort_keys=True).encode())
-    if len(raw) > MAX_BYTES:
-        raise HTTPException(413, "Plaid activity exceeds its safe storage limit.")
     s = store()
+    prior_shards = list(doc.get("historyShards", []))
+    records = {item_id:item.get("transactions", {}) for item_id,item in doc.get("items", {}).items()}
+    shards = finance_history.store_shards(s.client, s.bucket, _key(uid),
+        records, prior_shards, cipher(), MAX_BYTES)
+    doc["historyShards"] = shards
+    root = copy.deepcopy(doc)
+    for item in root.get("items", {}).values():
+        item["transactions"] = {}
+    raw = cipher().encrypt(json.dumps(root, separators=(",", ":"), sort_keys=True).encode())
+    if len(raw) > MAX_BYTES:
+        raise HTTPException(413, "Plaid activity metadata exceeds its safe storage limit.")
     args = {"Bucket": s.bucket, "Key": _key(uid), "Body": raw,
             "ContentType": "application/octet-stream",
             **({"IfMatch": etag} if etag else {"IfNoneMatch": "*"})}
@@ -91,6 +113,7 @@ def _write(uid, doc, etag):
     seen, new_tag = _read(uid)
     if seen != doc:
         raise HTTPException(503, "Plaid activity save could not be verified.")
+    finance_history.prune_old_shards(s.client, s.bucket, _key(uid), prior_shards, shards)
     return new_tag
 
 
@@ -264,16 +287,13 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
                     if k in existing:
                         converted[k] = existing[k]
         transactions[ident] = converted
-    cutoff = now - 90 * DAY
-    # Pending entries remain visible as pending, never in posted-only totals
-    # or automatic bonus evidence. Plaid's removal/replacement delta controls
-    # when a pending authorization disappears.
-    out["transactions"] = {k: v for k, v in transactions.items()
-                          if isinstance(v, dict) and v.get("posted", 0) >= cutoff}
+    # Retain all observed history in encrypted monthly shards. Pending activity
+    # remains excluded from posted aggregates and bonus evidence.
+    out["transactions"] = {k: v for k, v in transactions.items() if isinstance(v, dict)}
     out["cursor"] = cursor
     out["lastTransactionAttemptAt"] = now
     out["lastTransactionSyncAt"] = now
-    out["nextTransactionSyncAt"] = now + DAY
+    out["nextTransactionSyncAt"] = now + SYNC_INTERVAL
     out.pop("transactionSyncError", None)
     out["transactionSyncStatus"] = (
         "ready" if any(not x.get("pending") for x in out["transactions"].values())
@@ -284,8 +304,10 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
 def _view(doc, ledger, uid):
     accessible = {item_id for item_id, row in ledger["items"].items()
                   if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt")}
+    removed_accounts = doc.get("removedAccounts", {})
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
-            "monitoredAccounts": list(doc.get("monitored", [])),
+            "removedAccounts": copy.deepcopy(removed_accounts),
+            "monitoredAccounts": [key for key in doc.get("monitored", []) if key not in doc.get("excluded", []) and key not in doc.get("removedAccounts", {})],
             **{key: copy.deepcopy(doc.get(key, {})) for key in
                ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
             "lastSuccess": doc.get("lastSuccess"), "nextSyncAt": doc.get("nextSyncAt"),
@@ -296,6 +318,8 @@ def _view(doc, ledger, uid):
             continue
         for account in state.get("accounts", []):
             key = account["key"]
+            if key in removed_accounts:
+                continue
             view["accounts"].append({**{k: v for k, v in account.items() if k != "id"},
                                      "connectionHandle": connection_handle(uid, item_id),
                                      "transactionSyncStatus": state.get("transactionSyncStatus", "awaiting_first_sync"),
@@ -422,6 +446,7 @@ def monitor(body: Monitored, request: Request):
         raise HTTPException(400, "Select only your discovered Plaid accounts.")
     new_accounts = requested - set(doc.get("monitored", []))
     doc["monitored"] = list(body.accounts)
+    doc["excluded"] = sorted(all_accounts - requested)
     for field in ("mappings", "evidenceReviews", "transactionReviews"):
         doc[field] = {key: value for key, value in doc.get(field, {}).items() if key in requested}
     # First selection may follow account-only discovery. Once Transactions was
@@ -439,6 +464,38 @@ def monitor(body: Monitored, request: Request):
     return _public(doc, ledger, uid)
 
 
+@router.delete("/accounts/individual/{account_key}", dependencies=[Depends(_private)])
+def remove_account(account_key: str, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    account = next((a for a in view["accounts"] if a["key"] == account_key), None)
+    if not account or len(account_key) != 64:
+        raise HTTPException(404, "Account was not found.")
+    doc.setdefault("removedAccounts", {})[account_key] = {
+        "name": clean(account.get("name"), 90), "bank": clean(account.get("bank"), 100)}
+    doc["monitored"] = [key for key in doc["monitored"] if key != account_key]
+    doc["excluded"] = sorted(set(doc.get("excluded", [])) | {account_key})
+    for field in ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews"):
+        doc.get(field, {}).pop(account_key, None)
+    for item_id, item in doc["items"].items():
+        item["accounts"] = [a for a in item.get("accounts", []) if a["key"] != account_key]
+        item["transactions"] = {ident:txn for ident,txn in item.get("transactions", {}).items()
+            if _account_key(item_id, txn.get("account", "")) != account_key}
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+@router.post("/accounts/individual/{account_key}/restore", dependencies=[Depends(_private)])
+def restore_account(account_key: str, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    if account_key not in doc.get("removedAccounts", {}) or len(account_key) != 64:
+        raise HTTPException(404, "Removed account not found.")
+    doc["removedAccounts"].pop(account_key)
+    doc["excluded"] = [key for key in doc.get("excluded", []) if key != account_key]
+    doc["nextSyncAt"] = 0
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
 @router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
 def disconnect_account_item(handle: str, request: Request):
     return quota.disconnect_item(handle, request)
@@ -446,10 +503,10 @@ def disconnect_account_item(handle: str, request: Request):
 
 @router.post("/accounts/sync", dependencies=[Depends(_private)])
 def sync(request: Request):
-    return sync_owner(owner(request))
+    return sync_owner(owner(request), manual=True)
 
 
-def sync_owner(uid):
+def sync_owner(uid, manual=False):
     ledger, _ = quota._ledger()
     known = {item_id: row for item_id, row in ledger["items"].items()
              if row.get("owner") == uid and not row.get("disconnectedAt")}
@@ -459,7 +516,7 @@ def sync_owner(uid):
     now = int(time.time())
     if doc.get("leaseUntil", 0) > now:
         raise HTTPException(409, "Plaid synchronization is busy.")
-    if now < doc.get("nextSyncAt", 0):
+    if now < doc.get("nextSyncAt", 0) and (not manual or now < doc.get("lastAttempt", 0) + MANUAL_COOLDOWN):
         # The owner-wide daily budget protects *existing* Items. A just-linked
         # Item may still make its FIRST transaction request without re-querying
         # previously synced banks. This prevents a new OnePay bank showing an
@@ -500,18 +557,23 @@ def sync_owner(uid):
                     # without rolling back other newly linked institutions.
                     discovery_failed = True
                     continue
+                ignored = set(candidate.get("excluded", [])) | set(candidate.get("removedAccounts", {}))
+                state["accounts"] = [a for a in state["accounts"] if a["key"] not in candidate.get("removedAccounts", {})]
                 candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
-                    {a["key"] for a in state["accounts"]})
-                if state["accounts"]:
+                    ({a["key"] for a in state["accounts"]} - ignored))
+                if any(a["key"] in candidate["monitored"] for a in state["accounts"]):
                     try:
                         delta = _sync_item(item["access"], "")
                         state = _merge(state, item_id, item["institution"], raw, delta, now)
+                        state["accounts"] = [a for a in state["accounts"] if a["key"] not in candidate.get("removedAccounts", {})]
+                        state["transactions"] = {ident:txn for ident,txn in state.get("transactions", {}).items()
+                            if _account_key(item_id, txn.get("account", "")) in candidate["monitored"]}
                         candidate["lastSuccess"] = now
                     except HTTPException as exc:
                         # Retain successful account discovery and clearly mark
                         # incomplete first-history coverage, never invent zero.
                         state["lastTransactionAttemptAt"] = now
-                        state["nextTransactionSyncAt"] = now + DAY
+                        state["nextTransactionSyncAt"] = now + SYNC_INTERVAL
                         state["transactionSyncStatus"] = "needs_attention"
                         state["transactionSyncError"] = exc.detail
                 candidate["items"][item_id] = state
@@ -523,12 +585,16 @@ def sync_owner(uid):
                     # Refresh real bank balances alongside first-time history;
                     # never forge a new balance timestamp from cached metadata.
                     raw = _provider("/accounts/get", item["access"])
-                    candidate["items"][item_id] = _merge(
-                        old, item_id, item["institution"], raw, delta, now)
+                    state = _merge(old, item_id, item["institution"], raw, delta, now)
+                    ignored = set(candidate.get("excluded", [])) | set(candidate.get("removedAccounts", {}))
+                    state["accounts"] = [a for a in state["accounts"] if a["key"] not in candidate.get("removedAccounts", {})]
+                    state["transactions"] = {ident:txn for ident,txn in state.get("transactions", {}).items()
+                        if _account_key(item_id, txn.get("account", "")) in set(candidate.get("monitored", [])) - ignored}
+                    candidate["items"][item_id] = state
                     candidate["lastSuccess"] = now
                 except HTTPException as exc:
                     old["lastTransactionAttemptAt"] = now
-                    old["nextTransactionSyncAt"] = now + DAY
+                    old["nextTransactionSyncAt"] = now + SYNC_INTERVAL
                     old["transactionSyncStatus"] = "needs_attention"
                     old["transactionSyncError"] = exc.detail
             if eligible_missing:
@@ -548,9 +614,10 @@ def sync_owner(uid):
         return _public(candidate, ledger, uid)
     doc["lease"] = uuid.uuid4().hex
     doc["leaseUntil"] = now + 300
-    doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
+    doc["nextSyncAt"] = now + SYNC_INTERVAL  # reserve provider budget before remote call
+    doc["lastAttempt"] = now
     # Automatically linked accounts consume the same bounded daily transaction budget.
-    doc["transactionNextSyncAt"] = now + DAY
+    doc["transactionNextSyncAt"] = now + SYNC_INTERVAL
     etag = _write(uid, doc, etag)
     candidate = copy.deepcopy(doc)
     try:
@@ -568,21 +635,23 @@ def sync_owner(uid):
                 if old:
                     exposed = copy.deepcopy(old)
                     exposed["lastTransactionAttemptAt"] = now
-                    exposed["nextTransactionSyncAt"] = now + DAY
+                    exposed["nextTransactionSyncAt"] = now + SYNC_INTERVAL
                     exposed["transactionSyncStatus"] = "needs_attention"
                     exposed["transactionSyncError"] = exc.detail
                     candidate["items"][item_id] = exposed
                 continue
+            ignored = set(candidate.get("excluded", [])) | set(candidate.get("removedAccounts", {}))
+            exposed["accounts"] = [a for a in exposed["accounts"] if a["key"] not in candidate.get("removedAccounts", {})]
             discovered = {a["key"] for a in exposed["accounts"]}
-            new_accounts = discovered - monitored
-            monitored.update(discovered)
+            new_accounts = discovered - monitored - ignored
+            monitored.update(discovered - ignored)
             candidate["monitored"] = sorted(monitored)
             if new_accounts and old.get("cursor"):
                 # A preexisting cursor may have skipped activity for newly linked accounts.
                 old = {**old, "cursor": ""}
             # Respect a newly linked Item's own first-sync budget. A daily
             # owner refresh must not issue a second request for that Item.
-            if discovered and now >= old.get("nextTransactionSyncAt", 0):
+            if discovered & monitored and now >= old.get("nextTransactionSyncAt", 0):
                 try:
                     changes = _sync_item(item["access"], old.get("cursor"))
                     exposed = _merge(old, item_id, item["institution"], raw, changes, now)
@@ -590,14 +659,14 @@ def sync_owner(uid):
                     # A temporarily unavailable Item must not roll back
                     # successfully synced unrelated banks or lose its cursor.
                     exposed["lastTransactionAttemptAt"] = now
-                    exposed["nextTransactionSyncAt"] = now + DAY
+                    exposed["nextTransactionSyncAt"] = now + SYNC_INTERVAL
                     exposed["transactionSyncStatus"] = "needs_attention"
                     exposed["transactionSyncError"] = exc.detail
             # Plaid returns an Item-wide delta, even when only one account is
             # selected. Discard unselected activity before encrypted persistence.
             exposed["transactions"] = {
                 ident: row for ident, row in exposed.get("transactions", {}).items()
-                if _account_key(item_id, row.get("account", "")) in monitored
+                if _account_key(item_id, row.get("account", "")) in monitored - ignored
             }
             candidate["items"][item_id] = exposed
         # Permanently drop obsolete receipts, so a removed transaction cannot

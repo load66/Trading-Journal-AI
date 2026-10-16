@@ -85,7 +85,7 @@ def test_merge_signs_pending_duplicate_corrections_and_missing(setup):
     assert s['transactions'][k]['t1']['changedAt']==NOW+1
     assert s['transactions'][k]['reversal']['kind']=='possible_reversal'
     b.merge(s,data(),NOW+2)
-    assert k in s['missingAccounts'] and len(s['transactions'][k])==6
+    assert k in s['missingAccounts'] and len(s['transactions'][k])==5
 
 def test_exact_account_scope_same_id_different_connection(setup):
     s=seed();b.merge(s,data(account('two',transactions=[txn('wrong')])),NOW)
@@ -111,7 +111,7 @@ def test_failed_sync_is_throttled_and_retains_evidence(setup,monkeypatch):
     s=seed();b.merge(s,data(account(transactions=[txn()])),NOW);b.write_state('owner',s,None)
     def fail(*a):raise HTTPException(403,'Access rejected')
     monkeypatch.setattr(b,'get_data',fail);r=b.sync('owner')
-    assert r['error']=='Access rejected' and r['transactions'] and r['nextSyncAt']==NOW+b.DAY
+    assert r['error']=='Access rejected' and r['transactions'] and r['nextSyncAt']==NOW+b.SYNC_INTERVAL
 
 def client(monkeypatch):
     def auth(req):
@@ -666,3 +666,63 @@ def test_product_assignment_preserves_review_decisions_but_resets_requirement_as
     assert changed_cycle.status_code == 200
     assert not changed_cycle.json().get('evidenceReviews', {}).get(key)
     assert b.read_state('owner')[0]['evidenceReviews'] == {}
+
+def test_explicit_opt_out_survives_discovery_and_sync(setup, monkeypatch):
+    a=account();k=b.account_key(a)
+    state=seed()
+    state['monitoredAccounts']=[k]
+    b.write_state('owner',state,None)
+    monkeypatch.setattr(b,'owner',lambda request:'owner')
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app=FastAPI();app.include_router(b.router)
+    client=TestClient(app)
+    response=client.put('/api/bonus-tracker/simplefin/monitoring',json={'accounts':[]})
+    assert response.status_code==200
+    assert b.read_state('owner')[0]['excludedAccounts']==[k]
+    seen=[]
+    monkeypatch.setattr(b,'get_data',lambda *args,**kwargs:seen.append(args) or data(a))
+    b.sync('owner')
+    assert not seen
+    saved,_=b.read_state('owner')
+    assert k not in saved['monitoredAccounts'] and not saved['transactions']
+
+
+def test_remove_only_one_account_and_restore_without_relinking(setup,monkeypatch):
+    a=account('one','a');other=account('one','b')
+    ka,kb=b.account_key(a),b.account_key(other)
+    state=seed()
+    state['accounts']=b.normalize_accounts(data(a,other))
+    state['monitoredAccounts']=[ka,kb]
+    b.merge(state,data(a,other),NOW)
+    b.write_state('owner',state,None)
+    monkeypatch.setattr(b,'owner',lambda request:'owner')
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app=FastAPI();app.include_router(b.router);client=TestClient(app)
+    deleted=client.delete('/api/bonus-tracker/simplefin/accounts/'+ka)
+    assert deleted.status_code==200
+    assert [row['key'] for row in deleted.json()['accounts']]==[kb]
+    assert ka in deleted.json()['removedAccounts']
+    saved,_=b.read_state('owner')
+    assert ka not in saved['transactions'] and ka in saved['excludedAccounts']
+    assert saved['accounts'][0]['key']==kb
+    assert saved['access']==ACCESS
+    restored=client.post('/api/bonus-tracker/simplefin/accounts/'+ka+'/restore')
+    assert restored.status_code==200
+    assert ka not in b.read_state('owner')[0]['removedAccounts']
+
+
+def test_removed_simplefin_account_does_not_reappear_on_provider_merge(setup):
+    first=account('one','a',[txn('excluded','10')])
+    second=account('one','b',[txn('retained','20')])
+    removed_key=b.account_key(first);other_key=b.account_key(second)
+    state=b.empty_state()
+    state['accounts']=b.normalize_accounts(data(first,second))
+    state['monitoredAccounts']=[other_key]
+    state['removedAccounts']={removed_key:{'name':'Synthetic removed','bank':'Demo'}}
+    state['excludedAccounts']=[removed_key]
+    b.merge(state,data(first,second),NOW)
+    assert [a['key'] for a in state['accounts']]==[other_key]
+    assert removed_key not in state['transactions']
+    assert other_key in state['transactions']

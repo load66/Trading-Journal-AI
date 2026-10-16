@@ -140,8 +140,8 @@ def test_new_connection_syncs_every_account_automatically_and_only_once_daily(mo
     assert len(payload["transactions"][second_key]) == 1
     assert all(len(a["connectionHandle"]) == 64 for a in payload["accounts"])
     assert calls == ["/accounts/get", "/transactions/sync"]
-    assert storage["transactionNextSyncAt"] == NOW + adapter.DAY
-    assert storage["nextSyncAt"] == NOW + adapter.DAY
+    assert storage["transactionNextSyncAt"] == NOW + adapter.SYNC_INTERVAL
+    assert storage["nextSyncAt"] == NOW + adapter.SYNC_INTERVAL
     assert payload["authoritativeMilestones"] is False
     repeat = client.post("/api/bonus-tracker/plaid/accounts/sync", headers=headers)
     assert repeat.status_code == 200
@@ -196,7 +196,7 @@ def test_new_bank_discovers_accounts_without_repeating_daily_transaction_sync(mo
     assert storage["items"]["previous-item"]["accounts"] == prior["accounts"]
     assert len(storage["items"]["new-item"]["transactions"]) == 1
     assert storage["items"]["new-item"]["lastTransactionSyncAt"] == NOW
-    assert storage["items"]["new-item"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+    assert storage["items"]["new-item"]["nextTransactionSyncAt"] == NOW + adapter.SYNC_INTERVAL
     assert response["accounts"][1]["transactionSyncStatus"] == "ready"
     assert adapter._account_key("new-item", "new-checking") in storage["monitored"]
     assert "private-new" not in str(response)
@@ -299,7 +299,7 @@ def test_discovered_bank_gets_initial_sync_during_other_bank_cooldown(monkeypatc
     assert calls == ["/transactions/sync", "/accounts/get"] or calls == ["/accounts/get", "/transactions/sync"]
     assert storage["items"]["new-item"]["cursor"] == "initial-cursor"
     assert response["accounts"][0]["transactionSyncStatus"] == "awaiting_provider_data"
-    assert response["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.DAY
+    assert response["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.SYNC_INTERVAL
     assert storage["nextSyncAt"] == NOW + 3600, "Another bank's owner-wide quota must remain intact"
     adapter.sync_owner("alice")
     assert len(calls) == 2, "Refreshing must never duplicate the first Plaid transaction call"
@@ -328,7 +328,7 @@ def test_initial_provider_error_preserves_discovery_and_suspends_retry(monkeypat
     result = adapter.sync_owner("alice")
     assert len(result["accounts"]) == 1
     assert result["accounts"][0]["transactionSyncStatus"] == "needs_attention"
-    assert result["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.DAY
+    assert result["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.SYNC_INTERVAL
     assert "secret" not in str(result)
     assert calls == ["/accounts/get", "/transactions/sync"]
     adapter.sync_owner("alice")
@@ -441,7 +441,7 @@ def test_one_bank_transaction_failure_does_not_rollback_other_bank(monkeypatch):
     assert by_name["Available"]["transactionSyncStatus"] == "ready"
     assert len(result["transactions"][adapter._account_key("good-bank", "good-checking")]) == 1
     assert storage["items"]["good-bank"]["cursor"] == "good-cursor"
-    assert storage["items"]["old-failing"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+    assert storage["items"]["old-failing"]["nextTransactionSyncAt"] == NOW + adapter.SYNC_INTERVAL
 
 
 def test_account_discovery_outage_isolates_item_and_retains_saved_history(monkeypatch):
@@ -557,8 +557,45 @@ def test_delayed_initial_history_retries_on_its_own_due_date(monkeypatch):
     response = adapter.sync_owner("alice")
     assert len(response["transactions"][key]) == 1
     assert response["accounts"][0]["transactionSyncStatus"] == "ready"
-    assert storage["items"]["onepay-item"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+    assert storage["items"]["onepay-item"]["nextTransactionSyncAt"] == NOW + adapter.SYNC_INTERVAL
     assert storage["nextSyncAt"] == NOW + 17 * 3600
     calls_before = len(calls)
     adapter.sync_owner("alice")
     assert len(calls) == calls_before, "A fresh backfill must not be fetched twice"
+
+def test_plaid_account_removal_preserves_other_accounts_and_item(monkeypatch):
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    from copy import deepcopy
+    first=account()
+    second={**first,"account_id":"secondary","name":"Synthetic credit card"}
+    first_key=adapter._account_key("item","example")
+    second_key=adapter._account_key("item","secondary")
+    doc=adapter._default()
+    doc["items"]["item"]=adapter._merge({},"item","Synthetic bank",
+        {"accounts":[first,second]},(
+            {"a":fixture(ident="a"),"b":{**fixture(ident="b"),"account_id":"secondary"}},
+            {},set(),"cursor1"),NOW)
+    doc["monitored"]=[first_key,second_key]
+    ledger={"items":{"item":{"owner":"alice","access":"synthetic-token",
+                              "institution":"Synthetic bank"}}}
+    monkeypatch.setattr(adapter.quota,"_ledger",lambda:(ledger,"tag"))
+    monkeypatch.setattr(adapter,"owner",lambda request:"alice")
+    monkeypatch.setattr(adapter,"_read",lambda uid:(deepcopy(doc),"tag"))
+    def write(uid,value,etag):
+        doc.clear();doc.update(deepcopy(value))
+        return "tag"
+    monkeypatch.setattr(adapter,"_write",write)
+    app=FastAPI();app.include_router(adapter.router);client=TestClient(app)
+    removed=client.delete("/api/bonus-tracker/plaid/accounts/individual/"+second_key)
+    assert removed.status_code==200
+    payload=removed.json()
+    assert [a["key"] for a in payload["accounts"]]==[first_key]
+    assert second_key in payload["removedAccounts"]
+    assert len(doc["items"]["item"]["transactions"])==1
+    assert doc["items"]["item"]["cursor"]=="cursor1"
+    assert "item" in ledger["items"]
+    assert first_key in doc["monitored"] and second_key not in doc["monitored"]
+    restored=client.post("/api/bonus-tracker/plaid/accounts/individual/"+second_key+"/restore")
+    assert restored.status_code==200
+    assert second_key not in doc["removedAccounts"]
