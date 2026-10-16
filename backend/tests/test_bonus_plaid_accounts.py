@@ -136,11 +136,13 @@ def test_authenticated_readonly_routes_and_monitoring(monkeypatch):
     first=client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h)
     assert first.status_code==200 and len(first.json()["accounts"])==1
     assert calls==["/accounts/get"]
+    storage["items"]["sample-item"]["cursor"]="cursor-from-previous-unmonitored-period"
     assert client.put("/api/bonus-tracker/plaid/accounts/monitoring",
         json={"accounts":[key,key]},headers=h).status_code==400
     enabled=client.put("/api/bonus-tracker/plaid/accounts/monitoring",
         json={"accounts":[key]},headers=h)
     assert enabled.status_code==200
+    assert storage["items"]["sample-item"]["cursor"]=="", "Newly monitored accounts must backfill rather than skip history"
     result=client.post("/api/bonus-tracker/plaid/accounts/sync",headers=h)
     assert result.status_code==200
     assert calls==["/accounts/get","/accounts/get","/transactions/sync"]
