@@ -39,6 +39,7 @@ def setup(monkeypatch):
     monkeypatch.setenv("SIMPLEFIN_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("PLAID_TRIAL_ENABLED", "true")
     monkeypatch.setenv("PLAID_TRIAL_BASELINE_CONFIRMED", "true")
+    monkeypatch.setenv("PLAID_TRIAL_PIPELINE_READY", "true")
     monkeypatch.setenv("PLAID_TRIAL_PRIOR_ITEMS", "0")
     monkeypatch.setenv("PLAID_CLIENT_ID", "fake-client")
     monkeypatch.setenv("PLAID_SECRET", "never-disclose")
