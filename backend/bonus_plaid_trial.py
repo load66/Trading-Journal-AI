@@ -104,12 +104,15 @@ def _ledger():
 
 
 def _prune(doc):
-    """Only unexchanged link sessions expire. In-flight/uncertain exchanges NEVER expire."""
-    now = int(time.time())
-    expired = [key for key, hold in doc["holds"].items()
-               if hold.get("phase") == "issued" and hold.get("expires", 0) < now]
-    for key in expired:
-        del doc["holds"][key]
+    """Never expire issued capacity automatically.
+
+    Link creates an Item BEFORE public-token exchange. A lost callback, mobile
+    navigation, or cancelled browser cannot prove that no Item was created.
+    Only operator reconciliation against Plaid's lifetime usage may release an
+    unused reservation; successful Item counts must never be decremented.
+    https://plaid.com/docs/api/items/#itempublic_tokenexchange
+    """
+    return
 
 
 def _capacity(doc, *, session=None):

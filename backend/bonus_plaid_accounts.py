@@ -1,10 +1,10 @@
 """Plaid Trial read-only adapter; no bank actions, upgrades, or provider tokens to clients.
 
-This adapter is inactive until operator verification and integration with the
-existing Tracker evidence engine. All real provider access requires the
+Uses the existing Tracker evidence engine. All real provider access requires the
 separately guarded Trial activation switches in bonus_plaid_trial.py.
 """
 import copy
+import asyncio
 import hashlib
 import json
 import time
@@ -18,7 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from bonus_backups import owner, store
-from bonus_simplefin import cipher, clean, classify, evidence_fingerprint, automatic_category, merchant_name
+from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, public_ref,
+    public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
+    EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
 
 DAY = 86400
@@ -39,7 +41,8 @@ def _key(uid):
 
 
 def _default():
-    return {"version": 1, "items": {}, "monitored": [], "lastSuccess": None, "nextSyncAt": 0}
+    return {"version": 1, "items": {}, "monitored": [], "lastSuccess": None, "nextSyncAt": 0, "mappings": {},
+            "evidenceReviews": {}, "accountProfiles": {}, "transactionReviews": {}}
 
 
 def _read(uid):
@@ -255,34 +258,107 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
     return out
 
 
-def _public(doc, ledger, uid):
-    accessible = {item_id: row for item_id, row in ledger["items"].items()
+def _view(doc, ledger, uid):
+    accessible = {item_id for item_id, row in ledger["items"].items()
                   if isinstance(row, dict) and row.get("owner") == uid}
-    accounts, transactions = [], {}
+    view = {"access": bool(accessible), "accounts": [], "transactions": {},
+            "monitoredAccounts": list(doc.get("monitored", [])),
+            **{key: copy.deepcopy(doc.get(key, {})) for key in
+               ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
+            "lastSuccess": doc.get("lastSuccess"), "nextSyncAt": doc.get("nextSyncAt"),
+            "error": doc.get("error"), "status": "attention" if doc.get("error") else "connected"}
     permitted = set(doc.get("monitored", []))
     for item_id, state in doc.get("items", {}).items():
         if item_id not in accessible:
             continue
         for account in state.get("accounts", []):
             key = account["key"]
-            accounts.append({k: v for k, v in account.items() if k != "id"})
+            view["accounts"].append({k: v for k, v in account.items() if k != "id"})
             if key in permitted:
-                for row in state.get("transactions", {}).values():
-                    if row.get("account") != account["id"]:
-                        continue
-                    opaque = hashlib.sha256((key + "\0" + row["id"]).encode()).hexdigest()
-                    sanitized = {k: v for k, v in row.items() if k not in ("id", "account")}
-                    sanitized["id"] = opaque
-                    category, confidence, signals = automatic_category(row)
-                    sanitized.update(category=category, confidence=confidence, signals=signals,
-                                     categorySource="automatic", merchant=merchant_name(row.get("description", "")))
-                    transactions.setdefault(key, {})[opaque] = sanitized
-    return {"provider": "plaid", "evidenceOnly": True, "configured": True,
-            "connected": bool(accessible), "accounts": accounts, "transactions": transactions,
-            "monitoredAccounts": list(permitted), "lastSuccess": doc.get("lastSuccess"),
-            "nextSyncAt": doc.get("nextSyncAt"), "error": doc.get("error"),
-            "stale": not doc.get("lastSuccess") or time.time() - doc["lastSuccess"] > 2 * DAY,
-            "authoritativeMilestones": False}
+                view["transactions"][key] = {
+                    raw: {k: v for k, v in row.items() if k not in ("id", "account")}
+                    for raw, row in state.get("transactions", {}).items()
+                    if row.get("account") == account["id"]}
+    allowed = {a["key"] for a in view["accounts"]}
+    view["monitoredAccounts"] = [key for key in view["monitoredAccounts"] if key in allowed]
+    for field in ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews"):
+        view[field] = {key: value for key, value in view[field].items() if key in allowed}
+    # A category correction, like an evidence review, is bound to its revision.
+    view["transactionReviews"] = {
+        key: {raw: review for raw, review in rows.items()
+              if review.get("fingerprint") == evidence_fingerprint(
+                  view["transactions"].get(key, {}).get(raw, {}))
+              and raw in view["transactions"].get(key, {})}
+        for key, rows in view["transactionReviews"].items()}
+    return view
+
+
+def _public(doc, ledger, uid):
+    result = public_state(_view(doc, ledger, uid))
+    result.update(provider="plaid", authoritativeMilestones=False,
+                  stale=not doc.get("lastSuccess") or time.time() - doc["lastSuccess"] > 2 * DAY)
+    return result
+
+
+def _editable(request):
+    uid = owner(request)
+    ledger, _ = quota._ledger()
+    doc, etag = _read(uid)
+    if doc.get("leaseUntil", 0) > time.time():
+        raise HTTPException(409, "Plaid synchronization is busy. Retry later.")
+    return uid, ledger, doc, etag, _view(doc, ledger, uid)
+
+
+@router.put("/accounts/selection", dependencies=[Depends(_private)])
+def select(body: SelectionBody, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    allowed = {a["key"] for a in view["accounts"]}
+    if not set(body.mappings).issubset(allowed):
+        raise HTTPException(400, "Choose only your discovered Plaid accounts.")
+    if not set(body.mappings).issubset(set(doc.get("monitored", []))):
+        raise HTTPException(400, "Enable transaction monitoring before linking a bonus.")
+    apply_mapping_selection(view, {key: value.model_dump(exclude_none=True)
+                                   for key, value in body.mappings.items()})
+    doc["mappings"], doc["evidenceReviews"] = view["mappings"], view["evidenceReviews"]
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+@router.put("/accounts/evidence-review", dependencies=[Depends(_private)])
+def evidence_review(body: EvidenceReviewBody, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    apply_evidence_decision(view, body, public_state(view))
+    doc["evidenceReviews"] = view["evidenceReviews"]
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+@router.put("/accounts/account-profiles", dependencies=[Depends(_private)])
+def profiles(body: AccountProfilesBody, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    if not set(body.profiles).issubset({a["key"] for a in view["accounts"]}):
+        raise HTTPException(400, "Choose only your discovered Plaid accounts.")
+    doc["accountProfiles"] = {key: value.model_dump() for key, value in body.profiles.items()}
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+@router.put("/accounts/transaction-review", dependencies=[Depends(_private)])
+def transaction_review(body: TransactionReviewBody, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    rows = view["transactions"].get(body.account, {})
+    matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
+    if len(matches) != 1:
+        raise HTTPException(400, "Choose a saved transaction from this account.")
+    raw = matches[0]
+    reviews = doc.setdefault("transactionReviews", {}).setdefault(body.account, {})
+    if body.category == "unreviewed":
+        reviews.pop(raw, None)
+    else:
+        reviews[raw] = {"category": body.category, "reviewedAt": int(time.time()),
+                        "fingerprint": evidence_fingerprint(rows[raw])}
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
 
 
 @router.get("/accounts", dependencies=[Depends(_private)])
@@ -318,6 +394,8 @@ def monitor(body: Monitored, request: Request):
         raise HTTPException(400, "Select only your discovered Plaid accounts.")
     new_accounts = requested - set(doc.get("monitored", []))
     doc["monitored"] = list(body.accounts)
+    for field in ("mappings", "evidenceReviews", "transactionReviews"):
+        doc[field] = {key: value for key, value in doc.get(field, {}).items() if key in requested}
     # First selection may follow account-only discovery. Once Transactions was
     # attempted, preference changes must never reset its daily provider budget.
     if new_accounts and doc.get("transactionNextSyncAt", 0) <= time.time():
@@ -335,7 +413,10 @@ def monitor(body: Monitored, request: Request):
 
 @router.post("/accounts/sync", dependencies=[Depends(_private)])
 def sync(request: Request):
-    uid = owner(request)
+    return sync_owner(owner(request))
+
+
+def sync_owner(uid):
     ledger, _ = quota._ledger()
     known = {item_id: row for item_id, row in ledger["items"].items()
              if row.get("owner") == uid}
@@ -371,6 +452,14 @@ def sync(request: Request):
                 if _account_key(item_id, row.get("account", "")) in monitored
             }
             candidate["items"][item_id] = exposed
+        # Permanently drop obsolete receipts, so a removed transaction cannot
+        # silently regain approval if the provider later reuses its identifier.
+        current = _view(candidate, ledger, uid)["transactions"]
+        for field in ("evidenceReviews", "transactionReviews"):
+            candidate[field] = {key: {raw: review for raw, review in rows.items()
+                if raw in current.get(key, {}) and review.get("fingerprint") ==
+                evidence_fingerprint(current[key][raw])}
+                for key, rows in candidate.get(field, {}).items() if key in current}
         candidate["lastSuccess"] = now
         candidate.pop("error", None)
     except HTTPException as exc:
@@ -381,3 +470,29 @@ def sync(request: Request):
     candidate.pop("leaseUntil", None)
     _write(uid, candidate, etag)
     return _public(candidate, ledger, uid)
+
+
+def scheduled_sync_once():
+    if not quota._ready():
+        return
+    ledger, _ = quota._read()
+    if not ledger:
+        return
+    owners = {row.get("owner") for row in ledger["items"].values() if row.get("owner")}
+    for uid in owners:
+        try:
+            doc, _ = _read(uid)
+            if doc.get("monitored") and time.time() >= doc.get("nextSyncAt", 0):
+                sync_owner(uid)
+        except Exception:
+            # Private per-owner status reports failures; never log bank data.
+            pass
+
+
+async def scheduled_plaid_loop():
+    while True:
+        try:
+            await asyncio.to_thread(scheduled_sync_once)
+        except Exception:
+            pass
+        await asyncio.sleep(300)
