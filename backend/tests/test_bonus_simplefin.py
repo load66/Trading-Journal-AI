@@ -711,3 +711,18 @@ def test_remove_only_one_account_and_restore_without_relinking(setup,monkeypatch
     restored=client.post('/api/bonus-tracker/simplefin/accounts/'+ka+'/restore')
     assert restored.status_code==200
     assert ka not in b.read_state('owner')[0]['removedAccounts']
+
+
+def test_removed_simplefin_account_does_not_reappear_on_provider_merge(setup):
+    first=account('one','a',[txn('excluded','10')])
+    second=account('one','b',[txn('retained','20')])
+    removed_key=b.account_key(first);other_key=b.account_key(second)
+    state=b.empty_state()
+    state['accounts']=b.normalize_accounts(data(first,second))
+    state['monitoredAccounts']=[other_key]
+    state['removedAccounts']={removed_key:{'name':'Synthetic removed','bank':'Demo'}}
+    state['excludedAccounts']=[removed_key]
+    b.merge(state,data(first,second),NOW)
+    assert [a['key'] for a in state['accounts']]==[other_key]
+    assert removed_key not in state['transactions']
+    assert other_key in state['transactions']
