@@ -666,3 +666,70 @@ def test_product_assignment_preserves_review_decisions_but_resets_requirement_as
     assert changed_cycle.status_code == 200
     assert not changed_cycle.json().get('evidenceReviews', {}).get(key)
     assert b.read_state('owner')[0]['evidenceReviews'] == {}
+
+
+# BATCH 1 fail-first tests: synthetic records only; do not update production code.
+def test_batch1_pending_zero_posted_date_and_replacement(setup):
+    original = seed()
+    key = b.account_key(account())
+    pending = {**txn('auth-pending', '-24.50', 'Synthetic card purchase', pending=True),
+               'posted': 0, 'transacted_at': NOW - 120}
+    b.merge(original, data(account(transactions=[pending])), NOW)
+    assert 'auth-pending' in original['transactions'][key], (
+        'SimpleFIN pending authorizations with posted=0 must be retained')
+    saved = original['transactions'][key]['auth-pending']
+    assert saved['pending'] is True
+    assert saved['transactedAt'] == NOW - 120
+
+    posted = txn('posted-purchase', '-24.50', 'Synthetic card purchase', pending=False)
+    b.merge(original, data(account(transactions=[posted])), NOW + 3600)
+    keys = original['transactions'][key]
+    assert 'auth-pending' not in keys, 'Expired pending row must not linger'
+    assert 'posted-purchase' in keys
+    assert keys['posted-purchase']['kind'] != 'possible_reversal'
+
+
+def test_batch1_history_survives_later_90_day_provider_windows(setup):
+    saved = seed()
+    key = b.account_key(account())
+    older = txn('historical-100d', '17.25', 'Synthetic historic deposit')
+    older['posted'] = NOW - 110 * b.DAY
+    b.merge(saved, data(account(transactions=[older])), NOW - 105 * b.DAY)
+    assert 'historical-100d' in saved['transactions'][key]
+    b.merge(saved, data(account(transactions=[txn('new-credit')])), NOW)
+    assert 'historical-100d' in saved['transactions'][key], (
+        'Provider returning only 90 days must not destroy previously stored history')
+
+
+def test_batch1_simplefin_opt_out_survives_sync_and_discovery(setup, monkeypatch):
+    state = seed()
+    key = b.account_key(account())
+    state['mappings'] = {}
+    state['monitoredAccounts'] = [key]
+    b.write_state('owner', state, None)
+    c = client(monkeypatch)
+    headers = {'Authorization': 'Bearer synthetic'}
+    result = c.put('/api/bonus-tracker/simplefin/monitoring',
+                   headers=headers, json={'accounts': []})
+    assert result.status_code == 200
+    monkeypatch.setattr(b, 'get_data', lambda *args, **kwargs:
+                        data(account(transactions=[txn('must-not-import')])))
+    first = c.post('/api/bonus-tracker/simplefin/sync', headers=headers).json()
+    assert key not in first['monitoredAccounts'], 'Opt-out must survive scheduled sync'
+    assert key not in first['transactions'] or not first['transactions'][key]
+    second = c.post('/api/bonus-tracker/simplefin/discover', headers=headers).json()
+    assert key not in second['monitoredAccounts'], 'Opt-out must survive bank discovery'
+
+
+def test_batch1_simplefin_scheduled_sync_respects_safe_six_hour_goal(setup, monkeypatch):
+    state = seed()
+    key = b.account_key(account())
+    state['mappings'] = {}
+    state['monitoredAccounts'] = [key]
+    b.write_state('owner', state, None)
+    monkeypatch.setattr(b, 'get_data', lambda *args, **kwargs:
+                        data(account(transactions=[txn('fresh-activity')])))
+    response = b.sync('owner')
+    assert response['lastSuccess'] == NOW
+    assert NOW < response['nextSyncAt'] <= NOW + 6 * 3600, (
+        'Six-hour sync cadence must stay within the verified 24-per-day SimpleFIN quota')

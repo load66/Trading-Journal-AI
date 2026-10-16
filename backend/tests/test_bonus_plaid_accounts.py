@@ -230,3 +230,72 @@ def test_failed_new_item_discovery_preserves_existing_data_and_provider_budget(m
     assert storage["nextNewItemDiscoveryAt"] == NOW + adapter.DAY
     assert adapter.sync_owner("alice")["accounts"] == response["accounts"]
     assert calls == ["/accounts/get"], "Never retry repeatedly within the daily budget"
+
+
+# BATCH 1 fail-first regressions (synthetic Plaid responses, zero live provider calls).
+def test_batch1_plaid_pending_retained_then_replaced_without_duplicates():
+    pending = {**fixture(amount=28.35, ident='authorization-1'), 'pending': True}
+    prior = adapter._merge({}, 'item-p', 'Synthetic', {'accounts': [account()]},
+        ({'authorization-1': pending}, {}, set(), 'cursor-pending'), NOW)
+    assert 'authorization-1' in prior['transactions'], (
+        'A pending Plaid authorization must be retained in history')
+    posted = {**fixture(amount=28.35, ident='posted-1'),
+              'pending_transaction_id': 'authorization-1'}
+    final = adapter._merge(prior, 'item-p', 'Synthetic', {'accounts': [account()]},
+        ({'posted-1': posted}, {}, set(), 'cursor-posted'), NOW+3600)
+    assert set(final['transactions']) == {'posted-1'}, (
+        'Posted transaction replaces its pending ID, without a duplicate')
+
+
+def test_batch1_plaid_history_survives_90_day_retention_cutoff():
+    older = {**fixture(ident='historical-120d'), 'date': '2026-06-01'}
+    original = adapter._merge({}, 'item-h', 'Synthetic', {'accounts': [account()]},
+        ({'historical-120d': older}, {}, set(), 'cursor-old'), NOW - 105*adapter.DAY)
+    assert 'historical-120d' in original['transactions']
+    updated = adapter._merge(original, 'item-h', 'Synthetic', {'accounts': [account()]},
+        ({'current': fixture(ident='current')}, {}, set(), 'cursor-now'), NOW)
+    assert 'historical-120d' in updated['transactions'], (
+        'Plaid cursor updates must not erase historical observations after 90 days')
+
+
+def _batch1_plaid_in_memory(monkeypatch):
+    from copy import deepcopy
+    import bonus_plaid_trial as quota
+    account_key = adapter._account_key('item-a', 'example')
+    activity = adapter._default()
+    activity['items'] = {'item-a': adapter._merge(
+        {}, 'item-a', 'Synthetic', {'accounts': [account()]}, None, NOW)}
+    activity['monitored'] = []
+    ledger = {'items': {'item-a': {'owner': 'alice', 'institution': 'Synthetic',
+                                  'access': 'synthetic-token'}}}
+    monkeypatch.setattr(quota, '_ledger', lambda: (ledger, 'ledger-tag'))
+    monkeypatch.setattr(adapter, '_read', lambda uid: (deepcopy(activity), 'activity-tag'))
+    def store(uid, document, etag):
+        activity.clear()
+        activity.update(deepcopy(document))
+        return 'activity-tag'
+    monkeypatch.setattr(adapter, '_write', store)
+    monkeypatch.setattr(adapter.time, 'time', lambda: NOW)
+    monkeypatch.setattr(adapter, '_provider', lambda endpoint, access, **kwargs:
+                        {'accounts': [account()]})
+    monkeypatch.setattr(adapter, '_sync_item', lambda access, cursor:
+                        ({'synthetic-tx': fixture(ident='synthetic-tx')}, {},
+                         set(), 'synthetic-cursor'))
+    return activity, account_key
+
+
+def test_batch1_plaid_opt_out_survives_sync_and_purges_activity(monkeypatch):
+    activity, key = _batch1_plaid_in_memory(monkeypatch)
+    result = adapter.sync_owner('alice')
+    assert key not in result['monitoredAccounts'], 'Explicitly off must stay off'
+    assert not activity['items']['item-a']['transactions'], (
+        'Transactions for disabled accounts must not be retained')
+
+
+def test_batch1_plaid_sync_schedules_safe_four_hour_refresh(monkeypatch):
+    activity, key = _batch1_plaid_in_memory(monkeypatch)
+    activity['monitored'] = [key]
+    result = adapter.sync_owner('alice')
+    assert result['lastSuccess'] == NOW
+    assert NOW < result['nextSyncAt'] <= NOW + 4 * 3600, (
+        'Existing Plaid Trial Items may use a conservative four-hour check cadence')
