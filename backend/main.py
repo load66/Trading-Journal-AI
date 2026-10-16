@@ -102,9 +102,16 @@ async def lifespan(app: FastAPI):
     availability_task = asyncio.create_task(scheduled_availability_loop())
     from bonus_simplefin import scheduled_simplefin_loop
     simplefin_task = asyncio.create_task(scheduled_simplefin_loop())
+    from bonus_plaid_sandbox import run_configured_check
+    sandbox_check_task = asyncio.create_task(asyncio.to_thread(run_configured_check))
     try:
         yield
     finally:
+        sandbox_check_task.cancel()
+        try:
+            await sandbox_check_task
+        except asyncio.CancelledError:
+            pass
         simplefin_task.cancel()
         try:
             await simplefin_task
