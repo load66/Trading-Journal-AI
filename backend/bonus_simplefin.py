@@ -311,22 +311,49 @@ def enrich_transactions(state, result):
             records.append((account, raw_id, row))
         result.setdefault('transactions', {})[account] = public_rows
 
-    # Mark a transfer high confidence only when both connected-account entries explicitly agree.
-    for i, (account, _, row) in enumerate(records):
-        if row.get('pending') or row.get('categorySource') == 'user':
+    # Only an *unambiguous, reciprocal* posted pair earns high-confidence transfer status.
+    # Generic "payment" wording can describe payroll, purchases and refunds, so it must
+    # not establish a transfer by itself. User-confirmed categories are never overridden.
+    transfer_wording = re.compile(
+        r'\\b(?:transfer|xfer)\\b|\\b(?:credit card|card) payment\\b|'
+        r'\\bpayment (?:thank you|to|from)\\b', re.I)
+    eligible = []
+    for account, raw_id, row in records:
+        if (row.get('pending') or row.get('categorySource') == 'user'
+                or Decimal(row['amount']) == 0
+                or row.get('kind') in ('possible_bonus', 'possible_reversal')
+                or not transfer_wording.search(row.get('description', ''))):
             continue
+        eligible.append((account, raw_id, row))
+    counterpart = {i: [] for i in range(len(eligible))}
+    # Bucket by absolute value to avoid comparing unrelated amounts.
+    by_amount = {}
+    for i, (_, _, row) in enumerate(eligible):
         amount = Decimal(row['amount'])
-        if amount == 0 or not re.search(r'\btransfer\b|\bxfer\b|\bpayment\b', row['description'], re.I):
+        by_amount.setdefault(abs(amount), {'in': [], 'out': []})[
+            'in' if amount > 0 else 'out'].append(i)
+    for bucket in by_amount.values():
+        for i in bucket['in']:
+            account_i, _, in_row = eligible[i]
+            for j in bucket['out']:
+                account_j, _, out_row = eligible[j]
+                if (account_i == account_j
+                        or abs(in_row['posted'] - out_row['posted']) > 3 * DAY):
+                    continue
+                counterpart[i].append(j)
+                counterpart[j].append(i)
+    for i, matches in counterpart.items():
+        if len(matches) != 1:
             continue
-        for other_account, _, other in records[i + 1:]:
-            if (account == other_account or other.get('pending') or other.get('categorySource') == 'user'
-                    or Decimal(other['amount']) != -amount or abs(other['posted'] - row['posted']) > 3 * DAY
-                    or not re.search(r'\btransfer\b|\bxfer\b|\bpayment\b', other['description'], re.I)):
-                continue
+        j = matches[0]
+        # Both ends must have exactly one candidate; otherwise a shared
+        # amount can create multiple false high-confidence transfer matches.
+        if j < i or counterpart[j] != [i]:
+            continue
+        for index in (i, j):
+            row = eligible[index][2]
             row.update(category='transfer', confidence='high')
-            other.update(category='transfer', confidence='high')
             row['signals'] = sorted(set(row['signals'] + ['matched_internal_transfer']))
-            other['signals'] = sorted(set(other['signals'] + ['matched_internal_transfer']))
 
     groups = {}
     for _, _, row in records:
