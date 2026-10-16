@@ -263,3 +263,38 @@ def test_auth_errors_remain_readable_only_to_allowed_frontend(monkeypatch, tmp_p
         other=client.get('/api/bonus-tracker/backups',headers={'Origin':'https://other.example'})
         assert other.status_code==401
         assert 'access-control-allow-origin' not in other.headers
+
+
+def test_simplefin_auth_errors_are_private_and_origin_scoped(monkeypatch, tmp_path):
+    """Production middleware rejects unauthenticated banking calls before APIRouter dependencies."""
+    main = fresh_main(
+        monkeypatch, tmp_path,
+        AUTH_REQUIRED="true", SUPABASE_URL="https://project.supabase.co",
+        AUTHORIZED_USER_ID="owner-uuid",
+        FRONTEND_ORIGINS="https://load66.github.io",
+    )
+    from fastapi.testclient import TestClient
+    with TestClient(main.app) as client:
+        requests = (
+            ('GET', '/api/bonus-tracker/simplefin'),
+            ('POST', '/api/bonus-tracker/simplefin/sync'),
+            ('PUT', '/api/bonus-tracker/simplefin/monitoring'),
+        )
+        for method, path in requests:
+            response = client.request(method, path, headers={'Origin': 'https://load66.github.io'})
+            assert response.status_code == 401
+            assert response.headers['cache-control'] == 'no-store'
+            assert response.headers['pragma'] == 'no-cache'
+            assert response.headers['access-control-allow-origin'] == 'https://load66.github.io'
+            assert 'accounts' not in response.json()
+            assert 'transactions' not in response.json()
+        forbidden_origin = client.get(
+            '/api/bonus-tracker/simplefin',
+            headers={'Origin': 'https://attacker.invalid'},
+        )
+        assert forbidden_origin.status_code == 401
+        assert forbidden_origin.headers['cache-control'] == 'no-store'
+        assert 'access-control-allow-origin' not in forbidden_origin.headers
+        ordinary = client.get('/api/accounts')
+        assert ordinary.status_code == 401
+        assert ordinary.headers.get('cache-control') != 'no-store'
