@@ -605,3 +605,59 @@ def test_product_link_input_validation_and_scope(setup, monkeypatch):
                     json={'mappings': {'f'*64: {**original, 'productId': 'checking'}}})
     assert unknown.status_code == 400
     assert c.put(path, json={'mappings': {k: {**original, 'productId': 'checking'}}}).status_code == 401
+
+
+def test_product_assignment_retains_evidence_review_without_stale_requirement(setup, monkeypatch):
+    s = seed()
+    a = account(transactions=[txn('salary', '500', 'Payroll Direct Deposit')])
+    k = b.account_key(a)
+    b.merge(s, data(a), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    h = {'Authorization': 'Bearer synthetic'}
+    base = {'entryId': 'cycle1', 'bank': 'Synthetic CU', 'opened': '2026-10-01'}
+    endpoint = '/api/bonus-tracker/simplefin/evidence-review'
+    selection = '/api/bonus-tracker/simplefin/selection'
+    body = {'account': k, 'transaction': b.public_ref(k, 'salary'),
+            **base, 'decision': 'reviewed', 'requirementId': 'dd_main'}
+
+    original = c.put(endpoint, headers=h, json=body)
+    assert original.status_code == 200
+    assert original.json()['evidenceReviews'][k][body['transaction']]['requirementId'] == 'dd_main'
+
+    # Assign a previously unknown product without discarding reviewed status
+    # or triggering another provider synchronization.
+    changed = c.put(selection, headers=h,
+                    json={'mappings': {k: {**base, 'productId': 'checking'}}})
+    assert changed.status_code == 200
+    receipt = changed.json()['evidenceReviews'][k][body['transaction']]
+    assert receipt['status'] == 'reviewed'
+    assert receipt['requirementId'] is None
+    assert body['transaction'] in changed.json()['transactions'][k]
+
+    # The same linked checking account must remain reviewable.
+    reviewed_again = c.put(endpoint, headers=h, json=body)
+    assert reviewed_again.status_code == 200, reviewed_again.text
+    assert reviewed_again.json()['evidenceReviews'][k][body['transaction']]['requirementId'] == 'dd_main'
+
+    # Saving an unchanged product must not erase its reviewed requirement.
+    unchanged = c.put(selection, headers=h,
+                      json={'mappings': {k: {**base, 'productId': 'checking'}}})
+    assert unchanged.status_code == 200
+    assert unchanged.json()['evidenceReviews'][k][body['transaction']]['requirementId'] == 'dd_main'
+
+    # Moving to companion savings preserves review status, but clears the
+    # checking-specific candidate requirement association.
+    moved = c.put(selection, headers=h,
+                  json={'mappings': {k: {**base, 'productId': 'share'}}})
+    assert moved.status_code == 200
+    receipt = moved.json()['evidenceReviews'][k][body['transaction']]
+    assert receipt['status'] == 'reviewed'
+    assert receipt['requirementId'] is None
+
+    # Changed bonus cycle is not eligible for any previous review receipt.
+    remapped = c.put(selection, headers=h,
+                     json={'mappings': {k: {**base, 'entryId': 'other-cycle', 'productId': 'checking'}}})
+    assert remapped.status_code == 200
+    assert not remapped.json().get('evidenceReviews')
+    assert c.put(endpoint, headers=h, json=body).status_code == 400
