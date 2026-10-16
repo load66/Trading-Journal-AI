@@ -365,3 +365,73 @@ def test_high_confidence_internal_transfer_and_recurring_detection(setup):
     assert public['transactions'][lkey][b.public_ref(lkey,'out')]['confidence'] == 'high'
     assert 'matched_internal_transfer' in public['transactions'][rkey][b.public_ref(rkey,'in')]['signals']
     assert public['transactions'][skey][b.public_ref(skey,'m1')]['category'] == 'subscription'
+
+
+def test_ambiguous_same_amount_transfer_remains_unconfirmed(setup):
+    # One receiving credit cannot be counted as evidence for multiple outgoing transfers.
+    left = account('one', 'left', [txn('out1', '-100', 'Transfer payment')])
+    right = account('two', 'right', [txn('out2', '-100', 'Transfer payment')])
+    receiving = account('three', 'receive', [txn('in', '100', 'Transfer payment')])
+    s = b.empty_state(); s['accounts'] = b.normalize_accounts(data(left, right, receiving))
+    s['monitoredAccounts'] = [a['key'] for a in s['accounts']]
+    b.merge(s, data(left, right, receiving), NOW)
+    public = b.public_state(s)
+    for account_row, txn_id in [(left, 'out1'), (right, 'out2'), (receiving, 'in')]:
+        key = b.account_key(account_row)
+        row = public['transactions'][key][b.public_ref(key, txn_id)]
+        assert row['confidence'] != 'high'
+        assert 'matched_internal_transfer' not in row['signals']
+
+
+def test_internal_transfer_matches_are_unique_and_respect_dates(setup):
+    left = account('one', 'left', [
+        txn('out1', '-125', 'Transfer to own savings'),
+        {**txn('out2', '-125', 'Transfer to own savings'), 'posted': NOW - 14 * b.DAY},
+    ])
+    right = account('two', 'right', [
+        txn('in1', '125', 'Transfer from own checking'),
+        {**txn('in2', '125', 'Transfer from own checking'), 'posted': NOW - 14 * b.DAY},
+    ])
+    s = b.empty_state(); s['accounts'] = b.normalize_accounts(data(left, right))
+    s['monitoredAccounts'] = [a['key'] for a in s['accounts']]
+    b.merge(s, data(left, right), NOW)
+    public = b.public_state(s)
+    for source, ident in [(left, 'out1'), (left, 'out2'), (right, 'in1'), (right, 'in2')]:
+        key = b.account_key(source)
+        row = public['transactions'][key][b.public_ref(key, ident)]
+        assert row['category'] == 'transfer' and row['confidence'] == 'high'
+        assert row['signals'].count('matched_internal_transfer') == 1
+
+
+def test_automatic_transfer_never_overrides_user_review_or_pending(setup):
+    debit = account('one', 'left', [txn('out', '-200', 'Transfer payment')])
+    credit = account('two', 'right', [txn('in', '200', 'Transfer payment')])
+    s = b.empty_state(); s['accounts'] = b.normalize_accounts(data(debit, credit))
+    s['monitoredAccounts'] = [a['key'] for a in s['accounts']]
+    b.merge(s, data(debit, credit), NOW)
+    left, right = b.account_key(debit), b.account_key(credit)
+    s['transactionReviews'] = {left: {'out': {'category': 'fees'}}}
+    public = b.public_state(s)
+    saved = public['transactions'][left][b.public_ref(left, 'out')]
+    candidate = public['transactions'][right][b.public_ref(right, 'in')]
+    assert saved['category'] == 'fees' and saved['categorySource'] == 'user'
+    assert 'matched_internal_transfer' not in saved['signals']
+    assert 'matched_internal_transfer' not in candidate['signals']
+    s['transactionReviews'] = {}
+    s['transactions'][right]['in']['pending'] = True
+    public = b.public_state(s)
+    assert 'matched_internal_transfer' not in public['transactions'][left][b.public_ref(left, 'out')]['signals']
+
+
+def test_generic_payment_and_bonus_are_not_internal_transfer_evidence(setup):
+    outgoing = account('one', 'left', [txn('out', '-300', 'Transfer payment')])
+    payroll = account('two', 'right', [txn('income', '300', 'Employer Payroll Payment')])
+    s = b.empty_state(); s['accounts'] = b.normalize_accounts(data(outgoing, payroll))
+    s['monitoredAccounts'] = [a['key'] for a in s['accounts']]
+    b.merge(s, data(outgoing, payroll), NOW)
+    public = b.public_state(s)
+    lk, rk = b.account_key(outgoing), b.account_key(payroll)
+    assert 'matched_internal_transfer' not in public['transactions'][lk][b.public_ref(lk, 'out')]['signals']
+    row = public['transactions'][rk][b.public_ref(rk, 'income')]
+    assert row['category'] == 'income'
+    assert 'matched_internal_transfer' not in row['signals']
