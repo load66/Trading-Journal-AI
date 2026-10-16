@@ -14,7 +14,7 @@ import uuid
 
 import httpx
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from bonus_backups import owner, store
 from bonus_simplefin import cipher
@@ -34,6 +34,7 @@ def _private(response: Response):
 def _ready():
     return (os.getenv("PLAID_TRIAL_ENABLED") == "true"
             and os.getenv("PLAID_TRIAL_BASELINE_CONFIRMED") == "true"
+            and os.getenv("PLAID_TRIAL_PIPELINE_READY") == "true"
             and bool(os.getenv("PLAID_CLIENT_ID")) and bool(os.getenv("PLAID_SECRET")))
 
 
@@ -93,7 +94,7 @@ def _write(doc, etag):
 
 def _ledger():
     if not _ready():
-        raise HTTPException(503, "Plaid Trial is not configured. Use SimpleFIN or manual entry.")
+        raise HTTPException(503, "Plaid Trial is not activated. Use SimpleFIN or manual entry until data monitoring is ready.")
     doc, tag = _read()
     if doc is None:
         doc = {"version": 1, "used": _baseline(), "holds": {}, "items": {}}
@@ -155,7 +156,7 @@ def _display(doc, uid):
             "warning": "Each new Plaid login permanently consumes one of 10 Trial slots. Try SimpleFIN first."}
 
 
-@router.get("", dependencies=[__import__("fastapi").Depends(_private)])
+@router.get("", dependencies=[Depends(_private)])
 def status(request: Request):
     uid = owner(request)
     if not _ready():
@@ -173,7 +174,7 @@ class Start(BaseModel):
     allowDuplicate: bool = False
 
 
-@router.post("/link-token", dependencies=[__import__("fastapi").Depends(_private)])
+@router.post("/link-token", dependencies=[Depends(_private)])
 def link_token(body: Start, request: Request):
     uid = owner(request)
     if not body.triedSimplefin or not body.understandsLifetimeSlot:
@@ -216,7 +217,7 @@ class Exchange(BaseModel):
     publicToken: str = Field(min_length=8, max_length=1000, repr=False)
 
 
-@router.post("/exchange", dependencies=[__import__("fastapi").Depends(_private)])
+@router.post("/exchange", dependencies=[Depends(_private)])
 def exchange(body: Exchange, request: Request):
     uid = owner(request)
     doc, tag = _ledger()
