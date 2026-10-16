@@ -529,6 +529,11 @@ def test_evidence_reviews_dont_leak_across_bonus_cycles_or_unlink(setup, monkeyp
     assert remapped.status_code == 200
     assert not remapped.json().get('evidenceReviews')
     assert c.put(url, headers=h, json=body).status_code == 400
+    # Re-linking a new cycle intentionally clears old evidence until the next sync.
+    assert c.put(url, headers=h, json={**body, **next_cycle}).status_code == 400
+    next_state, tag = b.read_state('owner')
+    b.merge(next_state, data(a), NOW)
+    b.write_state('owner', next_state, tag)
     assert c.put(url, headers=h, json={**body, **next_cycle}).status_code == 200
     unmapped = c.put('/api/bonus-tracker/simplefin/selection', headers=h,
                      json={'mappings': {}})
