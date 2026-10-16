@@ -316,9 +316,14 @@ def monitor(body: Monitored, request: Request):
             or any(len(k) != 64 or any(c not in "0123456789abcdef" for c in k)
                    for k in requested)):
         raise HTTPException(400, "Select only your discovered Plaid accounts.")
+    new_accounts = requested - set(doc.get("monitored", []))
     doc["monitored"] = list(body.accounts)
     doc["nextSyncAt"] = 0
     for item_id, state in doc["items"].items():
+        # An account added to monitoring must not inherit an Item cursor that
+        # skipped its older transactions while that account was unmonitored.
+        if any(a.get("key") in new_accounts for a in state.get("accounts", [])):
+            state["cursor"] = ""
         state["transactions"] = {k: v for k, v in state.get("transactions", {}).items()
                                  if _account_key(item_id, v.get("account", "")) in requested}
     _write(uid, doc, etag)
