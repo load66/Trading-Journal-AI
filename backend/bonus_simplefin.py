@@ -735,6 +735,7 @@ def discover(request: Request):
                 fresh.append(a)
         s['accounts'] = fresh
         s['monitoredAccounts'] = sorted({a['key'] for a in fresh})
+        s.pop('error', None)
         record_balances(s, [a for a in fresh if a['key'] in current], now)
         if fresh and now >= s.get('nextSyncAt', 0):
             s['lastAttempt'], s['nextSyncAt'] = now, now + DAY
@@ -747,8 +748,7 @@ def discover(request: Request):
                 s['status'] = 'attention'
         s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
                          [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        s['status'] = 'attention' if s['warnings'] or s.get('missingAccounts') else 'connected'
-        s.pop('error', None)
+        s['status'] = 'attention' if s.get('error') or s['warnings'] or s.get('missingAccounts') else 'connected'
     except HTTPException as e:
         s['error'] = e.detail
         s['status'] = 'attention'
