@@ -315,8 +315,8 @@ def enrich_transactions(state, result):
     # Generic "payment" wording can describe payroll, purchases and refunds, so it must
     # not establish a transfer by itself. User-confirmed categories are never overridden.
     transfer_wording = re.compile(
-        r'\\b(?:transfer|xfer)\\b|\\b(?:credit card|card) payment\\b|'
-        r'\\bpayment (?:thank you|to|from)\\b', re.I)
+        r'\b(?:transfer|xfer)\b|\b(?:credit card|card) payment\b|'
+        r'\bpayment (?:thank you|to|from)\b', re.I)
     eligible = []
     for account, raw_id, row in records:
         if (row.get('pending') or row.get('categorySource') == 'user'
