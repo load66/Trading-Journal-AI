@@ -67,13 +67,13 @@ def verify(client_id, secret):
                 cursor, transaction_ids = "", set()
                 complete = False
                 for attempt in range(8):
-                    result = call("/transactions/sync", access_token=access, cursor=cursor, count=100)
+                    result = call("/transactions/sync", access_token=access, cursor=cursor, count=500)
                     if (not isinstance(result.get("next_cursor"), str)
                             or type(result.get("has_more")) is not bool):
                         raise CheckFailed()
                     for field in ("added", "modified", "removed"):
                         rows = result.get(field)
-                        if not isinstance(rows, list) or len(rows) > 100:
+                        if not isinstance(rows, list) or len(rows) > 500:
                             raise CheckFailed()
                         for row in rows:
                             if not isinstance(row, dict) or not isinstance(row.get("transaction_id"), str):
