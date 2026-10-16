@@ -526,7 +526,9 @@ def sync(uid):
     now = int(time.time())
     if now < s.get('nextSyncAt', 0):
         return finish(uid, s, tag)
-    watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
+    # Linking authorizes read-only activity for every returned account. No separate toggle.
+    s['monitoredAccounts'] = sorted({a['key'] for a in s['accounts']})
+    watched = set(s['mappings']) | set(s['monitoredAccounts'])
     selected = [a for a in s['accounts'] if a['key'] in watched]
     if not selected:
         return finish(uid, s, tag)
@@ -662,7 +664,19 @@ def connect(body: ConnectBody, request: Request):
         s['nextDiscoveryAt'] = int(time.time()) + DAY
         data = get_data(access, balances=True)
         s['accounts'] = normalize_accounts(data)
-        record_balances(s, s['accounts'], int(time.time()))
+        s['monitoredAccounts'] = sorted(a['key'] for a in s['accounts'])
+        observed = int(time.time())
+        record_balances(s, s['accounts'], observed)
+        # Reserve the daily provider budget before automatic first import.
+        if s['accounts']:
+            s['lastAttempt'], s['nextSyncAt'] = observed, observed + DAY
+            tag = write_state(uid, s, tag)
+            try:
+                s = merge(copy.deepcopy(s), get_data(access, s['accounts']), observed)
+                s.pop('error', None)
+            except HTTPException as activity_error:
+                s['error'] = activity_error.detail
+                s['status'] = 'attention'
         s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
                          [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
         if s['warnings']:
@@ -720,7 +734,17 @@ def discover(request: Request):
             if a['key'] in watched and a['key'] not in current:
                 fresh.append(a)
         s['accounts'] = fresh
+        s['monitoredAccounts'] = sorted({a['key'] for a in fresh})
         record_balances(s, [a for a in fresh if a['key'] in current], now)
+        if fresh and now >= s.get('nextSyncAt', 0):
+            s['lastAttempt'], s['nextSyncAt'] = now, now + DAY
+            tag = write_state(uid, s, tag)
+            try:
+                s = merge(copy.deepcopy(s), get_data(s['access'], fresh), now)
+                s.pop('error', None)
+            except HTTPException as activity_error:
+                s['error'] = activity_error.detail
+                s['status'] = 'attention'
         s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
                          [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
         s['status'] = 'attention' if s['warnings'] or s.get('missingAccounts') else 'connected'
@@ -901,7 +925,7 @@ async def scheduled_simplefin_loop():
             if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
                 uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
                 s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and (s.get('mappings') or s.get('monitoredAccounts')) and time.time() >= s.get('nextSyncAt', 0):
+                if s.get('access') and s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
                     await run_in_threadpool(sync, uid)
         except Exception:
             # No financial data, credentials or provider URLs in logs; per-owner status shows errors.
