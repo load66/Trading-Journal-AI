@@ -563,7 +563,6 @@ def test_delayed_initial_history_retries_on_its_own_due_date(monkeypatch):
     adapter.sync_owner("alice")
     assert len(calls) == calls_before, "A fresh backfill must not be fetched twice"
 
-
 def test_plaid_account_removal_preserves_other_accounts_and_item(monkeypatch):
     from fastapi import FastAPI, HTTPException
     from fastapi.testclient import TestClient
