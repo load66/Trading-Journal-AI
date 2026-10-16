@@ -127,7 +127,7 @@ def _capacity(doc, *, session=None):
 
 
 def _provider(endpoint, body):
-    if endpoint not in ("/link/token/create", "/item/public_token/exchange"):
+    if endpoint not in ("/link/token/create", "/item/public_token/exchange", "/item/remove"):
         raise HTTPException(500, "Unsupported Plaid operation.")
     if not _ready():
         raise HTTPException(503, "Plaid Trial is not configured.")
@@ -137,6 +137,10 @@ def _provider(endpoint, body):
             json={**body, "client_id": os.environ["PLAID_CLIENT_ID"],
                   "secret": os.environ["PLAID_SECRET"]},
             timeout=22, follow_redirects=False)
+        if endpoint == "/item/remove" and response.status_code in (400, 404):
+            # A prior completed revocation may be retried after a storage conflict.
+            if response.json().get("error_code") == "ITEM_NOT_FOUND":
+                return {"removed": True}
         if response.status_code != 200:
             # Never print provider payloads, tokens, or institution information.
             raise HTTPException(502, "Plaid rejected the request. Check Trial eligibility and link status.")
@@ -150,8 +154,10 @@ def _provider(endpoint, body):
 def _display(doc, uid):
     active = [
         {"institution": item.get("institution", "Financial institution"),
-         "connectedAt": item.get("created", 0)}
-        for item in doc["items"].values() if item.get("owner") == uid
+         "connectedAt": item.get("created", 0),
+         "handle": hashlib.sha256((uid + "\0" + item_id).encode()).hexdigest()}
+        for item_id, item in doc["items"].items()
+        if item.get("owner") == uid and not item.get("disconnectedAt")
     ]
     return {"provider": "plaid", "priority": "fallback", "plan": "trial",
             "limit": CAP, "used": doc["used"], "remaining": max(0, CAP - doc["used"] - len(doc["holds"])),
@@ -260,3 +266,47 @@ def exchange(body: Exchange, request: Request):
             if exc.status_code != 409:
                 raise
     raise HTTPException(503, "Plaid quota write requires reconciliation. No automatic retry is allowed.")
+
+
+@router.delete("/items/{handle}", dependencies=[Depends(_private)])
+def disconnect_item(handle: str, request: Request):
+    """Disconnect one Plaid institution; a used Trial slot is NEVER returned."""
+    uid = owner(request)
+    if not re.fullmatch(r"[0-9a-f]{64}", handle):
+        raise HTTPException(404, "Connected bank not found.")
+    ledger, tag = _ledger()
+    matches = [(item_id, item) for item_id, item in ledger["items"].items()
+               if item.get("owner") == uid and not item.get("disconnectedAt")
+               and hashlib.sha256((uid + "\0" + item_id).encode()).hexdigest() == handle]
+    if len(matches) != 1:
+        raise HTTPException(404, "Connected bank not found.")
+    item_id, item = matches[0]
+    # No revocation may race an in-progress transaction import.
+    from bonus_plaid_accounts import _read as read_activity, _write as write_activity
+    activity, activity_tag = read_activity(uid)
+    if activity.get("leaseUntil", 0) > time.time():
+        raise HTTPException(409, "The current bank sync must finish before disconnecting.")
+    _provider("/item/remove", {"access_token": item["access"]})
+    # Remove saved account activity before hiding the Item in the global ledger.
+    cached = activity.get("items", {}).pop(item_id, {})
+    keys = {account["key"] for account in cached.get("accounts", [])}
+    activity["monitored"] = [k for k in activity.get("monitored", []) if k not in keys]
+    for field in ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews"):
+        activity[field] = {k: v for k, v in activity.get(field, {}).items() if k not in keys}
+    activity.pop("error", None)
+    write_activity(uid, activity, activity_tag)
+    # Keep the immutable lifetime count and a credential-free tombstone.
+    for _ in range(5):
+        current, current_tag = _read()
+        active = current["items"].get(item_id)
+        if not active or active.get("owner") != uid:
+            raise HTTPException(409, "Bank status changed. Refresh connections.")
+        current["items"][item_id] = {"owner": uid, "institution": item["institution"],
+            "created": item.get("created", 0), "disconnectedAt": int(time.time())}
+        try:
+            _write(current, current_tag)
+            return {"disconnected": True, **_display(current, uid)}
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+    raise HTTPException(503, "Bank revoked but local status needs reconciliation.")
