@@ -573,8 +573,16 @@ def sync_owner(uid):
             # Respect a newly linked Item's own first-sync budget. A daily
             # owner refresh must not issue a second request for that Item.
             if discovered and now >= old.get("nextTransactionSyncAt", 0):
-                changes = _sync_item(item["access"], old.get("cursor"))
-                exposed = _merge(old, item_id, item["institution"], raw, changes, now)
+                try:
+                    changes = _sync_item(item["access"], old.get("cursor"))
+                    exposed = _merge(old, item_id, item["institution"], raw, changes, now)
+                except HTTPException as exc:
+                    # A temporarily unavailable Item must not roll back
+                    # successfully synced unrelated banks or lose its cursor.
+                    exposed["lastTransactionAttemptAt"] = now
+                    exposed["nextTransactionSyncAt"] = now + DAY
+                    exposed["transactionSyncStatus"] = "needs_attention"
+                    exposed["transactionSyncError"] = exc.detail
             # Plaid returns an Item-wide delta, even when only one account is
             # selected. Discard unselected activity before encrypted persistence.
             exposed["transactions"] = {
@@ -612,7 +620,17 @@ def scheduled_sync_once():
     for uid in owners:
         try:
             doc, _ = _read(uid)
-            if time.time() >= doc.get("nextSyncAt", 0):
+            now = time.time()
+            owned = {item_id for item_id, item in ledger["items"].items()
+                     if item.get("owner") == uid and not item.get("disconnectedAt")}
+            discover_due = any(item_id not in doc.get("items", {}) for item_id in owned) and (
+                now >= doc.get("nextNewItemDiscoveryAt", 0))
+            initial_due = any(
+                item_id in owned and state.get("accounts") and
+                not state.get("lastTransactionAttemptAt") and not state.get("cursor") and
+                now >= state.get("nextTransactionSyncAt", 0)
+                for item_id, state in doc.get("items", {}).items())
+            if now >= doc.get("nextSyncAt", 0) or discover_due or initial_due:
                 sync_owner(uid)
         except Exception:
             # Private per-owner status reports failures; never log bank data.
