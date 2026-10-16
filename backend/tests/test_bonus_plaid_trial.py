@@ -38,6 +38,7 @@ def setup(monkeypatch):
     monkeypatch.setattr(plaid, "store", lambda: memory)
     monkeypatch.setenv("SIMPLEFIN_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("PLAID_TRIAL_ENABLED", "true")
+    monkeypatch.setenv("PLAID_TRIAL_PLAN_VERIFIED", "true")
     monkeypatch.setenv("PLAID_TRIAL_BASELINE_CONFIRMED", "true")
     monkeypatch.setenv("PLAID_TRIAL_PIPELINE_READY", "true")
     monkeypatch.setenv("PLAID_TRIAL_PRIOR_ITEMS", "0")
