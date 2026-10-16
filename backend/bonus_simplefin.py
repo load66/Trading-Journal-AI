@@ -258,6 +258,13 @@ def evidence_fingerprint(row):
     return hashlib.sha256(packed.encode()).hexdigest()
 
 
+def cycle_identity(mapping):
+    """Identify the exact bonus cycle independent of optional product metadata."""
+    if not isinstance(mapping, dict):
+        return None
+    return {field: mapping.get(field) for field in ('entryId', 'bank', 'opened')}
+
+
 def public_evidence_reviews(s):
     """Return only unchanged, currently linked review receipts using opaque identifiers."""
     result = {}
@@ -268,7 +275,7 @@ def public_evidence_reviews(s):
         for raw_id, review in records.items():
             source = s.get('transactions', {}).get(account, {}).get(raw_id)
             if (not source or not isinstance(review, dict)
-                    or review.get('cycle') != mapping
+                    or review.get('cycle') != cycle_identity(mapping)
                     or review.get('fingerprint') != evidence_fingerprint(source)
                     or review.get('status') not in ('reviewed', 'dismissed')):
                 continue
@@ -743,9 +750,25 @@ def select(body: SelectionBody, request: Request):
                          if k in s.get('monitoredAccounts', []) or (
                              k in mappings and same_cycle(previous_mappings.get(k), mappings[k]))}
     s['mappings'] = mappings
-    s['evidenceReviews'] = {k: v for k, v in s.get('evidenceReviews', {}).items()
-                            if k in mappings and previous_mappings.get(k) == mappings[k]
-                            and isinstance(v, dict)}
+    # Product assignments can change while the bank-bonus cycle remains the
+    # same. Preserve reviewed/dismissed decisions, but never carry a reviewed
+    # deposit's requirement association onto a different banking product.
+    previous_reviews = s.get('evidenceReviews', {})
+    saved_reviews = {}
+    for account, records in previous_reviews.items():
+        if (account not in mappings
+                or not same_cycle(previous_mappings.get(account), mappings[account])
+                or not isinstance(records, dict)):
+            continue
+        restored = copy.deepcopy(records)
+        before_product = previous_mappings[account].get('productId')
+        after_product = mappings[account].get('productId')
+        if before_product != after_product:
+            for review in restored.values():
+                if isinstance(review, dict):
+                    review['requirementId'] = None
+        saved_reviews[account] = restored
+    s['evidenceReviews'] = saved_reviews
     return finish(uid, s, tag)
 
 
@@ -814,7 +837,7 @@ def evidence_review(body: EvidenceReviewBody, request: Request):
     cycle = {'entryId': body.entryId, 'bank': body.bank, 'opened': body.opened}
     rows = s.get('transactions', {}).get(body.account, {})
     matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
-    if (not s.get('access') or mapping != cycle or len(matches) != 1):
+    if (not s.get('access') or cycle_identity(mapping) != cycle or len(matches) != 1):
         finish(uid, s, tag)
         raise HTTPException(400, 'The account, transaction or bonus cycle no longer matches.')
     raw = matches[0]
