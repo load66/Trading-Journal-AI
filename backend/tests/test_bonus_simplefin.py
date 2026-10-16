@@ -559,3 +559,49 @@ def test_evidence_inbox_only_accepts_posted_supported_transactions(setup, monkey
                          headers={'Authorization': 'Bearer synthetic'},
                          json={**base, 'transaction': b.public_ref(k, raw)})
         assert response.status_code == 400, (raw, response.text)
+
+
+def test_optional_bonus_product_link_preserves_same_cycle_transactions(setup, monkeypatch):
+    s = seed()
+    a = account(transactions=[txn('pay', '500', 'Payroll Direct Deposit')])
+    key = b.account_key(a)
+    b.merge(s, data(a), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    h = {'Authorization': 'Bearer synthetic'}
+    original = {'entryId': 'cycle1', 'bank': 'Synthetic CU', 'opened': '2026-10-01'}
+    path = '/api/bonus-tracker/simplefin/selection'
+    changed = c.put(path, headers=h, json={'mappings': {key: {**original, 'productId': 'checking'}}})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()['mappings'][key]['productId'] == 'checking'
+    assert b.public_ref(key, 'pay') in changed.json()['transactions'][key]
+    # Changes to product assignment do not delete transaction evidence.
+    changed_again = c.put(path, headers=h, json={'mappings': {key: {**original, 'productId': 'share'}}})
+    assert changed_again.status_code == 200
+    assert b.public_ref(key, 'pay') in changed_again.json()['transactions'][key]
+    # Preserve original legacy mapping shape for existing users.
+    legacy = c.put(path, headers=h, json={'mappings': {key: original}})
+    assert legacy.status_code == 200
+    assert legacy.json()['mappings'][key] == original
+    assert b.public_ref(key, 'pay') in legacy.json()['transactions'][key]
+    # A change of bonus cycle still isolates its saved evidence.
+    new_cycle = c.put(path, headers=h, json={'mappings': {key: {**original, 'opened': '2026-10-10'}}})
+    assert new_cycle.status_code == 200
+    assert not new_cycle.json().get('transactions', {}).get(key)
+
+
+def test_product_link_input_validation_and_scope(setup, monkeypatch):
+    s = seed()
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    h = {'Authorization': 'Bearer synthetic'}
+    k = b.account_key(account())
+    original = {'entryId': 'cycle1', 'bank': 'Synthetic CU', 'opened': '2026-10-01'}
+    path = '/api/bonus-tracker/simplefin/selection'
+    for invalid in ('Checking', 'checking savings', 'a'*41, '../checking', ''):
+        response = c.put(path, headers=h, json={'mappings': {k: {**original, 'productId': invalid}}})
+        assert response.status_code == 422
+    unknown = c.put(path, headers=h,
+                    json={'mappings': {'f'*64: {**original, 'productId': 'checking'}}})
+    assert unknown.status_code == 400
+    assert c.put(path, json={'mappings': {k: {**original, 'productId': 'checking'}}}).status_code == 401

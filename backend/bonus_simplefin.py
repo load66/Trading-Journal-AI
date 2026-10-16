@@ -544,6 +544,8 @@ class Mapping(BaseModel):
     entryId: str = Field(min_length=1, max_length=120)
     bank: str = Field(min_length=1, max_length=120)
     opened: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    # User-selected structured promotion product; never guessed from provider names.
+    productId: str | None = Field(default=None, pattern=r'^[a-z0-9_-]{1,40}$')
 
 
     @field_validator('opened')
@@ -729,11 +731,17 @@ def select(body: SelectionBody, request: Request):
     if not s.get('access') or not set(body.mappings).issubset(allowed):
         finish(uid, s, tag)
         raise HTTPException(400, 'Choose accounts from the current connection.')
-    mappings = {k: v.model_dump() for k, v in body.mappings.items()}
-    # Multiple accounts (checking/savings) can belong to one cycle. One account cannot belong to two.
-    s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in s.get('monitoredAccounts', []) or (k in mappings and s['mappings'].get(k) == mappings[k])}
+    mappings = {k: v.model_dump(exclude_none=True) for k, v in body.mappings.items()}
+    # Product assignments are optional metadata; correcting them must not erase
+    # already observed posted transactions or consume an extra provider sync.
     previous_mappings = s['mappings']
+    def same_cycle(before, after):
+        return isinstance(before, dict) and isinstance(after, dict) and all(
+            before.get(field) == after.get(field)
+            for field in ('entryId', 'bank', 'opened'))
+    s['transactions'] = {k: v for k, v in s['transactions'].items()
+                         if k in s.get('monitoredAccounts', []) or (
+                             k in mappings and same_cycle(previous_mappings.get(k), mappings[k]))}
     s['mappings'] = mappings
     s['evidenceReviews'] = {k: v for k, v in s.get('evidenceReviews', {}).items()
                             if k in mappings and previous_mappings.get(k) == mappings[k]
