@@ -176,23 +176,30 @@ def test_new_bank_discovers_accounts_without_repeating_daily_transaction_sync(mo
     calls = []
     def fetch(endpoint, token, **kwargs):
         calls.append((endpoint, token))
-        assert endpoint == "/accounts/get" and token == "private-new"
-        return {"accounts": [{**account(), "account_id": "new-checking",
-                              "name": "One Pay checking"}]}
+        assert token == "private-new", "Existing Items must not be re-synced"
+        if endpoint == "/accounts/get":
+            return {"accounts": [{**account(), "account_id": "new-checking",
+                                  "name": "One Pay checking"}]}
+        assert endpoint == "/transactions/sync" and kwargs.get("cursor") == ""
+        return {"added": [{**fixture(ident="onepay-posted"), "account_id": "new-checking"}],
+                "modified": [], "removed": [], "next_cursor": "new-cursor", "has_more": False}
     monkeypatch.setattr(adapter, "_provider", fetch)
 
     response = adapter.sync_owner("alice")
     assert len(response["accounts"]) == 2
     assert any(a["bank"] == "One Pay" for a in response["accounts"])
-    assert calls == [("/accounts/get", "private-new")]
-    assert response["lastSuccess"] == NOW - 120
+    assert calls == [("/accounts/get", "private-new"), ("/transactions/sync", "private-new")]
+    assert response["lastSuccess"] == NOW
     assert response["nextSyncAt"] == NOW + 7200
     assert storage["items"]["previous-item"]["accounts"] == prior["accounts"]
-    assert not storage["items"]["new-item"]["transactions"]
+    assert len(storage["items"]["new-item"]["transactions"]) == 1
+    assert storage["items"]["new-item"]["lastTransactionSyncAt"] == NOW
+    assert storage["items"]["new-item"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+    assert response["accounts"][1]["transactionSyncStatus"] == "ready"
     assert adapter._account_key("new-item", "new-checking") in storage["monitored"]
     assert "private-new" not in str(response)
     assert adapter.sync_owner("alice")["accounts"] == response["accounts"]
-    assert calls == [("/accounts/get", "private-new")], "Never repeat a successful discovery"
+    assert calls == [("/accounts/get", "private-new"), ("/transactions/sync", "private-new")], "Never repeat the first transaction sync inside the daily budget"
 
 
 def test_failed_new_item_discovery_preserves_existing_data_and_provider_budget(monkeypatch):
@@ -230,3 +237,95 @@ def test_failed_new_item_discovery_preserves_existing_data_and_provider_budget(m
     assert storage["nextNewItemDiscoveryAt"] == NOW + adapter.DAY
     assert adapter.sync_owner("alice")["accounts"] == response["accounts"]
     assert calls == ["/accounts/get"], "Never retry repeatedly within the daily budget"
+
+
+def test_pending_activity_is_kept_and_replaced_by_posted_with_link():
+    initial = adapter._merge(
+        {}, "onepay-item", "OnePay", {"accounts": [account()]},
+        ({"pending1": {**fixture(amount=24.85, ident="pending1"), "pending": True}},
+         {}, set(), "first-cursor"), NOW)
+    assert initial["transactions"]["pending1"]["pending"] is True
+    assert initial["transactionSyncStatus"] == "pending_only"
+    ledger = {"items": {"onepay-item": {"owner": "alice", "access": "private",
+                                        "institution": "OnePay"}}}
+    key = adapter._account_key("onepay-item", "example")
+    public = adapter._public({"version": 1, "items": {"onepay-item": initial},
+        "monitored": [key], "lastSuccess": NOW}, ledger, "alice")
+    rows = list(public["transactions"][key].values())
+    assert len(rows) == 1 and rows[0]["pending"] is True
+    assert rows[0]["signals"] == [], "Pending activity must never assert a bonus or payroll milestone"
+    assert public["accounts"][0]["transactionSyncStatus"] == "pending_only"
+    assert "private" not in str(public)
+    posted = adapter._merge(initial, "onepay-item", "OnePay", {"accounts": [account()]},
+        ({"posted1": {**fixture(amount=24.85, ident="posted1"), "pending": False,
+                     "pending_transaction_id": "pending1"}}, {}, set(), "next-cursor"), NOW + 10)
+    assert list(posted["transactions"]) == ["posted1"]
+    assert posted["transactionSyncStatus"] == "ready"
+
+
+def test_discovered_bank_gets_initial_sync_during_other_bank_cooldown(monkeypatch):
+    from copy import deepcopy
+    storage = adapter._default()
+    storage["nextSyncAt"] = NOW + 3600
+    storage["nextNewItemDiscoveryAt"] = NOW + adapter.DAY
+    old = adapter._merge({}, "new-item", "OnePay", {"accounts": [account()]}, None, NOW - 70)
+    storage["items"]["new-item"] = old
+    key = adapter._account_key("new-item", "example")
+    storage["monitored"] = [key]
+    quota = {"items": {"new-item": {"owner": "alice", "institution": "OnePay", "access": "token"}}}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (quota, "tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "tag"))
+    def write(uid, doc, tag):
+        storage.clear()
+        storage.update(deepcopy(doc))
+        return "tag"
+    monkeypatch.setattr(adapter, "_write", write)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def provider(endpoint, access, **kwargs):
+        calls.append(endpoint)
+        assert access == "token"
+        if endpoint == "/accounts/get":
+            return {"accounts": [account()]}
+        assert endpoint == "/transactions/sync"
+        return {"added": [], "modified": [], "removed": [],
+                "next_cursor": "initial-cursor", "has_more": False}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    response = adapter.sync_owner("alice")
+    assert calls == ["/transactions/sync", "/accounts/get"] or calls == ["/accounts/get", "/transactions/sync"]
+    assert storage["items"]["new-item"]["cursor"] == "initial-cursor"
+    assert response["accounts"][0]["transactionSyncStatus"] == "awaiting_provider_data"
+    assert response["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.DAY
+    assert storage["nextSyncAt"] == NOW + 3600, "Another bank's owner-wide quota must remain intact"
+    adapter.sync_owner("alice")
+    assert len(calls) == 2, "Refreshing must never duplicate the first Plaid transaction call"
+
+
+def test_initial_provider_error_preserves_discovery_and_suspends_retry(monkeypatch):
+    from copy import deepcopy
+    storage = adapter._default()
+    storage["nextSyncAt"] = NOW + 7200
+    quota = {"items": {"new-item": {"owner": "alice", "institution": "OnePay", "access": "secret"}}}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (quota, "tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "tag"))
+    def write(uid, doc, tag):
+        storage.clear()
+        storage.update(deepcopy(doc))
+        return "tag"
+    monkeypatch.setattr(adapter, "_write", write)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def provider(endpoint, token, **kwargs):
+        calls.append(endpoint)
+        if endpoint == "/accounts/get":
+            return {"accounts": [account()]}
+        raise HTTPException(502, "First transaction history is not ready.")
+    monkeypatch.setattr(adapter, "_provider", provider)
+    result = adapter.sync_owner("alice")
+    assert len(result["accounts"]) == 1
+    assert result["accounts"][0]["transactionSyncStatus"] == "needs_attention"
+    assert result["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.DAY
+    assert "secret" not in str(result)
+    assert calls == ["/accounts/get", "/transactions/sync"]
+    adapter.sync_owner("alice")
+    assert calls == ["/accounts/get", "/transactions/sync"], "Do not retry a failed new-Item sync immediately"
