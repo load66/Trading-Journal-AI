@@ -118,7 +118,7 @@ def client(monkeypatch):
 
 def test_auth_all_endpoints_and_disconnect_tombstone(setup,monkeypatch):
     c=client(monkeypatch);prefix='/api/bonus-tracker/simplefin';h={'Authorization':'Bearer synthetic'}
-    for method,path,payload in [('get','',None),('post','/sync',None),('post','/discover',None),('delete','',None),('post','/connect',{'setup_token':TOKEN}),('put','/selection',{'mappings':{}})]:
+    for method,path,payload in [('get','',None),('post','/sync',None),('post','/discover',None),('delete','',None),('post','/connect',{'setup_token':TOKEN}),('put','/selection',{'mappings':{}}),('put','/monitoring',{'accounts':[]})]:
         assert getattr(c,method)(prefix+path,**({'json':payload} if payload else {})).status_code==401
     b.write_state('owner',seed(),None)
     r=c.delete(prefix,headers=h);assert r.status_code==200 and not r.json()['connected']
@@ -186,3 +186,84 @@ def test_invalid_date_and_unknown_accounts_rejected(setup,monkeypatch):
     for opened,key in [('2026-02-30',b.account_key(account())),('2026-10-01','unknown')]:
         r=c.put('/api/bonus-tracker/simplefin/selection',headers=h,json={'mappings':{key:{'entryId':'other','bank':'Other','opened':opened}}})
         assert r.status_code in (400,422)
+
+
+def test_monitor_unlinked_account_sync_and_opt_out_deletes_history(setup, monkeypatch):
+    s = seed()
+    k = b.account_key(account())
+    s['mappings'] = {}
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    p = '/api/bonus-tracker/simplefin'
+    h = {'Authorization': 'Bearer synthetic'}
+    fetched = []
+    def fake_get_data(access, selected):
+        fetched.append([a['id'] for a in selected])
+        return data(account(transactions=[txn('activity', '-12.50', 'Coffee shop')]))
+    monkeypatch.setattr(b, 'get_data', fake_get_data)
+    assert c.post(p + '/sync', headers=h).json().get('lastSuccess') is None
+    enrolled = c.put(p + '/monitoring', headers=h, json={'accounts': [k]})
+    assert enrolled.status_code == 200
+    assert enrolled.json()['monitoredAccounts'] == [k]
+    synced = c.post(p + '/sync', headers=h).json()
+    assert fetched == [['a']]
+    assert synced['transactions'][k]['activity']['kind'] == 'withdrawal'
+    assert synced['lastSuccess'] == NOW
+    c.post(p + '/sync', headers=h)
+    assert len(fetched) == 1  # Same 24-hour provider budget.
+    opted_out = c.put(p + '/monitoring', headers=h, json={'accounts': []})
+    assert opted_out.status_code == 200
+    assert opted_out.json()['monitoredAccounts'] == []
+    assert k not in opted_out.json()['transactions']
+
+
+def test_monitored_account_survives_bonus_unlink_without_reclassifying(setup, monkeypatch):
+    s = seed()
+    k = b.account_key(account())
+    s['monitoredAccounts'] = [k]
+    b.merge(s, data(account(transactions=[txn()])), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    p = '/api/bonus-tracker/simplefin'
+    h = {'Authorization': 'Bearer synthetic'}
+    result = c.put(p + '/selection', headers=h, json={'mappings': {}})
+    assert result.status_code == 200
+    assert result.json()['mappings'] == {}
+    assert k in result.json()['transactions']
+    assert result.json()['transactions'][k]['t1']['kind'] == 'possible_bonus'
+
+
+def test_monitor_rejects_unknown_duplicate_or_unconnected_accounts(setup, monkeypatch):
+    s = seed()
+    k = b.account_key(account())
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    p = '/api/bonus-tracker/simplefin/monitoring'
+    h = {'Authorization': 'Bearer synthetic'}
+    for keys in [[k, k], ['bad-key'], ['f' * 64]]:
+        result = c.put(p, headers=h, json={'accounts': keys})
+        assert result.status_code in (400, 422)
+    assert b.read_state('owner')[0].get('monitoredAccounts', []) == []
+
+
+def test_public_state_hides_provider_identifiers_and_secret(setup):
+    s = seed()
+    public = b.public_state(s)
+    assert public['accounts'][0]['key'] == b.account_key(account())
+    assert 'id' not in public['accounts'][0]
+    assert 'connection' not in public['accounts'][0]
+    assert public['monitoredAccounts'] == []
+    assert ACCESS not in json.dumps(public)
+    assert public['mappings'] == s['mappings']
+
+
+def test_missing_monitored_account_flags_attention_without_deleting_evidence(setup):
+    s = seed()
+    k = b.account_key(account())
+    s['mappings'] = {}
+    s['monitoredAccounts'] = [k]
+    b.merge(s, data(account(transactions=[txn()])), NOW)
+    b.merge(s, data(), NOW + 1)
+    assert s['status'] == 'attention'
+    assert s['missingAccounts'] == [k]
+    assert k in s['transactions']
