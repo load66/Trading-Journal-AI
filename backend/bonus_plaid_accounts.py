@@ -504,15 +504,11 @@ def sync_owner(uid):
                 old = candidate["items"][item_id]
                 try:
                     delta = _sync_item(item["access"], old.get("cursor"))
+                    # Refresh real bank balances alongside first-time history;
+                    # never forge a new balance timestamp from cached metadata.
+                    raw = _provider("/accounts/get", item["access"])
                     candidate["items"][item_id] = _merge(
-                        old, item_id, item["institution"],
-                        {"accounts": [{
-                            "account_id": a["id"], "name": a["name"],
-                            "type": a.get("accountType"), "subtype": a.get("accountSubtype"),
-                            "balances": {
-                                "current": a.get("balance"), "available": a.get("availableBalance"),
-                                "iso_currency_code": a.get("currency")}
-                        } for a in old["accounts"]]}, delta, now)
+                        old, item_id, item["institution"], raw, delta, now)
                     candidate["lastSuccess"] = now
                 except HTTPException as exc:
                     old["lastTransactionAttemptAt"] = now
