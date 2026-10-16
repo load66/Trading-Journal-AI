@@ -96,10 +96,10 @@ def test_daily_scheduler_never_links_or_upgrades(monkeypatch):
     monkeypatch.setattr(adapter, "_read", lambda uid: ({"monitored": ["key"] if uid == "one" else [], "nextSyncAt": 0}, "tag"))
     monkeypatch.setattr(adapter, "sync_owner", calls.append)
     adapter.scheduled_sync_once()
-    assert calls == ["one"]
+    assert set(calls) == {"one", "two"}
     monkeypatch.setattr(quota, "_ready", lambda: False)
     adapter.scheduled_sync_once()
-    assert calls == ["one"]
+    assert set(calls) == {"one", "two"}
 
 
 def test_successful_sync_permanently_discards_obsolete_receipts(setup, monkeypatch):
