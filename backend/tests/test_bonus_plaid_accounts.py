@@ -529,7 +529,7 @@ def test_delayed_initial_history_retries_on_its_own_due_date(monkeypatch):
     storage["nextSyncAt"] = NOW + 17 * 3600
     original = adapter._merge({}, "onepay-item", "OnePay",
         {"accounts": [account()]},
-        ({}, {}, set(), "first-empty-cursor"), NOW - DAY - 1)
+        ({}, {}, set(), "first-empty-cursor"), NOW - adapter.DAY - 1)
     assert original["transactionSyncStatus"] == "awaiting_provider_data"
     storage["items"]["onepay-item"] = original
     key = adapter._account_key("onepay-item", "example")
