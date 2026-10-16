@@ -250,6 +250,14 @@ def public_ref(account, transaction):
 
 
 
+def same_bonus_cycle(before, after):
+    """Compare authoritative bonus-cycle identity, ignoring optional product metadata."""
+    fields = ('entryId', 'bank', 'opened')
+    return (isinstance(before, dict) and isinstance(after, dict)
+            and all(isinstance(before.get(key), str) and before[key]
+                    and before[key] == after.get(key) for key in fields))
+
+
 def evidence_fingerprint(row):
     """Revision-safe identity: changed posted activity must return to the inbox."""
     packed = json.dumps([row.get(k) for k in (
@@ -268,7 +276,7 @@ def public_evidence_reviews(s):
         for raw_id, review in records.items():
             source = s.get('transactions', {}).get(account, {}).get(raw_id)
             if (not source or not isinstance(review, dict)
-                    or review.get('cycle') != mapping
+                    or not same_bonus_cycle(review.get('cycle'), mapping)
                     or review.get('fingerprint') != evidence_fingerprint(source)
                     or review.get('status') not in ('reviewed', 'dismissed')):
                 continue
@@ -735,17 +743,23 @@ def select(body: SelectionBody, request: Request):
     # Product assignments are optional metadata; correcting them must not erase
     # already observed posted transactions or consume an extra provider sync.
     previous_mappings = s['mappings']
-    def same_cycle(before, after):
-        return isinstance(before, dict) and isinstance(after, dict) and all(
-            before.get(field) == after.get(field)
-            for field in ('entryId', 'bank', 'opened'))
     s['transactions'] = {k: v for k, v in s['transactions'].items()
                          if k in s.get('monitoredAccounts', []) or (
-                             k in mappings and same_cycle(previous_mappings.get(k), mappings[k]))}
+                             k in mappings and same_bonus_cycle(previous_mappings.get(k), mappings[k]))}
+    # A product-only correction is not a new promotion cycle: keep review
+    # decisions and transaction evidence. A requirement association, however,
+    # is product-specific and must be re-verified after a product change.
+    retained = {}
+    for key, reviews in s.get('evidenceReviews', {}).items():
+        if (key not in mappings or not same_bonus_cycle(previous_mappings.get(key), mappings[key])
+                or not isinstance(reviews, dict)):
+            continue
+        product_changed = (previous_mappings[key].get('productId') != mappings[key].get('productId'))
+        retained[key] = {
+            raw: ({**review, 'requirementId': None} if product_changed else review)
+            for raw, review in reviews.items() if isinstance(review, dict)}
     s['mappings'] = mappings
-    s['evidenceReviews'] = {k: v for k, v in s.get('evidenceReviews', {}).items()
-                            if k in mappings and previous_mappings.get(k) == mappings[k]
-                            and isinstance(v, dict)}
+    s['evidenceReviews'] = retained
     return finish(uid, s, tag)
 
 
@@ -814,7 +828,7 @@ def evidence_review(body: EvidenceReviewBody, request: Request):
     cycle = {'entryId': body.entryId, 'bank': body.bank, 'opened': body.opened}
     rows = s.get('transactions', {}).get(body.account, {})
     matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
-    if (not s.get('access') or mapping != cycle or len(matches) != 1):
+    if (not s.get('access') or not same_bonus_cycle(mapping, cycle) or len(matches) != 1):
         finish(uid, s, tag)
         raise HTTPException(400, 'The account, transaction or bonus cycle no longer matches.')
     raw = matches[0]
