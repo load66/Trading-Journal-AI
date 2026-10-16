@@ -105,6 +105,7 @@ def test_authenticated_readonly_routes_and_monitoring(monkeypatch):
     key=adapter._account_key("sample-item","example")
     storage={"version":1,"items":{},"monitored":[],"lastSuccess":None,"nextSyncAt":0}
     item={"sample-item":{"owner":"alice","institution":"Synthetic Bank","access":"fake-access"}}
+    monkeypatch.setattr(quota,"_ready",lambda:True)
     monkeypatch.setattr(quota,"_ledger",lambda:({"items":item}, "tag"))
     monkeypatch.setattr(adapter,"owner",lambda request:
         "alice" if request.headers.get("Authorization")=="Bearer example"
