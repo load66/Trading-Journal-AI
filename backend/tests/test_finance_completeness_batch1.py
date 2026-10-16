@@ -41,3 +41,10 @@ def test_plaid_pending_to_posted_reconciles_by_link():
     old=plaid._merge({},'item','Demo',{'accounts':[acc]},({'a':pend},{},set(),'c1'),NOW)
     new=plaid._merge(old,'item','Demo',{'accounts':[acc]},({'b':booked},{},set(),'c2'),NOW)
     assert set(new['transactions'])=={'b'}
+    account_key=plaid._account_key('item','demo')
+    published=plaid._public({'version':1,'items':{'item':new},'monitored':[account_key],
+       'lastSuccess':NOW},{'items':{'item':{'owner':'owner','access':'synthetic',
+       'institution':'Demo'}}},'owner')
+    row=next(iter(published['transactions'][account_key].values()))
+    assert 'pendingTransactionId' not in row and 'account' not in row
+
