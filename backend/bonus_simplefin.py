@@ -569,6 +569,8 @@ def sync(uid, manual=False):
     watched = set(s['monitoredAccounts'])
     selected = [a for a in s['accounts'] if a['key'] in watched]
     if not selected:
+        # Avoid lease/write churn while every account is explicitly paused.
+        s['nextSyncAt'] = now + SYNC_INTERVAL
         return finish(uid, s, tag)
     s['lastAttempt'] = now
     # Reserve the next attempt before network I/O. Restart/timeout cannot exhaust provider quotas.
