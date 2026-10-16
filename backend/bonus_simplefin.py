@@ -47,7 +47,7 @@ def read_state(uid):
         r = s.client.get_object(Bucket=s.bucket, Key=key(uid))
     except ClientError as e:
         if e.response['Error']['Code'] in ('NoSuchKey', '404'):
-            return {'version': 1, 'accounts': [], 'mappings': {}, 'transactions': {}}, None
+            return {'version': 1, 'accounts': [], 'mappings': {}, 'monitoredAccounts': [], 'transactions': {}}, None
         raise HTTPException(503, 'Private bank-sync storage is temporarily unavailable.') from None
     raw = r['Body'].read(MAX_STATE + 1)
     if len(raw) > MAX_STATE:
@@ -209,13 +209,14 @@ def merge(state, data, now):
     fresh_by_key = {a['key']: a for a in fresh}
     old_by_key = {a['key']: a for a in state['accounts']}
     state['accounts'] = [fresh_by_key.get(k, a) for k, a in old_by_key.items()]
-    state['missingAccounts'] = [k for k in state['mappings'] if k not in fresh_by_key]
+    watched = set(state['mappings']) | set(state.get('monitoredAccounts', []))
+    state['missingAccounts'] = sorted(k for k in watched if k not in fresh_by_key)
     warnings = [clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)]
     warnings += [clean(e) for e in data.get('errors', []) if isinstance(e, str)]
     state['warnings'] = warnings[:50]
     for a in data['accounts']:
         k = account_key(a)
-        if k not in state['mappings']:
+        if k not in watched:
             continue
         rows = copy.deepcopy(state['transactions'].get(k, {}))
         for t in a.get('transactions', []):
@@ -246,7 +247,7 @@ def merge(state, data, now):
 
 def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
-    fields = ('accounts', 'mappings', 'transactions', 'warnings', 'missingAccounts', 'lastSuccess',
+    fields = ('accounts', 'mappings', 'monitoredAccounts', 'transactions', 'warnings', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error')
     out = {k: s[k] for k in fields if k in s}
     out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True)
@@ -280,7 +281,8 @@ def sync(uid):
     now = int(time.time())
     if now < s.get('nextSyncAt', 0):
         return finish(uid, s, tag)
-    selected = [a for a in s['accounts'] if a['key'] in s['mappings']]
+    watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
+    selected = [a for a in s['accounts'] if a['key'] in watched]
     if not selected:
         return finish(uid, s, tag)
     s['lastAttempt'] = now
@@ -317,6 +319,10 @@ class Mapping(BaseModel):
 
 class SelectionBody(BaseModel):
     mappings: dict[str, Mapping] = Field(max_length=50)
+
+
+class MonitoringBody(BaseModel):
+    accounts: list[str] = Field(max_length=50)
 
 
 @router.get('')
@@ -373,11 +379,12 @@ def discover(request: Request):
     try:
         data = get_data(s['access'], balances=True)
         fresh = normalize_accounts(data)
-        s['missingAccounts'] = [k for k in s['mappings'] if k not in {a['key'] for a in fresh}]
+        watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
+        s['missingAccounts'] = sorted(k for k in watched if k not in {a['key'] for a in fresh})
         current = {a['key']: a for a in fresh}
         # Preserve missing matched accounts so an omitted response cannot silently delete a match.
         for a in s['accounts']:
-            if a['key'] in s['mappings'] and a['key'] not in current:
+            if a['key'] in watched and a['key'] not in current:
                 fresh.append(a)
         s['accounts'] = fresh
         s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
@@ -401,8 +408,29 @@ def select(body: SelectionBody, request: Request):
     mappings = {k: v.model_dump() for k, v in body.mappings.items()}
     # Multiple accounts (checking/savings) can belong to one cycle. One account cannot belong to two.
     s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in mappings and s['mappings'].get(k) == mappings[k]}
+                         if k in s.get('monitoredAccounts', []) or (k in mappings and s['mappings'].get(k) == mappings[k])}
     s['mappings'] = mappings
+    return finish(uid, s, tag)
+
+
+@router.put('/monitoring')
+def monitor(body: MonitoringBody, request: Request):
+    """Explicit opt-in for independent, read-only transaction monitoring."""
+    uid = owner(request)
+    s, tag = reserve(uid, 'monitoring')
+    allowed = {a['key'] for a in s['accounts']}
+    chosen = set(body.accounts)
+    if (not s.get('access') or len(chosen) != len(body.accounts)
+            or not chosen.issubset(allowed)
+            or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in chosen)):
+        finish(uid, s, tag)
+        raise HTTPException(400, 'Choose unique accounts from the current connection.')
+    s['monitoredAccounts'] = sorted(chosen)
+    s['transactions'] = {k: v for k, v in s['transactions'].items()
+                         if k in chosen or k in s['mappings']}
+    # First opt-in can begin immediately. Existing provider attempts remain rate-limited.
+    if chosen and not s.get('lastAttempt') and not s.get('nextSyncAt'):
+        s['nextSyncAt'] = 0
     return finish(uid, s, tag)
 
 
@@ -416,7 +444,7 @@ def disconnect(request: Request):
     uid = owner(request)
     s, tag = reserve(uid, 'disconnect')
     # Tombstone instead of delete so concurrent stale writes cannot recreate credentials.
-    return finish(uid, {'version': 1, 'accounts': [], 'mappings': {}, 'transactions': {}, 'status': 'disconnected'}, tag)
+    return finish(uid, {'version': 1, 'accounts': [], 'mappings': {}, 'monitoredAccounts': [], 'transactions': {}, 'status': 'disconnected'}, tag)
 
 
 async def scheduled_simplefin_loop():
@@ -425,7 +453,7 @@ async def scheduled_simplefin_loop():
             if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
                 uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
                 s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and s.get('mappings') and time.time() >= s.get('nextSyncAt', 0):
+                if s.get('access') and (s.get('mappings') or s.get('monitoredAccounts')) and time.time() >= s.get('nextSyncAt', 0):
                     await run_in_threadpool(sync, uid)
         except Exception:
             # No financial data, credentials or provider URLs in logs; per-owner status shows errors.
