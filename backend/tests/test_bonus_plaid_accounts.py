@@ -481,7 +481,7 @@ def test_account_discovery_outage_isolates_item_and_retains_saved_history(monkey
     assert "old-credit" in storage["items"]["outage-item"]["transactions"]
     assert storage["items"]["outage-item"]["transactionSyncStatus"] == "needs_attention"
     assert len(response["transactions"][adapter._account_key("good-item", "good-account")]) == 1
-    assert ("transactions/sync", "bad") not in calls
+    assert ("/transactions/sync", "bad") not in calls
     assert storage["items"]["good-item"]["cursor"] == "good-cursor"
 
 
