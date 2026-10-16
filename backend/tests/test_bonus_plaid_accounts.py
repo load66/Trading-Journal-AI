@@ -442,3 +442,123 @@ def test_one_bank_transaction_failure_does_not_rollback_other_bank(monkeypatch):
     assert len(result["transactions"][adapter._account_key("good-bank", "good-checking")]) == 1
     assert storage["items"]["good-bank"]["cursor"] == "good-cursor"
     assert storage["items"]["old-failing"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+
+
+def test_account_discovery_outage_isolates_item_and_retains_saved_history(monkeypatch):
+    from copy import deepcopy
+    storage = adapter._default()
+    prior = adapter._merge({}, "outage-item", "Disconnected upstream",
+        {"accounts": [{**account(), "account_id": "bad-account"}]},
+        ({"old-credit": {**fixture(ident="old-credit"), "account_id": "bad-account"}},
+         {}, set(), "existing-cursor"), NOW - adapter.DAY)
+    prior["nextTransactionSyncAt"] = 0
+    storage["items"]["outage-item"] = prior
+    ledger = {"items": {
+        "outage-item": {"owner": "alice", "institution": "Disconnected upstream", "access": "bad"},
+        "good-item": {"owner": "alice", "institution": "Good bank", "access": "good"},
+    }}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (ledger, "tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "tag"))
+    def persist(uid, doc, tag):
+        storage.clear()
+        storage.update(deepcopy(doc))
+        return "tag"
+    monkeypatch.setattr(adapter, "_write", persist)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def provider(endpoint, token, **kwargs):
+        calls.append((endpoint, token))
+        if token == "bad" and endpoint == "/accounts/get":
+            raise HTTPException(502, "Temporary accounts outage")
+        if endpoint == "/accounts/get":
+            return {"accounts": [{**account(), "account_id": "good-account"}]}
+        assert token == "good"
+        return {"added": [{**fixture(ident="good-credit"), "account_id": "good-account"}],
+                "modified": [], "removed": [], "next_cursor": "good-cursor", "has_more": False}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    response = adapter.sync_owner("alice")
+    assert storage["items"]["outage-item"]["cursor"] == "existing-cursor"
+    assert "old-credit" in storage["items"]["outage-item"]["transactions"]
+    assert storage["items"]["outage-item"]["transactionSyncStatus"] == "needs_attention"
+    assert len(response["transactions"][adapter._account_key("good-item", "good-account")]) == 1
+    assert ("/transactions/sync", "bad") not in calls
+    assert storage["items"]["good-item"]["cursor"] == "good-cursor"
+
+
+def test_one_initial_discovery_error_does_not_hide_another_new_bank(monkeypatch):
+    from copy import deepcopy
+    storage = adapter._default()
+    storage["nextSyncAt"] = NOW + 3600
+    ledger = {"items": {
+        "failed": {"owner": "alice", "institution": "Bad bank", "access": "bad"},
+        "ready": {"owner": "alice", "institution": "Ready bank", "access": "good"}
+    }}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (ledger, "tag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "tag"))
+    def persist(uid, doc, tag):
+        storage.clear()
+        storage.update(deepcopy(doc))
+        return "tag"
+    monkeypatch.setattr(adapter, "_write", persist)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def provider(endpoint, token, **kwargs):
+        calls.append((endpoint, token))
+        if token == "bad":
+            raise HTTPException(502, "Bank discovery unavailable")
+        if endpoint == "/accounts/get":
+            return {"accounts": [{**account(), "account_id": "good-checking"}]}
+        return {"added": [{**fixture(ident="posted"), "account_id": "good-checking"}],
+                "modified": [], "removed": [], "next_cursor": "good-first", "has_more": False}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    result = adapter.sync_owner("alice")
+    assert len(result["accounts"]) == 1
+    assert result["accounts"][0]["bank"] == "Ready bank"
+    assert len(result["transactions"][adapter._account_key("ready", "good-checking")]) == 1
+    assert "failed" not in storage["items"]
+    assert storage["newItemDiscoveryAttempts"]["failed"] == NOW + adapter.DAY
+    assert "ready" not in storage["newItemDiscoveryAttempts"]
+    assert storage["nextSyncAt"] == NOW + 3600
+    adapter.sync_owner("alice")
+    assert len(calls) == 3, "The failing bank cannot bypass its rate limit"
+
+
+def test_delayed_initial_history_retries_on_its_own_due_date(monkeypatch):
+    from copy import deepcopy
+    storage = adapter._default()
+    storage["nextSyncAt"] = NOW + 17 * 3600
+    original = adapter._merge({}, "onepay-item", "OnePay",
+        {"accounts": [account()]},
+        ({}, {}, set(), "first-empty-cursor"), NOW - adapter.DAY - 1)
+    assert original["transactionSyncStatus"] == "awaiting_provider_data"
+    storage["items"]["onepay-item"] = original
+    key = adapter._account_key("onepay-item", "example")
+    storage["monitored"] = [key]
+    ledger = {"items": {"onepay-item": {
+        "owner": "alice", "institution": "OnePay", "access": "private"}}}
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (ledger, "etag"))
+    monkeypatch.setattr(adapter, "_read", lambda uid: (deepcopy(storage), "etag"))
+    def save(uid, doc, tag):
+        storage.clear()
+        storage.update(deepcopy(doc))
+        return "etag"
+    monkeypatch.setattr(adapter, "_write", save)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    calls = []
+    def provider(endpoint, token, **kw):
+        calls.append((endpoint, kw.get("cursor")))
+        assert token == "private"
+        if endpoint == "/transactions/sync":
+            assert kw["cursor"] == "first-empty-cursor"
+            return {"added": [fixture(ident="backfill-arrived")], "modified": [],
+                    "removed": [], "next_cursor": "after-backfill", "has_more": False}
+        return {"accounts": [account()]}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    response = adapter.sync_owner("alice")
+    assert len(response["transactions"][key]) == 1
+    assert response["accounts"][0]["transactionSyncStatus"] == "ready"
+    assert storage["items"]["onepay-item"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+    assert storage["nextSyncAt"] == NOW + 17 * 3600
+    calls_before = len(calls)
+    adapter.sync_owner("alice")
+    assert len(calls) == calls_before, "A fresh backfill must not be fetched twice"
