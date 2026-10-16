@@ -100,9 +100,16 @@ async def lifespan(app: FastAPI):
     backup_task = asyncio.create_task(scheduled_recovery_loop())
     from bank_availability import scheduled_availability_loop
     availability_task = asyncio.create_task(scheduled_availability_loop())
+    from bonus_simplefin import scheduled_simplefin_loop
+    simplefin_task = asyncio.create_task(scheduled_simplefin_loop())
     try:
         yield
     finally:
+        simplefin_task.cancel()
+        try:
+            await simplefin_task
+        except asyncio.CancelledError:
+            pass
         availability_task.cancel()
         try:
             await availability_task
@@ -167,6 +174,8 @@ from bonus_questions import router as bonus_questions_router
 app.include_router(bonus_questions_router)
 from bonus_backups import router as bonus_backups_router
 app.include_router(bonus_backups_router)
+from bonus_simplefin import router as bonus_simplefin_router
+app.include_router(bonus_simplefin_router)
 from venza_cloud import router as venza_cloud_router
 app.include_router(venza_cloud_router)
 
