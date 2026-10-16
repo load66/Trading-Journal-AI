@@ -48,6 +48,7 @@ def _key(uid):
 
 def _default():
     return {"version": 1, "items": {}, "monitored": [], "lastSuccess": None, "nextSyncAt": 0, "mappings": {},
+            "newItemDiscoveryAttempts": {},
             "evidenceReviews": {}, "accountProfiles": {}, "transactionReviews": {}}
 
 
@@ -243,6 +244,13 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
     for ident in removed:
         transactions.pop(ident, None)
     for ident, row in {**added, **modified}.items():
+        # A posted transaction may replace an earlier pending authorization
+        # under a different ID. Remove only the provider-linked predecessor.
+        prior_pending = row.get("pending_transaction_id") if isinstance(row, dict) else None
+        if isinstance(prior_pending, str) and prior_pending != ident:
+            previous = transactions.get(prior_pending)
+            if isinstance(previous, dict) and previous.get("pending") and previous.get("account") == row.get("account_id"):
+                transactions.pop(prior_pending, None)
         converted = _transaction(row, now)
         existing = transactions.get(ident)
         if existing:
@@ -257,10 +265,19 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
                         converted[k] = existing[k]
         transactions[ident] = converted
     cutoff = now - 90 * DAY
+    # Pending entries remain visible as pending, never in posted-only totals
+    # or automatic bonus evidence. Plaid's removal/replacement delta controls
+    # when a pending authorization disappears.
     out["transactions"] = {k: v for k, v in transactions.items()
-                          if isinstance(v, dict) and v.get("posted", 0) >= cutoff
-                          and not v.get("pending")}
+                          if isinstance(v, dict) and v.get("posted", 0) >= cutoff}
     out["cursor"] = cursor
+    out["lastTransactionAttemptAt"] = now
+    out["lastTransactionSyncAt"] = now
+    out["nextTransactionSyncAt"] = now + DAY
+    out.pop("transactionSyncError", None)
+    out["transactionSyncStatus"] = (
+        "ready" if any(not x.get("pending") for x in out["transactions"].values())
+        else "pending_only" if out["transactions"] else "awaiting_provider_data")
     return out
 
 
@@ -280,7 +297,11 @@ def _view(doc, ledger, uid):
         for account in state.get("accounts", []):
             key = account["key"]
             view["accounts"].append({**{k: v for k, v in account.items() if k != "id"},
-                                     "connectionHandle": connection_handle(uid, item_id)})
+                                     "connectionHandle": connection_handle(uid, item_id),
+                                     "transactionSyncStatus": state.get("transactionSyncStatus", "awaiting_first_sync"),
+                                     "transactionLastSyncAt": state.get("lastTransactionSyncAt"),
+                                     "transactionNextSyncAt": state.get("nextTransactionSyncAt", doc.get("nextSyncAt")),
+                                     "transactionSyncError": state.get("transactionSyncError")})
             if key in permitted:
                 view["transactions"][key] = {
                     raw: {k: v for k, v in row.items() if k not in ("id", "account")}
@@ -439,30 +460,72 @@ def sync_owner(uid):
     if doc.get("leaseUntil", 0) > now:
         raise HTTPException(409, "Plaid synchronization is busy.")
     if now < doc.get("nextSyncAt", 0):
-        # A new Item may have been linked after this owner's previous daily
-        # transaction sync. Discover ONLY its account names/balances. Do not
-        # re-run Transactions or resync older Items within the daily budget.
+        # The owner-wide daily budget protects *existing* Items. A just-linked
+        # Item may still make its FIRST transaction request without re-querying
+        # previously synced banks. This prevents a new OnePay bank showing an
+        # account balance but no activity until an unrelated bank's next window.
         missing = {item_id: item for item_id, item in known.items()
                    if item_id not in doc.get("items", {})}
-        if not missing or now < doc.get("nextNewItemDiscoveryAt", 0):
+        attempts = doc.setdefault("newItemDiscoveryAttempts", {})
+        eligible_missing = {item_id: item for item_id, item in missing.items()
+                            if now >= attempts.get(item_id, 0)}
+        first_sync = {item_id: item for item_id, item in known.items()
+                      if item_id in doc.get("items", {}) and
+                      doc["items"][item_id].get("accounts") and
+                      not doc["items"][item_id].get("lastTransactionAttemptAt") and
+                      not doc["items"][item_id].get("cursor") and
+                      now >= doc["items"][item_id].get("nextTransactionSyncAt", 0)}
+        if not eligible_missing and not first_sync:
             return _public(doc, ledger, uid)
         doc["lease"] = uuid.uuid4().hex
         doc["leaseUntil"] = now + 300
-        doc["nextNewItemDiscoveryAt"] = now + DAY
+        if eligible_missing:
+            doc["nextNewItemDiscoveryAt"] = now + DAY  # legacy visibility
+            for item_id in eligible_missing:
+                attempts[item_id] = now + DAY
         etag = _write(uid, doc, etag)
         candidate = copy.deepcopy(doc)
         try:
-            for item_id, item in missing.items():
+            for item_id, item in eligible_missing.items():
                 raw = _provider("/accounts/get", item["access"])
-                candidate["items"][item_id] = _merge(
-                    {}, item_id, item["institution"], raw, None, now)
+                state = _merge({}, item_id, item["institution"], raw, None, now)
                 candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
-                    {a["key"] for a in candidate["items"][item_id]["accounts"]})
-            candidate["lastAccountDiscovery"] = now
+                    {a["key"] for a in state["accounts"]})
+                if state["accounts"]:
+                    try:
+                        delta = _sync_item(item["access"], "")
+                        state = _merge(state, item_id, item["institution"], raw, delta, now)
+                        candidate["lastSuccess"] = now
+                    except HTTPException as exc:
+                        # Retain successful account discovery and clearly mark
+                        # incomplete first-history coverage, never invent zero.
+                        state["lastTransactionAttemptAt"] = now
+                        state["nextTransactionSyncAt"] = now + DAY
+                        state["transactionSyncStatus"] = "needs_attention"
+                        state["transactionSyncError"] = exc.detail
+                candidate["items"][item_id] = state
+                candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
+            for item_id, item in first_sync.items():
+                old = candidate["items"][item_id]
+                try:
+                    delta = _sync_item(item["access"], old.get("cursor"))
+                    # Refresh real bank balances alongside first-time history;
+                    # never forge a new balance timestamp from cached metadata.
+                    raw = _provider("/accounts/get", item["access"])
+                    candidate["items"][item_id] = _merge(
+                        old, item_id, item["institution"], raw, delta, now)
+                    candidate["lastSuccess"] = now
+                except HTTPException as exc:
+                    old["lastTransactionAttemptAt"] = now
+                    old["nextTransactionSyncAt"] = now + DAY
+                    old["transactionSyncStatus"] = "needs_attention"
+                    old["transactionSyncError"] = exc.detail
+            if eligible_missing:
+                candidate["lastAccountDiscovery"] = now
             candidate.pop("error", None)
         except HTTPException as exc:
-            # Never persist partially discovered Items or expose any provider
-            # credentials. Fail once, then let the daily budget decide retry.
+            # No partial encrypted writes or lost prior activity on failed
+            # account discovery. Retry after the reserved provider interval.
             candidate = doc
             candidate["error"] = exc.detail
         candidate.pop("lease", None)
@@ -489,9 +552,19 @@ def sync_owner(uid):
             if new_accounts and old.get("cursor"):
                 # A preexisting cursor may have skipped activity for newly linked accounts.
                 old = {**old, "cursor": ""}
-            if discovered:
-                changes = _sync_item(item["access"], old.get("cursor"))
-                exposed = _merge(old, item_id, item["institution"], raw, changes, now)
+            # Respect a newly linked Item's own first-sync budget. A daily
+            # owner refresh must not issue a second request for that Item.
+            if discovered and now >= old.get("nextTransactionSyncAt", 0):
+                try:
+                    changes = _sync_item(item["access"], old.get("cursor"))
+                    exposed = _merge(old, item_id, item["institution"], raw, changes, now)
+                except HTTPException as exc:
+                    # A temporarily unavailable Item must not roll back
+                    # successfully synced unrelated banks or lose its cursor.
+                    exposed["lastTransactionAttemptAt"] = now
+                    exposed["nextTransactionSyncAt"] = now + DAY
+                    exposed["transactionSyncStatus"] = "needs_attention"
+                    exposed["transactionSyncError"] = exc.detail
             # Plaid returns an Item-wide delta, even when only one account is
             # selected. Discard unselected activity before encrypted persistence.
             exposed["transactions"] = {
@@ -529,7 +602,18 @@ def scheduled_sync_once():
     for uid in owners:
         try:
             doc, _ = _read(uid)
-            if time.time() >= doc.get("nextSyncAt", 0):
+            now = time.time()
+            owned = {item_id for item_id, item in ledger["items"].items()
+                     if item.get("owner") == uid and not item.get("disconnectedAt")}
+            discover_due = any(item_id not in doc.get("items", {}) and
+                now >= doc.get("newItemDiscoveryAttempts", {}).get(item_id, 0)
+                for item_id in owned)
+            initial_due = any(
+                item_id in owned and state.get("accounts") and
+                not state.get("lastTransactionAttemptAt") and not state.get("cursor") and
+                now >= state.get("nextTransactionSyncAt", 0)
+                for item_id, state in doc.get("items", {}).items())
+            if now >= doc.get("nextSyncAt", 0) or discover_due or initial_due:
                 sync_owner(uid)
         except Exception:
             # Private per-owner status reports failures; never log bank data.
