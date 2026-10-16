@@ -557,7 +557,7 @@ def test_delayed_initial_history_retries_on_its_own_due_date(monkeypatch):
     response = adapter.sync_owner("alice")
     assert len(response["transactions"][key]) == 1
     assert response["accounts"][0]["transactionSyncStatus"] == "ready"
-    assert storage["items"]["onepay-item"]["nextTransactionSyncAt"] == NOW + DAY
+    assert storage["items"]["onepay-item"]["nextTransactionSyncAt"] == NOW + adapter.DAY
     assert storage["nextSyncAt"] == NOW + 17 * 3600
     calls_before = len(calls)
     adapter.sync_owner("alice")
