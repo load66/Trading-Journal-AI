@@ -138,12 +138,24 @@ async def authentication_middleware(request, call_next):
     path = request.url.path
     protected = path == "/api" or path.startswith("/api/") or path.startswith("/uploads/")
     is_cors_preflight = request.method == "OPTIONS"
+    private_simplefin = path == "/api/bonus-tracker/simplefin" or path.startswith("/api/bonus-tracker/simplefin/")
     if protected and auth_required() and not is_cors_preflight:
         try:
             authorize_header(request.headers.get("Authorization"))
         except AuthError as exc:
-            return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
-    return await call_next(request)
+            result = JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+            if private_simplefin:
+                # Router dependencies never run when middleware rejects a bearer
+                # token. Auth failures must not lose the private cache policy.
+                result.headers["Cache-Control"] = "no-store"
+                result.headers["Pragma"] = "no-cache"
+            return result
+    result = await call_next(request)
+    if private_simplefin:
+        # Covers success, validation failure and router-generated error responses.
+        result.headers["Cache-Control"] = "no-store"
+        result.headers["Pragma"] = "no-cache"
+    return result
 
 
 # CORS must wrap authentication errors so the browser can read 401 and refresh its session.
