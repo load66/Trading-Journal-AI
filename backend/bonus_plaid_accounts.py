@@ -266,7 +266,7 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
 
 def _view(doc, ledger, uid):
     accessible = {item_id for item_id, row in ledger["items"].items()
-                  if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt"))}
+                  if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt")}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
             "monitoredAccounts": list(doc.get("monitored", [])),
             **{key: copy.deepcopy(doc.get(key, {})) for key in
