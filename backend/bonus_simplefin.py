@@ -252,13 +252,14 @@ def public_ref(account, transaction):
 
 def evidence_fingerprint(row):
     """Revision-safe identity: changed posted activity must return to the inbox."""
-    fields = ('posted', 'amount', 'description', 'pending', 'kind')
-    packed = json.dumps([row.get(k) for k in fields], separators=(',', ':'), ensure_ascii=True)
+    packed = json.dumps([row.get(k) for k in (
+        'posted', 'amount', 'description', 'pending', 'kind')],
+        separators=(',', ':'), ensure_ascii=True)
     return hashlib.sha256(packed.encode()).hexdigest()
 
 
 def public_evidence_reviews(s):
-    """Only currently linked, unchanged evidence is returned; provider IDs stay private."""
+    """Return only unchanged, currently linked review receipts using opaque identifiers."""
     result = {}
     for account, records in s.get('evidenceReviews', {}).items():
         mapping = s.get('mappings', {}).get(account)
@@ -586,7 +587,30 @@ class AccountProfilesBody(BaseModel):
 
 
 class EvidenceReviewBody(BaseModel):
-    account: str = Field(pattern=r'^[0-9a-f]{64}
+    account: str = Field(pattern=r'^[0-9a-f]{64}$')
+    transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
+    entryId: str = Field(min_length=1, max_length=120)
+    bank: str = Field(min_length=1, max_length=120)
+    opened: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    decision: str
+    requirementId: str | None = Field(default=None, max_length=40)
+
+    @field_validator('decision')
+    @classmethod
+    def valid_decision(cls, value):
+        if value not in ('reviewed', 'dismissed', 'clear'):
+            raise ValueError('Unsupported evidence review decision')
+        return value
+
+    @field_validator('requirementId')
+    @classmethod
+    def valid_requirement_id(cls, value):
+        if value is not None and not re.fullmatch(r'[a-z0-9_-]{1,40}', value):
+            raise ValueError('Invalid requirement reference')
+        return value
+
+
+class TransactionReviewBody(BaseModel):
     account: str = Field(pattern=r'^[0-9a-f]{64}$')
     transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
     category: str
@@ -773,11 +797,9 @@ def transaction_review(body: TransactionReviewBody, request: Request):
     return finish(uid, s, tag)
 
 
-
-
 @router.put('/evidence-review')
 def evidence_review(body: EvidenceReviewBody, request: Request):
-    """Private, revision-bound review receipts; cannot change promotion milestones."""
+    """Private, revision-bound receipts; never changes a promotion milestone."""
     uid = owner(request)
     s, tag = reserve(uid, 'evidence-review')
     mapping = s.get('mappings', {}).get(body.account)
@@ -799,23 +821,22 @@ def evidence_review(body: EvidenceReviewBody, request: Request):
             opened - date(1970, 1, 1)).days * DAY
             or row.get('posted', 0) > time.time() + 300):
         finish(uid, s, tag)
-        raise HTTPException(400, 'This transaction is not posted within the current bonus cycle.')
+        raise HTTPException(400, 'This transaction is not posted in the saved bonus cycle.')
     public = public_state(s)
     candidate = public.get('transactions', {}).get(body.account, {}).get(body.transaction)
     signals = candidate.get('signals', []) if candidate else []
     recognized = ('possible_bonus', 'possible_direct_deposit', 'possible_fee',
                   'possible_reversal', 'possible_recurring')
     amount = Decimal(row['amount'])
-    is_deposit = amount > 0 and 'possible_direct_deposit' in signals and (
-        candidate.get('kind') != 'possible_bonus')
-    if (body.requirementId is not None
-            and (body.decision != 'reviewed' or not is_deposit)):
+    is_deposit = (amount > 0 and 'possible_direct_deposit' in signals
+                  and candidate.get('kind') != 'possible_bonus')
+    if body.requirementId is not None and (body.decision != 'reviewed' or not is_deposit):
         finish(uid, s, tag)
-        raise HTTPException(400, 'A requirement may be associated only with a reviewed direct-deposit candidate.')
+        raise HTTPException(400, 'A requirement may be associated only with a reviewed deposit candidate.')
     if (not any(signal in signals for signal in recognized)
             and candidate.get('kind') not in ('possible_bonus', 'possible_reversal')):
         finish(uid, s, tag)
-        raise HTTPException(400, 'This transaction has no supported bonus review evidence.')
+        raise HTTPException(400, 'This transaction has no supported review evidence.')
     reviews = s.setdefault('evidenceReviews', {}).setdefault(body.account, {})
     if body.decision == 'clear':
         reviews.pop(raw, None)
@@ -823,656 +844,8 @@ def evidence_review(body: EvidenceReviewBody, request: Request):
         reviews[raw] = {
             'cycle': copy.deepcopy(cycle),
             'fingerprint': evidence_fingerprint(row),
-            'status': body.decision,
-            'reviewedAt': int(time.time()),
+            'status': body.decision, 'reviewedAt': int(time.time()),
             'requirementId': body.requirementId if body.decision == 'reviewed' else None}
-    return finish(uid, s, tag)
-
-
-@router.post('/sync')
-def sync_endpoint(request: Request):
-    return sync(owner(request))
-
-
-@router.delete('')
-def disconnect(request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'disconnect')
-    # Tombstone instead of delete so concurrent stale writes cannot recreate credentials.
-    tombstone = empty_state()
-    tombstone['status'] = 'disconnected'
-    return finish(uid, tombstone, tag)
-
-
-async def scheduled_simplefin_loop():
-    while True:
-        try:
-            if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
-                uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
-                s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and (s.get('mappings') or s.get('monitoredAccounts')) and time.time() >= s.get('nextSyncAt', 0):
-                    await run_in_threadpool(sync, uid)
-        except Exception:
-            # No financial data, credentials or provider URLs in logs; per-owner status shows errors.
-            pass
-        await asyncio.sleep(61)
-)
-    transaction: str = Field(pattern=r'^[0-9a-f]{64}
-    account: str = Field(pattern=r'^[0-9a-f]{64}$')
-    transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
-    category: str
-
-    @field_validator('category')
-    @classmethod
-    def valid_category(cls, value):
-        if value not in TRANSACTION_CATEGORIES:
-            raise ValueError('Unsupported transaction category')
-        return value
-
-
-@router.get('')
-def status(request: Request):
-    uid = owner(request)
-    try:
-        cipher()
-    except HTTPException:
-        return {'configured': False, 'connected': False, 'evidenceOnly': True}
-    return public_state(read_state(uid)[0])
-
-
-@router.post('/connect')
-def connect(body: ConnectBody, request: Request):
-    uid = owner(request)
-    cipher()
-    url = claim_url(body.setup_token)
-    s, tag = reserve(uid, 'connect')
-    if s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'A SimpleFIN connection already exists. Disconnect it before replacing it.')
-    try:
-        access = network(url, method='POST').decode().strip()
-        safe_url(access)
-        s['access'] = access
-        s['status'] = 'connected'
-        # Persist a consumed token's credential before attempting account discovery.
-        tag = write_state(uid, s, tag)
-        s['nextDiscoveryAt'] = int(time.time()) + DAY
-        data = get_data(access, balances=True)
-        s['accounts'] = normalize_accounts(data)
-        record_balances(s, s['accounts'], int(time.time()))
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        if s['warnings']:
-            s['status'] = 'attention'
-    except (HTTPException, UnicodeError) as e:
-        s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.post('/reconnect')
-def reconnect(body: ConnectBody, request: Request):
-    """Replace rejected provider access while retaining owner history, profiles and mappings."""
-    uid = owner(request)
-    cipher()
-    url = claim_url(body.setup_token)
-    s, tag = reserve(uid, 'reconnect')
-    if not s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'Connect SimpleFIN first.')
-    try:
-        access = network(url, method='POST').decode().strip()
-        safe_url(access)
-        s['access'] = access
-        s['status'] = 'connected'
-        s['nextSyncAt'] = 0
-        s['nextDiscoveryAt'] = 0
-        s.pop('error', None)
-    except (HTTPException, UnicodeError) as e:
-        s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.post('/discover')
-def discover(request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'discover')
-    now = int(time.time())
-    if not s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'Connect SimpleFIN first.')
-    if now < s.get('nextDiscoveryAt', 0):
-        return finish(uid, s, tag)
-    s['nextDiscoveryAt'] = now + DAY
-    tag = write_state(uid, s, tag)
-    try:
-        data = get_data(s['access'], balances=True)
-        fresh = normalize_accounts(data)
-        watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
-        s['missingAccounts'] = sorted(k for k in watched if k not in {a['key'] for a in fresh})
-        current = {a['key']: a for a in fresh}
-        # Preserve missing matched accounts so an omitted response cannot silently delete a match.
-        for a in s['accounts']:
-            if a['key'] in watched and a['key'] not in current:
-                fresh.append(a)
-        s['accounts'] = fresh
-        record_balances(s, [a for a in fresh if a['key'] in current], now)
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        s['status'] = 'attention' if s['warnings'] or s.get('missingAccounts') else 'connected'
-        s.pop('error', None)
-    except HTTPException as e:
-        s['error'] = e.detail
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.put('/selection')
-def select(body: SelectionBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'selection')
-    allowed = {a['key'] for a in s['accounts']}
-    if not s.get('access') or not set(body.mappings).issubset(allowed):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose accounts from the current connection.')
-    mappings = {k: v.model_dump() for k, v in body.mappings.items()}
-    # Multiple accounts (checking/savings) can belong to one cycle. One account cannot belong to two.
-    s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in s.get('monitoredAccounts', []) or (k in mappings and s['mappings'].get(k) == mappings[k])}
-    s['mappings'] = mappings
-    return finish(uid, s, tag)
-
-
-@router.put('/monitoring')
-def monitor(body: MonitoringBody, request: Request):
-    """Explicit opt-in for independent, read-only transaction monitoring."""
-    uid = owner(request)
-    s, tag = reserve(uid, 'monitoring')
-    allowed = {a['key'] for a in s['accounts']}
-    chosen = set(body.accounts)
-    if (not s.get('access') or len(chosen) != len(body.accounts)
-            or not chosen.issubset(allowed)
-            or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in chosen)):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose unique accounts from the current connection.')
-    s['monitoredAccounts'] = sorted(chosen)
-    s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in chosen or k in s['mappings']}
-    # First opt-in can begin immediately. Existing provider attempts remain rate-limited.
-    if chosen and not s.get('lastAttempt') and not s.get('nextSyncAt'):
-        s['nextSyncAt'] = 0
-    return finish(uid, s, tag)
-
-
-@router.put('/account-profiles')
-def account_profiles(body: AccountProfilesBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'account-profiles')
-    allowed = {a['key'] for a in s['accounts']}
-    if not set(body.profiles).issubset(allowed) or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in body.profiles):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose accounts from the current connection.')
-    supplied = {k: v.model_dump() for k, v in body.profiles.items()}
-    # Keep profiles for temporarily missing accounts; replace current connected-account profiles atomically.
-    s['accountProfiles'] = {k: v for k, v in s.get('accountProfiles', {}).items() if k not in allowed}
-    s['accountProfiles'].update(supplied)
-    return finish(uid, s, tag)
-
-
-@router.put('/transaction-review')
-def transaction_review(body: TransactionReviewBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'transaction-review')
-    rows = s.get('transactions', {}).get(body.account, {})
-    matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
-    if len(matches) != 1:
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose a saved transaction from this account.')
-    raw = matches[0]
-    if body.category == 'unreviewed':
-        s.setdefault('transactionReviews', {}).setdefault(body.account, {}).pop(raw, None)
-    else:
-        s.setdefault('transactionReviews', {}).setdefault(body.account, {})[raw] = {
-            'category': body.category, 'reviewedAt': int(time.time())}
-    return finish(uid, s, tag)
-
-
-@router.post('/sync')
-def sync_endpoint(request: Request):
-    return sync(owner(request))
-
-
-@router.delete('')
-def disconnect(request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'disconnect')
-    # Tombstone instead of delete so concurrent stale writes cannot recreate credentials.
-    tombstone = empty_state()
-    tombstone['status'] = 'disconnected'
-    return finish(uid, tombstone, tag)
-
-
-async def scheduled_simplefin_loop():
-    while True:
-        try:
-            if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
-                uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
-                s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and (s.get('mappings') or s.get('monitoredAccounts')) and time.time() >= s.get('nextSyncAt', 0):
-                    await run_in_threadpool(sync, uid)
-        except Exception:
-            # No financial data, credentials or provider URLs in logs; per-owner status shows errors.
-            pass
-        await asyncio.sleep(61)
-)
-    entryId: str = Field(min_length=1, max_length=120)
-    bank: str = Field(min_length=1, max_length=120)
-    opened: str = Field(pattern=r'^\\d{4}-\\d{2}-\\d{2}
-    account: str = Field(pattern=r'^[0-9a-f]{64}$')
-    transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
-    category: str
-
-    @field_validator('category')
-    @classmethod
-    def valid_category(cls, value):
-        if value not in TRANSACTION_CATEGORIES:
-            raise ValueError('Unsupported transaction category')
-        return value
-
-
-@router.get('')
-def status(request: Request):
-    uid = owner(request)
-    try:
-        cipher()
-    except HTTPException:
-        return {'configured': False, 'connected': False, 'evidenceOnly': True}
-    return public_state(read_state(uid)[0])
-
-
-@router.post('/connect')
-def connect(body: ConnectBody, request: Request):
-    uid = owner(request)
-    cipher()
-    url = claim_url(body.setup_token)
-    s, tag = reserve(uid, 'connect')
-    if s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'A SimpleFIN connection already exists. Disconnect it before replacing it.')
-    try:
-        access = network(url, method='POST').decode().strip()
-        safe_url(access)
-        s['access'] = access
-        s['status'] = 'connected'
-        # Persist a consumed token's credential before attempting account discovery.
-        tag = write_state(uid, s, tag)
-        s['nextDiscoveryAt'] = int(time.time()) + DAY
-        data = get_data(access, balances=True)
-        s['accounts'] = normalize_accounts(data)
-        record_balances(s, s['accounts'], int(time.time()))
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        if s['warnings']:
-            s['status'] = 'attention'
-    except (HTTPException, UnicodeError) as e:
-        s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.post('/reconnect')
-def reconnect(body: ConnectBody, request: Request):
-    """Replace rejected provider access while retaining owner history, profiles and mappings."""
-    uid = owner(request)
-    cipher()
-    url = claim_url(body.setup_token)
-    s, tag = reserve(uid, 'reconnect')
-    if not s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'Connect SimpleFIN first.')
-    try:
-        access = network(url, method='POST').decode().strip()
-        safe_url(access)
-        s['access'] = access
-        s['status'] = 'connected'
-        s['nextSyncAt'] = 0
-        s['nextDiscoveryAt'] = 0
-        s.pop('error', None)
-    except (HTTPException, UnicodeError) as e:
-        s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.post('/discover')
-def discover(request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'discover')
-    now = int(time.time())
-    if not s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'Connect SimpleFIN first.')
-    if now < s.get('nextDiscoveryAt', 0):
-        return finish(uid, s, tag)
-    s['nextDiscoveryAt'] = now + DAY
-    tag = write_state(uid, s, tag)
-    try:
-        data = get_data(s['access'], balances=True)
-        fresh = normalize_accounts(data)
-        watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
-        s['missingAccounts'] = sorted(k for k in watched if k not in {a['key'] for a in fresh})
-        current = {a['key']: a for a in fresh}
-        # Preserve missing matched accounts so an omitted response cannot silently delete a match.
-        for a in s['accounts']:
-            if a['key'] in watched and a['key'] not in current:
-                fresh.append(a)
-        s['accounts'] = fresh
-        record_balances(s, [a for a in fresh if a['key'] in current], now)
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        s['status'] = 'attention' if s['warnings'] or s.get('missingAccounts') else 'connected'
-        s.pop('error', None)
-    except HTTPException as e:
-        s['error'] = e.detail
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.put('/selection')
-def select(body: SelectionBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'selection')
-    allowed = {a['key'] for a in s['accounts']}
-    if not s.get('access') or not set(body.mappings).issubset(allowed):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose accounts from the current connection.')
-    mappings = {k: v.model_dump() for k, v in body.mappings.items()}
-    # Multiple accounts (checking/savings) can belong to one cycle. One account cannot belong to two.
-    s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in s.get('monitoredAccounts', []) or (k in mappings and s['mappings'].get(k) == mappings[k])}
-    s['mappings'] = mappings
-    return finish(uid, s, tag)
-
-
-@router.put('/monitoring')
-def monitor(body: MonitoringBody, request: Request):
-    """Explicit opt-in for independent, read-only transaction monitoring."""
-    uid = owner(request)
-    s, tag = reserve(uid, 'monitoring')
-    allowed = {a['key'] for a in s['accounts']}
-    chosen = set(body.accounts)
-    if (not s.get('access') or len(chosen) != len(body.accounts)
-            or not chosen.issubset(allowed)
-            or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in chosen)):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose unique accounts from the current connection.')
-    s['monitoredAccounts'] = sorted(chosen)
-    s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in chosen or k in s['mappings']}
-    # First opt-in can begin immediately. Existing provider attempts remain rate-limited.
-    if chosen and not s.get('lastAttempt') and not s.get('nextSyncAt'):
-        s['nextSyncAt'] = 0
-    return finish(uid, s, tag)
-
-
-@router.put('/account-profiles')
-def account_profiles(body: AccountProfilesBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'account-profiles')
-    allowed = {a['key'] for a in s['accounts']}
-    if not set(body.profiles).issubset(allowed) or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in body.profiles):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose accounts from the current connection.')
-    supplied = {k: v.model_dump() for k, v in body.profiles.items()}
-    # Keep profiles for temporarily missing accounts; replace current connected-account profiles atomically.
-    s['accountProfiles'] = {k: v for k, v in s.get('accountProfiles', {}).items() if k not in allowed}
-    s['accountProfiles'].update(supplied)
-    return finish(uid, s, tag)
-
-
-@router.put('/transaction-review')
-def transaction_review(body: TransactionReviewBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'transaction-review')
-    rows = s.get('transactions', {}).get(body.account, {})
-    matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
-    if len(matches) != 1:
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose a saved transaction from this account.')
-    raw = matches[0]
-    if body.category == 'unreviewed':
-        s.setdefault('transactionReviews', {}).setdefault(body.account, {}).pop(raw, None)
-    else:
-        s.setdefault('transactionReviews', {}).setdefault(body.account, {})[raw] = {
-            'category': body.category, 'reviewedAt': int(time.time())}
-    return finish(uid, s, tag)
-
-
-@router.post('/sync')
-def sync_endpoint(request: Request):
-    return sync(owner(request))
-
-
-@router.delete('')
-def disconnect(request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'disconnect')
-    # Tombstone instead of delete so concurrent stale writes cannot recreate credentials.
-    tombstone = empty_state()
-    tombstone['status'] = 'disconnected'
-    return finish(uid, tombstone, tag)
-
-
-async def scheduled_simplefin_loop():
-    while True:
-        try:
-            if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
-                uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
-                s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and (s.get('mappings') or s.get('monitoredAccounts')) and time.time() >= s.get('nextSyncAt', 0):
-                    await run_in_threadpool(sync, uid)
-        except Exception:
-            # No financial data, credentials or provider URLs in logs; per-owner status shows errors.
-            pass
-        await asyncio.sleep(61)
-)
-    decision: str
-    requirementId: str | None = Field(default=None, max_length=40)
-
-    @field_validator('decision')
-    @classmethod
-    def valid_decision(cls, value):
-        if value not in ('reviewed', 'dismissed', 'clear'):
-            raise ValueError('Unsupported evidence review decision')
-        return value
-
-    @field_validator('requirementId')
-    @classmethod
-    def valid_requirement_id(cls, value):
-        if value is not None and not re.fullmatch(r'[a-z0-9_-]{1,40}', value):
-            raise ValueError('Invalid requirement reference')
-        return value
-
-
-class TransactionReviewBody(BaseModel):
-    account: str = Field(pattern=r'^[0-9a-f]{64}$')
-    transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
-    category: str
-
-    @field_validator('category')
-    @classmethod
-    def valid_category(cls, value):
-        if value not in TRANSACTION_CATEGORIES:
-            raise ValueError('Unsupported transaction category')
-        return value
-
-
-@router.get('')
-def status(request: Request):
-    uid = owner(request)
-    try:
-        cipher()
-    except HTTPException:
-        return {'configured': False, 'connected': False, 'evidenceOnly': True}
-    return public_state(read_state(uid)[0])
-
-
-@router.post('/connect')
-def connect(body: ConnectBody, request: Request):
-    uid = owner(request)
-    cipher()
-    url = claim_url(body.setup_token)
-    s, tag = reserve(uid, 'connect')
-    if s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'A SimpleFIN connection already exists. Disconnect it before replacing it.')
-    try:
-        access = network(url, method='POST').decode().strip()
-        safe_url(access)
-        s['access'] = access
-        s['status'] = 'connected'
-        # Persist a consumed token's credential before attempting account discovery.
-        tag = write_state(uid, s, tag)
-        s['nextDiscoveryAt'] = int(time.time()) + DAY
-        data = get_data(access, balances=True)
-        s['accounts'] = normalize_accounts(data)
-        record_balances(s, s['accounts'], int(time.time()))
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        if s['warnings']:
-            s['status'] = 'attention'
-    except (HTTPException, UnicodeError) as e:
-        s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.post('/reconnect')
-def reconnect(body: ConnectBody, request: Request):
-    """Replace rejected provider access while retaining owner history, profiles and mappings."""
-    uid = owner(request)
-    cipher()
-    url = claim_url(body.setup_token)
-    s, tag = reserve(uid, 'reconnect')
-    if not s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'Connect SimpleFIN first.')
-    try:
-        access = network(url, method='POST').decode().strip()
-        safe_url(access)
-        s['access'] = access
-        s['status'] = 'connected'
-        s['nextSyncAt'] = 0
-        s['nextDiscoveryAt'] = 0
-        s.pop('error', None)
-    except (HTTPException, UnicodeError) as e:
-        s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.post('/discover')
-def discover(request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'discover')
-    now = int(time.time())
-    if not s.get('access'):
-        finish(uid, s, tag)
-        raise HTTPException(409, 'Connect SimpleFIN first.')
-    if now < s.get('nextDiscoveryAt', 0):
-        return finish(uid, s, tag)
-    s['nextDiscoveryAt'] = now + DAY
-    tag = write_state(uid, s, tag)
-    try:
-        data = get_data(s['access'], balances=True)
-        fresh = normalize_accounts(data)
-        watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
-        s['missingAccounts'] = sorted(k for k in watched if k not in {a['key'] for a in fresh})
-        current = {a['key']: a for a in fresh}
-        # Preserve missing matched accounts so an omitted response cannot silently delete a match.
-        for a in s['accounts']:
-            if a['key'] in watched and a['key'] not in current:
-                fresh.append(a)
-        s['accounts'] = fresh
-        record_balances(s, [a for a in fresh if a['key'] in current], now)
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        s['status'] = 'attention' if s['warnings'] or s.get('missingAccounts') else 'connected'
-        s.pop('error', None)
-    except HTTPException as e:
-        s['error'] = e.detail
-        s['status'] = 'attention'
-    return finish(uid, s, tag)
-
-
-@router.put('/selection')
-def select(body: SelectionBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'selection')
-    allowed = {a['key'] for a in s['accounts']}
-    if not s.get('access') or not set(body.mappings).issubset(allowed):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose accounts from the current connection.')
-    mappings = {k: v.model_dump() for k, v in body.mappings.items()}
-    # Multiple accounts (checking/savings) can belong to one cycle. One account cannot belong to two.
-    s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in s.get('monitoredAccounts', []) or (k in mappings and s['mappings'].get(k) == mappings[k])}
-    s['mappings'] = mappings
-    return finish(uid, s, tag)
-
-
-@router.put('/monitoring')
-def monitor(body: MonitoringBody, request: Request):
-    """Explicit opt-in for independent, read-only transaction monitoring."""
-    uid = owner(request)
-    s, tag = reserve(uid, 'monitoring')
-    allowed = {a['key'] for a in s['accounts']}
-    chosen = set(body.accounts)
-    if (not s.get('access') or len(chosen) != len(body.accounts)
-            or not chosen.issubset(allowed)
-            or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in chosen)):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose unique accounts from the current connection.')
-    s['monitoredAccounts'] = sorted(chosen)
-    s['transactions'] = {k: v for k, v in s['transactions'].items()
-                         if k in chosen or k in s['mappings']}
-    # First opt-in can begin immediately. Existing provider attempts remain rate-limited.
-    if chosen and not s.get('lastAttempt') and not s.get('nextSyncAt'):
-        s['nextSyncAt'] = 0
-    return finish(uid, s, tag)
-
-
-@router.put('/account-profiles')
-def account_profiles(body: AccountProfilesBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'account-profiles')
-    allowed = {a['key'] for a in s['accounts']}
-    if not set(body.profiles).issubset(allowed) or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in body.profiles):
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose accounts from the current connection.')
-    supplied = {k: v.model_dump() for k, v in body.profiles.items()}
-    # Keep profiles for temporarily missing accounts; replace current connected-account profiles atomically.
-    s['accountProfiles'] = {k: v for k, v in s.get('accountProfiles', {}).items() if k not in allowed}
-    s['accountProfiles'].update(supplied)
-    return finish(uid, s, tag)
-
-
-@router.put('/transaction-review')
-def transaction_review(body: TransactionReviewBody, request: Request):
-    uid = owner(request)
-    s, tag = reserve(uid, 'transaction-review')
-    rows = s.get('transactions', {}).get(body.account, {})
-    matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
-    if len(matches) != 1:
-        finish(uid, s, tag)
-        raise HTTPException(400, 'Choose a saved transaction from this account.')
-    raw = matches[0]
-    if body.category == 'unreviewed':
-        s.setdefault('transactionReviews', {}).setdefault(body.account, {}).pop(raw, None)
-    else:
-        s.setdefault('transactionReviews', {}).setdefault(body.account, {})[raw] = {
-            'category': body.category, 'reviewedAt': int(time.time())}
     return finish(uid, s, tag)
 
 
