@@ -418,6 +418,11 @@ def monitor(body: Monitored, request: Request):
     return _public(doc, ledger, uid)
 
 
+@router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
+def disconnect_account_item(handle: str, request: Request):
+    return quota.disconnect_item(handle, request)
+
+
 @router.post("/accounts/sync", dependencies=[Depends(_private)])
 def sync(request: Request):
     return sync_owner(owner(request))
