@@ -435,3 +435,127 @@ def test_generic_payment_and_bonus_are_not_internal_transfer_evidence(setup):
     row = public['transactions'][rk][b.public_ref(rk, 'income')]
     assert row['category'] == 'income'
     assert 'matched_internal_transfer' not in row['signals']
+
+
+def test_evidence_inbox_review_is_owner_private_and_exact_cycle(setup, monkeypatch):
+    s = seed()
+    account_row = account(transactions=[
+        txn('salary', '500', 'Payroll Direct Deposit'),
+        txn('payout', '200', 'New Account Promotional Bonus'),
+        txn('fee', '-8', 'Monthly Service Fee')])
+    key = b.account_key(account_row)
+    b.merge(s, data(account_row), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    h = {'Authorization': 'Bearer synthetic'}
+    route = '/api/bonus-tracker/simplefin/evidence-review'
+    review = {'account': key, 'transaction': b.public_ref(key, 'salary'),
+              'entryId': 'cycle1', 'bank': 'Synthetic CU', 'opened': '2026-10-01',
+              'decision': 'reviewed', 'requirementId': 'dd_minimum'}
+    result = c.put(route, headers=h, json=review)
+    assert result.status_code == 200, result.text
+    receipt = result.json()['evidenceReviews'][key][review['transaction']]
+    assert receipt['status'] == 'reviewed'
+    assert receipt['requirementId'] == 'dd_minimum'
+    assert 'access' not in result.json()
+    assert 'salary' not in json.dumps(result.json()['evidenceReviews'])
+    for field, value in [('entryId', 'other-cycle'), ('bank', 'Other CU'),
+                         ('opened', '2026-10-02')]:
+        bad = c.put(route, headers=h, json={**review, field: value})
+        assert bad.status_code == 400
+        assert b.read_state('owner')[0]['evidenceReviews'][key]['salary']['status'] == 'reviewed'
+    wrong_account = c.put(route, headers=h, json={**review, 'account': 'f' * 64})
+    assert wrong_account.status_code == 400
+    wrong_transaction = c.put(route, headers=h, json={**review, 'transaction': 'f' * 64})
+    assert wrong_transaction.status_code == 400
+    invalid_kind = c.put(route, headers=h, json={**review,
+                            'transaction': b.public_ref(key, 'payout')})
+    assert invalid_kind.status_code == 400
+    fee_matched_to_dd = c.put(route, headers=h, json={**review,
+                            'transaction': b.public_ref(key, 'fee')})
+    assert fee_matched_to_dd.status_code == 400
+    unauthenticated = c.put(route, json=review)
+    assert unauthenticated.status_code == 401
+    assert c.get('/api/bonus-tracker/simplefin', headers=h).json()['evidenceReviews'][key][review['transaction']] == receipt
+    cleared = c.put(route, headers=h, json={**review, 'decision': 'clear',
+                                            'requirementId': None})
+    assert cleared.status_code == 200
+    assert review['transaction'] not in cleared.json().get('evidenceReviews', {}).get(key, {})
+
+
+def test_inbox_dismissals_survive_resync_and_invalidate_provider_corrections(setup, monkeypatch):
+    s = seed()
+    a = account(transactions=[txn('salary', '500', 'Payroll Direct Deposit')])
+    key = b.account_key(a)
+    b.merge(s, data(a), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    url = '/api/bonus-tracker/simplefin/evidence-review'
+    h = {'Authorization': 'Bearer synthetic'}
+    body = {'account': key, 'transaction': b.public_ref(key, 'salary'),
+            'entryId': 'cycle1', 'bank': 'Synthetic CU', 'opened': '2026-10-01',
+            'decision': 'dismissed'}
+    first = c.put(url, headers=h, json=body)
+    assert first.status_code == 200
+    s, tag = b.read_state('owner')
+    assert s['evidenceReviews'][key]['salary']['status'] == 'dismissed'
+    b.merge(s, data(a), NOW)
+    b.write_state('owner', s, tag)
+    assert b.read_state('owner')[0]['evidenceReviews'][key]['salary']['status'] == 'dismissed'
+    changed = account(transactions=[txn('salary', '550', 'Payroll Direct Deposit corrected')])
+    s, tag = b.read_state('owner')
+    b.merge(s, data(changed), NOW)
+    assert 'salary' not in s.get('evidenceReviews', {}).get(key, {})
+    b.write_state('owner', s, tag)
+    assert not c.get('/api/bonus-tracker/simplefin', headers=h).json().get('evidenceReviews', {}).get(key)
+
+
+def test_evidence_reviews_dont_leak_across_bonus_cycles_or_unlink(setup, monkeypatch):
+    s = seed()
+    a = account(transactions=[txn('salary', '500', 'Payroll Direct Deposit')])
+    key = b.account_key(a)
+    b.merge(s, data(a), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    h = {'Authorization': 'Bearer synthetic'}
+    url = '/api/bonus-tracker/simplefin/evidence-review'
+    body = {'account': key, 'transaction': b.public_ref(key, 'salary'),
+            'entryId': 'cycle1', 'bank': 'Synthetic CU', 'opened': '2026-10-01',
+            'decision': 'reviewed', 'requirementId': 'dd'}
+    assert c.put(url, headers=h, json=body).status_code == 200
+    next_cycle = {'entryId': 'cycle2', 'bank': 'Synthetic CU', 'opened': '2026-10-09'}
+    remapped = c.put('/api/bonus-tracker/simplefin/selection', headers=h,
+                    json={'mappings': {key: next_cycle}})
+    assert remapped.status_code == 200
+    assert not remapped.json().get('evidenceReviews')
+    assert c.put(url, headers=h, json=body).status_code == 400
+    # Re-linking a new cycle intentionally clears old evidence until the next sync.
+    assert c.put(url, headers=h, json={**body, **next_cycle}).status_code == 400
+    next_state, tag = b.read_state('owner')
+    b.merge(next_state, data(a), NOW)
+    b.write_state('owner', next_state, tag)
+    assert c.put(url, headers=h, json={**body, **next_cycle}).status_code == 200
+    unmapped = c.put('/api/bonus-tracker/simplefin/selection', headers=h,
+                     json={'mappings': {}})
+    assert unmapped.status_code == 200
+    assert not unmapped.json().get('evidenceReviews')
+    assert not b.read_state('owner')[0]['evidenceReviews']
+
+
+def test_evidence_inbox_only_accepts_posted_supported_transactions(setup, monkeypatch):
+    s = seed()
+    a = account(transactions=[
+        txn('pending', '500', 'Payroll Direct Deposit', True),
+        txn('unrelated', '-100', 'Coffee at a cafe'),
+        {**txn('old', '200', 'Payroll Direct Deposit'), 'posted': 1790000000}])
+    k = b.account_key(a)
+    b.merge(s, data(a), NOW)
+    b.write_state('owner', s, None)
+    c = client(monkeypatch)
+    base = {'account': k, 'entryId': 'cycle1', 'bank': 'Synthetic CU',
+            'opened': '2026-10-01', 'decision': 'reviewed'}
+    for raw in ['pending', 'unrelated', 'old']:
+        response = c.put('/api/bonus-tracker/simplefin/evidence-review',
+                         headers={'Authorization': 'Bearer synthetic'},
+                         json={**base, 'transaction': b.public_ref(k, raw)})
+        assert response.status_code == 400, (raw, response.text)

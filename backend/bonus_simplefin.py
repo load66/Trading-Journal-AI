@@ -41,14 +41,14 @@ TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilitie
 def empty_state():
     return {'version': 2, 'accounts': [], 'mappings': {}, 'monitoredAccounts': [],
             'transactions': {}, 'accountProfiles': {}, 'transactionReviews': {},
-            'balanceHistory': {}, 'audit': []}
+            'balanceHistory': {}, 'evidenceReviews': {}, 'audit': []}
 
 
 def migrate_state(value):
     if not isinstance(value, dict) or not isinstance(value.get('accounts', []), list):
         raise HTTPException(503, 'Private financial data needs review before it can be used.')
     state = value
-    for field in ('mappings', 'transactions', 'accountProfiles', 'transactionReviews', 'balanceHistory'):
+    for field in ('mappings', 'transactions', 'accountProfiles', 'transactionReviews', 'balanceHistory', 'evidenceReviews'):
         if not isinstance(state.get(field, {}), dict):
             raise HTTPException(503, 'Private financial data needs review before it can be used.')
         state.setdefault(field, {})
@@ -249,6 +249,36 @@ def public_ref(account, transaction):
     return hashlib.sha256((account + '\0' + transaction).encode()).hexdigest()
 
 
+
+def evidence_fingerprint(row):
+    """Revision-safe identity: changed posted activity must return to the inbox."""
+    packed = json.dumps([row.get(k) for k in (
+        'posted', 'amount', 'description', 'pending', 'kind')],
+        separators=(',', ':'), ensure_ascii=True)
+    return hashlib.sha256(packed.encode()).hexdigest()
+
+
+def public_evidence_reviews(s):
+    """Return only unchanged, currently linked review receipts using opaque identifiers."""
+    result = {}
+    for account, records in s.get('evidenceReviews', {}).items():
+        mapping = s.get('mappings', {}).get(account)
+        if not isinstance(mapping, dict) or not isinstance(records, dict):
+            continue
+        for raw_id, review in records.items():
+            source = s.get('transactions', {}).get(account, {}).get(raw_id)
+            if (not source or not isinstance(review, dict)
+                    or review.get('cycle') != mapping
+                    or review.get('fingerprint') != evidence_fingerprint(source)
+                    or review.get('status') not in ('reviewed', 'dismissed')):
+                continue
+            result.setdefault(account, {})[public_ref(account, raw_id)] = {
+                'status': review['status'],
+                'reviewedAt': review['reviewedAt'],
+                'requirementId': review.get('requirementId') or None}
+    return result
+
+
 def merchant_name(description):
     text = re.sub(r'\b(?:pos|debit|credit|purchase|payment|ach|card|online|pending)\b', ' ', description, flags=re.I)
     text = re.sub(r'[#*]?\d{4,}', ' ', text)
@@ -421,6 +451,7 @@ def merge(state, data, now):
                     revisions.append({f: prior.get(f) for f in ('posted', 'amount', 'description', 'pending')})
                     row['revisions'] = revisions[-5:]
                     state.get('transactionReviews', {}).get(k, {}).pop(t['id'], None)
+                    state.get('evidenceReviews', {}).get(k, {}).pop(t['id'], None)
                 elif prior.get('changedAt'):
                     row['changedAt'] = prior['changedAt']
                     if prior.get('revisions'):
@@ -428,6 +459,10 @@ def merge(state, data, now):
             rows[t['id']] = row
         # Missing rows never imply reversal/deletion; preserve 90 days of observed history.
         state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
+        state.setdefault('evidenceReviews', {})[k] = {
+            i: v for i, v in state.get('evidenceReviews', {}).get(k, {}).items()
+            if i in state['transactions'][k] and isinstance(v, dict)
+            and v.get('fingerprint') == evidence_fingerprint(state['transactions'][k][i])}
     state['lastSuccess'] = now
     state['windowStart'] = now - 30 * DAY
     state['windowEnd'] = now
@@ -447,6 +482,7 @@ def public_state(s):
     out['monitoredAccounts'] = list(s.get('monitoredAccounts', []))
     out['transactions'] = {}
     enrich_transactions(s, out)
+    out['evidenceReviews'] = public_evidence_reviews(s)
     out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True)
     return out
 
@@ -548,6 +584,30 @@ class AccountProfile(BaseModel):
 
 class AccountProfilesBody(BaseModel):
     profiles: dict[str, AccountProfile] = Field(max_length=500)
+
+
+class EvidenceReviewBody(BaseModel):
+    account: str = Field(pattern=r'^[0-9a-f]{64}$')
+    transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
+    entryId: str = Field(min_length=1, max_length=120)
+    bank: str = Field(min_length=1, max_length=120)
+    opened: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    decision: str
+    requirementId: str | None = Field(default=None, max_length=40)
+
+    @field_validator('decision')
+    @classmethod
+    def valid_decision(cls, value):
+        if value not in ('reviewed', 'dismissed', 'clear'):
+            raise ValueError('Unsupported evidence review decision')
+        return value
+
+    @field_validator('requirementId')
+    @classmethod
+    def valid_requirement_id(cls, value):
+        if value is not None and not re.fullmatch(r'[a-z0-9_-]{1,40}', value):
+            raise ValueError('Invalid requirement reference')
+        return value
 
 
 class TransactionReviewBody(BaseModel):
@@ -673,7 +733,11 @@ def select(body: SelectionBody, request: Request):
     # Multiple accounts (checking/savings) can belong to one cycle. One account cannot belong to two.
     s['transactions'] = {k: v for k, v in s['transactions'].items()
                          if k in s.get('monitoredAccounts', []) or (k in mappings and s['mappings'].get(k) == mappings[k])}
+    previous_mappings = s['mappings']
     s['mappings'] = mappings
+    s['evidenceReviews'] = {k: v for k, v in s.get('evidenceReviews', {}).items()
+                            if k in mappings and previous_mappings.get(k) == mappings[k]
+                            and isinstance(v, dict)}
     return finish(uid, s, tag)
 
 
@@ -692,6 +756,8 @@ def monitor(body: MonitoringBody, request: Request):
     s['monitoredAccounts'] = sorted(chosen)
     s['transactions'] = {k: v for k, v in s['transactions'].items()
                          if k in chosen or k in s['mappings']}
+    s['evidenceReviews'] = {k: v for k, v in s.get('evidenceReviews', {}).items()
+                            if k in s['transactions']}
     # First opt-in can begin immediately. Existing provider attempts remain rate-limited.
     if chosen and not s.get('lastAttempt') and not s.get('nextSyncAt'):
         s['nextSyncAt'] = 0
@@ -728,6 +794,58 @@ def transaction_review(body: TransactionReviewBody, request: Request):
     else:
         s.setdefault('transactionReviews', {}).setdefault(body.account, {})[raw] = {
             'category': body.category, 'reviewedAt': int(time.time())}
+    return finish(uid, s, tag)
+
+
+@router.put('/evidence-review')
+def evidence_review(body: EvidenceReviewBody, request: Request):
+    """Private, revision-bound receipts; never changes a promotion milestone."""
+    uid = owner(request)
+    s, tag = reserve(uid, 'evidence-review')
+    mapping = s.get('mappings', {}).get(body.account)
+    cycle = {'entryId': body.entryId, 'bank': body.bank, 'opened': body.opened}
+    rows = s.get('transactions', {}).get(body.account, {})
+    matches = [raw for raw in rows if public_ref(body.account, raw) == body.transaction]
+    if (not s.get('access') or mapping != cycle or len(matches) != 1):
+        finish(uid, s, tag)
+        raise HTTPException(400, 'The account, transaction or bonus cycle no longer matches.')
+    raw = matches[0]
+    row = rows[raw]
+    from datetime import date
+    try:
+        opened = date.fromisoformat(body.opened)
+    except ValueError:
+        finish(uid, s, tag)
+        raise HTTPException(400, 'The bonus opening date is invalid.')
+    if (row.get('pending') or row.get('posted', 0) < (
+            opened - date(1970, 1, 1)).days * DAY
+            or row.get('posted', 0) > time.time() + 300):
+        finish(uid, s, tag)
+        raise HTTPException(400, 'This transaction is not posted in the saved bonus cycle.')
+    public = public_state(s)
+    candidate = public.get('transactions', {}).get(body.account, {}).get(body.transaction)
+    signals = candidate.get('signals', []) if candidate else []
+    recognized = ('possible_bonus', 'possible_direct_deposit', 'possible_fee',
+                  'possible_reversal', 'possible_recurring')
+    amount = Decimal(row['amount'])
+    is_deposit = (amount > 0 and 'possible_direct_deposit' in signals
+                  and candidate.get('kind') != 'possible_bonus')
+    if body.requirementId is not None and (body.decision != 'reviewed' or not is_deposit):
+        finish(uid, s, tag)
+        raise HTTPException(400, 'A requirement may be associated only with a reviewed deposit candidate.')
+    if (not any(signal in signals for signal in recognized)
+            and candidate.get('kind') not in ('possible_bonus', 'possible_reversal')):
+        finish(uid, s, tag)
+        raise HTTPException(400, 'This transaction has no supported review evidence.')
+    reviews = s.setdefault('evidenceReviews', {}).setdefault(body.account, {})
+    if body.decision == 'clear':
+        reviews.pop(raw, None)
+    else:
+        reviews[raw] = {
+            'cycle': copy.deepcopy(cycle),
+            'fingerprint': evidence_fingerprint(row),
+            'status': body.decision, 'reviewedAt': int(time.time()),
+            'requirementId': body.requirementId if body.decision == 'reviewed' else None}
     return finish(uid, s, tag)
 
 
