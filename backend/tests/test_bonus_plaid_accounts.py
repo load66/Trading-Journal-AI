@@ -154,6 +154,8 @@ def test_new_bank_discovers_accounts_without_repeating_daily_transaction_sync(mo
     old_key = adapter._account_key("previous-item", "example")
     prior = adapter._merge({}, "previous-item", "Existing Bank",
                            {"accounts": [account()]}, None, NOW - 120)
+    prior["lastTransactionAttemptAt"] = NOW - 120
+    prior["nextTransactionSyncAt"] = NOW + adapter.DAY
     storage = adapter._default()
     storage["items"]["previous-item"] = prior
     storage["monitored"] = [old_key]
@@ -206,6 +208,8 @@ def test_failed_new_item_discovery_preserves_existing_data_and_provider_budget(m
     from copy import deepcopy
     prior = adapter._merge({}, "previous-item", "Existing Bank",
                            {"accounts": [account()]}, None, NOW - 90)
+    prior["lastTransactionAttemptAt"] = NOW - 90
+    prior["nextTransactionSyncAt"] = NOW + adapter.DAY
     storage = adapter._default()
     storage["items"]["previous-item"] = prior
     storage["nextSyncAt"] = NOW + 7200
