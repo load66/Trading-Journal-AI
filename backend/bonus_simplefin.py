@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from botocore.exceptions import ClientError
 from bonus_backups import owner, store
+import bonus_finance_history as finance_history
 
 def private_response(response: Response):
     response.headers['Cache-Control'] = 'no-store'
@@ -92,17 +93,27 @@ def read_state(uid):
     if len(raw) > MAX_STATE:
         raise HTTPException(503, 'Private bank-sync storage needs review.')
     try:
-        return migrate_state(json.loads(cipher().decrypt(raw))), r['ETag']
+        state = migrate_state(json.loads(cipher().decrypt(raw)))
+        if state.get('historyShards'):
+            state['transactions'] = finance_history.read_shards(
+                s.client, s.bucket, key(uid), state['historyShards'], cipher(), MAX_STATE)
+        return state, r['ETag']
     except (InvalidToken, ValueError):
         raise HTTPException(503, 'Bank-sync storage could not be decrypted. Do not reconnect yet.') from None
 
 
 def write_state(uid, state, etag):
     state = migrate_state(state)
-    raw = cipher().encrypt(json.dumps(state, sort_keys=True).encode())
-    if len(raw) > MAX_STATE:
-        raise HTTPException(413, 'Bank-sync history exceeded its safe storage limit.')
     s = store()
+    old_manifest = list(state.get('historyShards', []))
+    manifest = finance_history.store_shards(s.client, s.bucket, key(uid),
+        state.get('transactions', {}), old_manifest, cipher(), MAX_STATE)
+    state['historyShards'] = manifest
+    root = copy.deepcopy(state)
+    root['transactions'] = {}  # Immutable transaction shards are referenced by CAS manifest.
+    raw = cipher().encrypt(json.dumps(root, sort_keys=True).encode())
+    if len(raw) > MAX_STATE:
+        raise HTTPException(413, 'Bank-sync metadata exceeded its safe storage limit.')
     args = {'Bucket': s.bucket, 'Key': key(uid), 'Body': raw, 'ContentType': 'application/octet-stream',
             **({'IfMatch': etag} if etag else {'IfNoneMatch': '*'})}
     try:
@@ -114,6 +125,7 @@ def write_state(uid, state, etag):
     saved, new_etag = read_state(uid)
     if saved != state:
         raise HTTPException(409, 'Bank-sync changes need a fresh read. Refresh and try again.')
+    finance_history.prune_old_shards(s.client, s.bucket, key(uid), old_manifest, manifest)
     return new_etag
 
 
@@ -977,6 +989,7 @@ def disconnect(request: Request):
     s, tag = reserve(uid, 'disconnect')
     # Tombstone instead of delete so concurrent stale writes cannot recreate credentials.
     tombstone = empty_state()
+    tombstone['historyShards'] = s.get('historyShards', [])
     tombstone['status'] = 'disconnected'
     return finish(uid, tombstone, tag)
 
