@@ -774,3 +774,13 @@ def test_simplefin_preserves_brokerage_type_metadata():
     found=b.normalize_accounts(raw)
     assert found[0]["accountType"]=="investment"
     assert found[0]["accountSubtype"]=="individual"
+
+
+def test_owner_public_ai_sync_counts_are_sanitized(setup):
+    s=b.empty_state()
+    s['financeAILastSync']={'attempted':65,'categorized':58,'failed':7,'at':1792134000,
+                            'transactionDescription':'PRIVATE USER TEXT','accountNumber':'00001111'}
+    exposed=b.public_state(s)
+    assert exposed['financeAILastSync']=={'attempted':65,'categorized':58,'failed':7,'at':1792134000}
+    assert 'PRIVATE USER TEXT' not in str(exposed)
+    assert exposed['financeVersion']=='3.4.80'
