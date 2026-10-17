@@ -1,14 +1,14 @@
 # Audit progress
 
-Active agent: none
+Active agent: codex — Release 2 Accuracy & Reliability — branch codex/finance-accuracy
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
 
 - Deployed: backend v3.4.95, main commit 3f4e0980c3a758cf00340704ffbdbab5d762537c (Railway SUCCESS)
-- In progress: frontend v3.4.95 release verification, PR #149 in load66/bonus-tracker
-- Next step: finish frontend three-browser release verification and GitHub Pages deployment
+- In progress: Release 2 finance reconciliation, golden ledger and sync robustness; prior v3.4.95 Pages audit pending
+- Next step: add exact-cent balance snapshot, reconciliation and regression coverage; validate v3.4.95 production gate before releasing
 
 ## Release 1 (v3.4.94)
 
