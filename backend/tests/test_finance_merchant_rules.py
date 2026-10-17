@@ -34,7 +34,7 @@ def test_learned_rule_relabels_similar_transactions_without_rewriting_rows(monke
         account=account_key,transaction=sf.public_ref(account_key,"a"),
         category="shopping",applySimilar=True),None)
     assert storage[0]["transactions"]==original
-    assert storage[0]["merchantRules"][cache_key("Unfamiliar local shop 445577")]["category"]=="shopping"
+    assert storage[0]["merchantRules"][sf.merchant_rule_key(account_key, "Unfamiliar local shop 445577")]["category"]=="shopping"
     result=sf.public_state(storage[0])["transactions"][account_key]
     assert result[sf.public_ref(account_key,"a")]["categorySource"]=="user"
     assert result[sf.public_ref(account_key,"b")]["categorySource"]=="user_rule"
