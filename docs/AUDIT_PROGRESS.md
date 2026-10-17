@@ -7,8 +7,8 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 ## Handoff
 
 - Deployed: backend v3.4.95, main commit 3f4e0980c3a758cf00340704ffbdbab5d762537c (Railway SUCCESS)
-- In progress: Release 2 v3.4.96 backend implementation completed on PR #222; merge/deploy pending
-- Next step: merge passing backend PR #222, confirm exact Railway commit SUCCESS, then release frontend PR #154
+- In progress: SimpleFIN add-bank backend v3.4.97 release candidate, PR #223
+- Next step: after full CI merge PR #223, verify Railway SUCCESS on exact merge commit, then frontend PR #155
 
 ## Release 1 (v3.4.94)
 
@@ -35,3 +35,13 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 - Issue: P1 — Cross-provider ledger lacks pinned cents baseline
 - Test status: Backend 631 tests and build PASS (CI 39053785663); frontend four unit areas and Chromium/Firefox/WebKit PASS (CI 39053638068); final doc-only CI pending
 - Deployment: pending complete CI, merge, Railway and GitHub Pages verification
+
+## SimpleFIN add-bank (v3.4.97)
+
+- Issue: https://github.com/load66/bonus-tracker/issues/153
+- Backend PR: https://github.com/load66/Trading-Journal-AI/pull/223
+- Frontend PR: https://github.com/load66/bonus-tracker/pull/155
+- Issue: Guided bank discovery suppressed by cooldown and manual-only return flow
+- Issue: Additional-bank Sync selection needs explicit owner Save
+- Test status: Synthetic cooldown, quota, history preservation and first-sync tests PASS; backend CI 39056081142 PASS
+- Deployment: Pending backend squash merge and exact Railway commit verification

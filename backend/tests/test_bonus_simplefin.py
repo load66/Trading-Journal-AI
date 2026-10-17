@@ -783,7 +783,7 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.96'
+    assert public['financeVersion']=='3.4.97'
 
 
 def test_exact_nonround_reciprocal_move_matches_between_accounts_same_bank():
@@ -1074,3 +1074,133 @@ def test_equal_value_purchase_and_wallet_payment_are_not_a_self_transfer(setup):
     assert credit['category'] == 'unreviewed'
     assert 'matched_internal_transfer' not in debit['signals']
     assert 'matched_internal_transfer' not in credit['signals']
+
+
+def test_discover_now_bypasses_cooldown_and_does_not_auto_monitor(setup, monkeypatch):
+    s=seed();original=b.account_key(account());s['monitoredAccounts']=[original]
+    s['nextGuidedDiscoveryAt']=NOW+3600;s['nextDiscoveryAt']=NOW+b.DAY
+    s['nextSyncAt']=NOW+b.DAY
+    s['transactions']={original:{'reviewed':{'id':'reviewed','amount':'-5.25',
+      'description':'Synthetic Grocery','posted':NOW-60,'pending':False}}}
+    s['accountProfiles']={original:{'kind':'checking','balanceMode':'asset'}}
+    b.write_state('owner',s,None)
+    calls=[]
+    def provider(access,selected=None,balances=False):
+        calls.append((selected,balances))
+        assert access==ACCESS and balances is True and selected is None
+        return {'accounts':[account(),account('two','new')],
+          'connections':[{'conn_id':'one','name':'Synthetic CU'},
+                         {'conn_id':'two','name':'Other Synthetic CU'}],'errlist':[]}
+    monkeypatch.setattr(b,'get_data',provider)
+    c=client(monkeypatch);h={'Authorization':'Bearer synthetic'}
+    response=c.post('/api/bonus-tracker/simplefin/discover-now',headers=h)
+    assert response.status_code==200
+    result=response.json()
+    key=b.account_key(account('two','new'))
+    assert (result['found'],result['newAccounts'],result['bank'])==(True,1,'Other Synthetic CU')
+    assert result['discoveredAccounts'][0]['key']==key
+    assert result['discoveredAccounts'][0]['discovered'] is True
+    assert key not in result['monitoredAccounts']
+    assert calls==[(None,True)]
+    stored=b.read_state('owner')[0]
+    assert stored['transactions'][original]==s['transactions'][original]
+    assert stored['accountProfiles'][original]==s['accountProfiles'][original]
+    assert stored['mappings']==s['mappings']
+    assert b.account_key(account('one','new'))!=key
+    assert len(stored['requestAttempts'])==1
+    second=c.post('/api/bonus-tracker/simplefin/discover-now',headers=h)
+    assert second.status_code==200 and second.json()['found'] is False
+    assert second.json()['newAccounts']==0 and len(calls)==1
+    assert len(b.read_state('owner')[0]['requestAttempts'])==1
+
+
+def test_discover_now_zero_budget_and_failed_payload_preserve_history(setup,monkeypatch):
+    s=seed();key=b.account_key(account())
+    s['requestAttempts']=[NOW-100]*24
+    s['transactions']={key:{'one':{'id':'one','amount':'-25.37','posted':NOW-5,'pending':False}}}
+    s['accountProfiles']={key:{'kind':'checking','balanceMode':'asset'}}
+    s['balanceHistory']={key:[{'at':NOW-300,'observedAt':NOW-300,
+                                'balance':'50.00','currency':'USD'}]}
+    b.write_state('owner',s,None)
+    c=client(monkeypatch);h={'Authorization':'Bearer synthetic'}
+    def fail(*_a,**_k):pytest.fail('Provider must not be called on budget exhaustion')
+    monkeypatch.setattr(b,'get_data',fail)
+    no=c.post('/api/bonus-tracker/simplefin/discover-now',headers=h)
+    assert no.status_code==429 and 'resume' in str(no.json()).lower()
+    saved=b.read_state('owner')[0]
+    for field in ('accounts','mappings','transactions','accountProfiles','balanceHistory'):
+        assert saved[field]==s[field]
+    s2,etag=b.read_state('owner')
+    s2['requestAttempts']=[]
+    b.write_state('owner',s2,etag)
+    monkeypatch.setattr(b,'get_data',lambda *_a,**_k: (_ for _ in ()).throw(HTTPException(502,'offline')))
+    failed=c.post('/api/bonus-tracker/simplefin/discover-now',headers=h)
+    assert failed.status_code==502
+    saved=b.read_state('owner')[0]
+    for field in ('accounts','mappings','transactions','accountProfiles','balanceHistory'):
+        assert saved[field]==s[field]
+
+
+def test_discovered_account_first_sync_scoped_and_budgeted(setup,monkeypatch):
+    original=account();new=account('two','new')
+    s=seed();s['nextSyncAt']=NOW+b.DAY
+    b.write_state('owner',s,None)
+    c=client(monkeypatch);h={'Authorization':'Bearer synthetic'}
+    calls=[]
+    def provider(access,selected=None,balances=False):
+        calls.append((selected,balances))
+        if balances:return {'accounts':[original,new],
+          'connections':[{'conn_id':'one','name':'Synthetic CU'},
+                         {'conn_id':'two','name':'Second CU'}],'errlist':[]}
+        assert [a['id'] for a in selected]==['new']
+        return {'accounts':[new|{'transactions':[txn('first','-19.99','Groceries')]}],
+          'connections':[{'conn_id':'two','name':'Second CU'}],'errlist':[]}
+    monkeypatch.setattr(b,'get_data',provider)
+    assert c.post('/api/bonus-tracker/simplefin/discover-now',headers=h).status_code==200
+    nk=b.account_key(new);ok=b.account_key(original)
+    # Not opted in: no transaction fetch and no implicit monitoring.
+    skipped=c.post('/api/bonus-tracker/simplefin/first-sync',headers=h,json={'accounts':[nk]})
+    assert skipped.status_code==200 and skipped.json()['syncStatus']=='not_enabled'
+    assert len(calls)==1
+    saved=c.put('/api/bonus-tracker/simplefin/monitoring',headers=h,json={'accounts':[ok,nk]})
+    assert saved.status_code==200
+    synced=c.post('/api/bonus-tracker/simplefin/first-sync',headers=h,json={'accounts':[nk]})
+    assert synced.status_code==200 and synced.json()['syncStatus']=='synced'
+    assert len(calls)==2 and calls[1][1] is False
+    doc=b.read_state('owner')[0]
+    assert doc['transactions'][nk]['first']['amount']=='-19.99'
+    assert ok in [a['key'] for a in doc['accounts']]
+    assert len(doc['requestAttempts'])==2
+    again=c.post('/api/bonus-tracker/simplefin/first-sync',headers=h,json={'accounts':[nk]})
+    assert again.status_code==200 and len(calls)==2
+
+
+def test_empty_first_sync_is_waiting_without_claiming_posted_transactions(setup,monkeypatch):
+    initial=seed()
+    initial['monitoredAccounts']=[b.account_key(account())]
+    new=account('two','new')
+    nk=b.account_key(new)
+    initial['accounts'].append({**b.normalize_accounts({'accounts':[new],
+       'connections':[{'conn_id':'two','name':'Synthetic Bank'}]})[0],
+       'firstSeenAt':NOW,'discovered':True})
+    initial['monitoredAccounts'].append(nk)
+    b.write_state('owner',initial,None)
+    calls=[]
+    def provider(access,selected=None,balances=False):
+        calls.append(tuple(a['key'] for a in (selected or [])))
+        return {'accounts':[new],'connections':[{'conn_id':'two','name':'Synthetic Bank'}],
+                'errlist':[]}
+    monkeypatch.setattr(b,'get_data',provider)
+    c=client(monkeypatch);h={'Authorization':'Bearer synthetic'}
+    reply=c.post('/api/bonus-tracker/simplefin/first-sync',headers=h,json={'accounts':[nk]})
+    assert reply.status_code==200
+    assert reply.json()['syncStatus']=='waiting'
+    assert reply.json()['reason']=='history_pending'
+    assert len(calls)==1
+    saved=b.read_state('owner')[0]
+    assert saved['transactions']==initial['transactions']
+    assert saved['accounts'][-1]['discovered'] is True
+    repeat=c.post('/api/bonus-tracker/simplefin/first-sync',headers=h,json={'accounts':[nk]})
+    assert repeat.status_code==200 and repeat.json()['syncStatus']=='waiting'
+    assert len(calls)==1
+    assert len(b.read_state('owner')[0]['requestAttempts'])==1

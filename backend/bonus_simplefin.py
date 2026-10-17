@@ -707,7 +707,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.96')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.97')
     return out
 
 
@@ -1021,6 +1021,149 @@ def reconnect(body: ConnectBody, request: Request):
 def discover_guided(request: Request):
     """One-time return-to-app check, bounded by a real rolling request budget."""
     return discover(request, guided=True)
+
+
+def _remaining_discovery_budget(state, now):
+    recent = sorted(at for at in state.get('requestAttempts', [])
+                    if isinstance(at, (int, float)) and at > now - DAY)
+    return max(0, 24-len(recent)), (int(recent[0])+DAY if len(recent)>=24 else None)
+
+
+@router.post('/discover-now')
+def discover_now(request: Request):
+    """Bank-connection return check. Uses existing credential, lease and request quota."""
+    uid=owner(request)
+    s,tag=reserve(uid, 'discover-now')
+    now=int(time.time())
+    if not s.get('access'):
+        finish(uid,s,tag)
+        raise HTTPException(409,'Connect SimpleFIN first.')
+    remaining,limit_reset=_remaining_discovery_budget(s,now)
+    if now<s.get('newBankDiscoveryNextAt',0):
+        result=finish(uid,s,tag)
+        result.update(found=False,newAccounts=0,bank='',discoveredAccounts=[],
+                      nextRetryAt=s['newBankDiscoveryNextAt'],budgetRemaining=remaining)
+        return result
+    if remaining==0:
+        finish(uid,s,tag)
+        raise HTTPException(429, f'Daily limit reached; updates resume at {limit_reset}.')
+    try:
+        claim_request(s,now)
+        # Reserve budget before network I/O; even a failed provider attempt costs a call.
+        s['newBankDiscoveryNextAt']=now+90
+        tag=write_state(uid,s,tag)
+        payload=get_data(s['access'],balances=True)
+        normalized=normalize_accounts(payload)
+        if not normalized and s.get('accounts'):
+            # Empty provider payload is not evidence of deletion or a successful
+            # discovery. No source rows are changed.
+            raise HTTPException(502,'SimpleFIN returned no accounts. Existing accounts were preserved.')
+        old={a['key']:a for a in s.get('accounts',[])}
+        added=[]
+        for a in normalized:
+            prior=old.get(a['key'])
+            if prior:
+                # Discovery must never override the identity, owner-selected
+                # profile, account setting or historical metadata of a saved row.
+                old[a['key']]={**prior}
+            else:
+                a['firstSeenAt']=now
+                a['discovered']=True
+                old[a['key']]=a
+                added.append(a)
+        s['accounts']=list(old.values())
+        record_balances(s,normalized,now)
+        s.pop('newBankDiscoveryError',None)
+        result=finish(uid,s,tag)
+        remaining,_=_remaining_discovery_budget(s,now)
+        discovered=[a for a in result['accounts'] if a['key'] in {x['key'] for x in added}]
+        banks=sorted({a.get('bank') or 'Bank' for a in discovered})
+        result.update(found=bool(added),newAccounts=len(added),
+                      bank=banks[0] if len(banks)==1 else '',
+                      banks=banks,discoveredAccounts=discovered,
+                      nextRetryAt=s['newBankDiscoveryNextAt'],budgetRemaining=remaining)
+        return result
+    except HTTPException as exc:
+        s['newBankDiscoveryError']=exc.status_code
+        finish(uid,s,tag)
+        raise
+
+
+class FirstDiscoverySync(BaseModel):
+    accounts: list[str] = Field(min_length=1,max_length=500)
+
+
+@router.post('/first-sync')
+def first_discovery_sync(body: FirstDiscoverySync,request: Request):
+    """One first-history request after the owner explicitly saves Sync ON."""
+    uid=owner(request)
+    s,tag=reserve(uid,'first-sync')
+    now=int(time.time())
+    if not s.get('access'):
+        finish(uid,s,tag)
+        raise HTTPException(409,'Connect SimpleFIN first.')
+    selected=set(body.accounts)
+    permitted={a['key']:a for a in s.get('accounts',[]) if a.get('discovered') and
+               not a.get('firstSyncAt') and syncing(s,a)}
+    if len(selected)!=len(body.accounts) or any(not re.fullmatch(r'[0-9a-f]{64}',k) for k in selected):
+        finish(uid,s,tag)
+        raise HTTPException(400,'Choose unique discovered accounts.')
+    enabled=[permitted[k] for k in body.accounts if k in permitted and k in s.get('monitoredAccounts',[])]
+    if not enabled:
+        response=finish(uid,s,tag)
+        response.update(syncStatus='not_enabled',budgetRemaining=_remaining_discovery_budget(s,now)[0])
+        return response
+    remaining,reset=_remaining_discovery_budget(s,now)
+    if now < s.get('firstSyncNextAt',0):
+        response=finish(uid,s,tag)
+        response.update(syncStatus='waiting',reason='history_pending',
+                        nextRetryAt=s['firstSyncNextAt'],budgetRemaining=remaining)
+        return response
+    if not remaining:
+        s['firstSyncNextAt']=reset
+        response=finish(uid,s,tag)
+        response.update(syncStatus='waiting',reason='budget_exhausted',
+                        nextRetryAt=reset,budgetRemaining=0)
+        return response
+    try:
+        claim_request(s,now)
+        tag=write_state(uid,s,tag)
+        data=get_data(s['access'],enabled)
+        if not data.get('accounts'):
+            raise HTTPException(502,'SimpleFIN returned no new-account activity.')
+        # The response is scoped to the selected new account IDs only.
+        allowed={a['key'] for a in enabled}
+        filtered={**data,'accounts':[a for a in data['accounts'] if account_key(a) in allowed]}
+        if not filtered['accounts']:
+            raise HTTPException(502,'New-account transaction data is not ready.')
+        if not any(isinstance(t,dict) and not t.get('pending',False)
+                   for a in filtered['accounts'] for t in a.get('transactions',[])):
+            # An empty or pending-only response is not a successful first
+            # history import. Defer without inventing posted transactions.
+            s['firstSyncNextAt']=now+3600
+            response=finish(uid,s,tag)
+            response.update(syncStatus='waiting',reason='history_pending',
+                            nextRetryAt=s['firstSyncNextAt'],
+                            budgetRemaining=_remaining_discovery_budget(s,now)[0])
+            return response
+        # merge() normally computes missingAccounts across every watched account.
+        # Scoped first-history reads are not evidence that old accounts vanished.
+        prior_missing=s.get('missingAccounts',[])
+        candidate=merge(copy.deepcopy(s),filtered,now)
+        candidate['missingAccounts']=prior_missing
+        for a in candidate['accounts']:
+            if a['key'] in allowed:
+                a['firstSyncAt']=now
+                a.pop('discovered',None)
+        s=candidate
+        response=finish(uid,s,tag)
+        response.update(syncStatus='synced',newAccounts=len(enabled),
+                        budgetRemaining=_remaining_discovery_budget(s,now)[0])
+        return response
+    except HTTPException as exc:
+        s['firstSyncErrorKind']=exc.status_code
+        finish(uid,s,tag)
+        raise
 
 
 @router.post('/discover')
