@@ -781,7 +781,7 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.81'
+    assert public['financeVersion']=='3.4.82'
 
 
 def test_exact_nonround_reciprocal_move_matches_between_accounts_same_bank():
@@ -814,3 +814,77 @@ def test_saved_automatic_old_subscription_reclassified_without_mutating_ledger()
     assert row['category']=='transfer'
     assert 'investment_transfer' in row['signals']
     assert s['transactions'][a]['old']==before
+
+def test_get_data_requests_89_days_never_exceeds_90(setup,monkeypatch):
+    captured=[]
+    def fake_network(_url,method='GET',auth=None,params=None):
+        captured.append(dict(params))
+        return json.dumps(data(account())).encode()
+    monkeypatch.setattr(b,'network',fake_network)
+    for opts in [dict(balances=True),dict(selected=[{'id':'a'}])]:
+        b.get_data(ACCESS,**opts)
+        values=captured[-1]
+        assert int(values['end-date'])==NOW
+        assert int(values['start-date'])==NOW-89*b.DAY
+        assert (int(values['end-date'])-int(values['start-date']))/b.DAY==89
+        assert int(values['end-date'])-int(values['start-date']) < 90*b.DAY
+
+def test_capped_window_warning_is_informational_not_needs_attention(setup):
+    state=seed()
+    warning={'conn_id':'one','msg':'Requested date range exceeds limit of 90 days and was capped.'}
+    response=data(account(transactions=[txn('coffee','-9','Coffee shop')]))
+    response['errlist']=[warning]
+    b.merge(state,response,NOW)
+    assert state['status']=='connected'
+    assert state['warnings']==[]
+    assert len(state['syncNotices'])==1
+    visible=b.public_state(state)
+    assert visible['status']=='connected'
+    assert visible['accounts'][0].get('syncIssue') is None
+    # Old encrypted warning records should not continue to flag a healthy bank.
+    state['warnings']=[warning['msg']]
+    state['status']='attention'
+    assert b.public_state(state)['status']=='connected'
+    clean_response=data(account())
+    b.merge(state,clean_response,NOW+1)
+    assert state['syncNotices']==[] and state['warnings']==[]
+    assert state['status']=='connected'
+
+def test_simplefin_real_login_issue_is_scoped_to_one_bank(setup):
+    checking=account('one','a')
+    brokerage=account('two','b')
+    payload=data(checking,brokerage)
+    payload['connections'].append({'conn_id':'two','name':'Second Bank'})
+    state=seed()
+    state['accounts']=b.normalize_accounts(data(checking,brokerage))
+    state['monitoredAccounts']=[a['key'] for a in state['accounts']]
+    payload['errlist']=[{'conn_id':'one','msg':'Bank login required. Please sign in again.'},
+                        {'conn_id':'two','msg':'Requested date range exceeds limit of 90 days and was capped.'}]
+    b.merge(state,payload,NOW)
+    visible=b.public_state(state)
+    problems={a['bank']:a.get('syncIssue') for a in visible['accounts']}
+    assert problems['Synthetic CU']['type']=='bank_login'
+    assert problems['Second Bank'] is None
+    assert visible['status']=='attention'
+    assert len(state['syncNotices'])==1
+    assert len(state['institutionIssues'])==1
+    # Recovery clears the stale one-bank login error without reconnecting.
+    payload['errlist']=[]
+    b.merge(state,payload,NOW+1)
+    assert b.public_state(state)['status']=='connected'
+    assert all('syncIssue' not in a for a in b.public_state(state)['accounts'])
+
+def test_simplefin_access_rejected_distinct_from_bank_login(setup):
+    checking=account('one','a'); state=seed()
+    payload=data(checking)
+    payload['errlist']=[{'conn_id':'one','msg':'Access rejected by SimpleFIN provider'}]
+    b.merge(state,payload,NOW)
+    assert b.public_state(state)['accounts'][0]['syncIssue']['type']=='access_rejected'
+
+def test_informational_partial_data_notice_is_not_connection_failure(setup):
+    state=seed()
+    payload=data(account())
+    payload['errlist']=[{'conn_id':'one','msg':'Partial data returned: earlier history unavailable'}]
+    b.merge(state,payload,NOW)
+    assert state['status']=='connected'
+    assert state['warnings']==[]
