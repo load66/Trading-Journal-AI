@@ -561,7 +561,7 @@ def public_state(s):
     raw_stats = s.get('financeAILastSync')
     if isinstance(raw_stats, dict):
         out['financeAILastSync'] = {
-            name: max(0, min(int(raw_stats.get(name, 0) or 0), 100000))
+            name: max(0, min(int(raw_stats.get(name, 0) or 0), 9999999999 if name == 'at' else 100000))
             for name in ('attempted', 'categorized', 'failed', 'at')
             if isinstance(raw_stats.get(name, 0), (int, float))
         }
