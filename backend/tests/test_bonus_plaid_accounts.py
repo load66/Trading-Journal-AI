@@ -51,7 +51,10 @@ def test_transaction_revision_and_provider_removal():
     assert removed["cursor"]=="cursor3"
 
 def test_readonly_provider_route_allowlist():
-    assert adapter.ROUTES == frozenset(("/item/get","/accounts/get","/transactions/sync"))
+    assert adapter.ROUTES == frozenset(("/item/get","/accounts/get","/transactions/sync",
+                                        "/item/webhook/update","/webhook_verification_key/get"))
+    assert "/transactions/refresh" not in adapter.ROUTES
+    assert "/link/token/create" not in adapter.ROUTES
     assert adapter.MAX_PAGES<=25
 
 
