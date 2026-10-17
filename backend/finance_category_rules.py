@@ -207,6 +207,49 @@ def category_for(description, amount, *, pending=False, kind=None, owner_names=(
     return 'unreviewed','low',[]
 
 
+
+RENT_ADDRESS = re.compile(
+    r'^\s*\d{1,6}\s+(?:(?:n|s|e|w)\s+)?'
+    r'[A-Za-z]+(?:\s+[A-Za-z]+){0,4}\s+'
+    r'(?:st|street|rd|road|ave|avenue|ln|lane|dr|drive|blvd|boulevard)\.?\s*$',re.I
+)
+
+
+def annotate_recurring_rent(records):
+    """Suggest housing only after two comparable posted monthly address debits."""
+    grouped=defaultdict(list)
+    for row in records:
+        if (not isinstance(row,dict) or row.get('pending') or
+                row.get('categorySource') in ('user','user_rule') or
+                row.get('category') not in ('unreviewed','housing') or
+                not isinstance(row.get('posted'),(int,float))):
+            continue
+        address=re.sub(r'\s+',' ',str(row.get('description') or '').strip()).casefold()
+        if not RENT_ADDRESS.fullmatch(address):
+            continue
+        try:
+            amount=Decimal(str(row['amount']))
+        except (ValueError,InvalidOperation,KeyError):
+            continue
+        if amount.is_finite() and amount<0:
+            grouped[(str(row.get('accountKey') or ''),address)].append((row,amount))
+    for matches in grouped.values():
+        ordered=sorted(matches,key=lambda item:item[0]['posted'])
+        qualifying=set()
+        for i,(left,a) in enumerate(ordered):
+            for right,b in ordered[i+1:]:
+                days=(right['posted']-left['posted'])/86400
+                if days>35:
+                    break
+                if 26<=days<=35 and a*Decimal('1.25')<=b<=a*Decimal('.75'):
+                    qualifying.update((id(left),id(right)))
+        for row,_ in matches:
+            if id(row) in qualifying:
+                row['category']='housing'
+                row['confidence']='medium'
+                row['signals']=sorted(set((row.get('signals') or [])+['possible_rent']))
+
+
 def micro_deposit_refs(records):
     """Recognize paired sub-$1 credits on the same account/source within 3 days.
 
