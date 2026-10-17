@@ -686,7 +686,7 @@ def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'lastAccountDiscoveryAt', 'lastNewAccountsAt', 'newAccountsLastSeenCount', 'warnings', 'notices', 'institutionIssues', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'nextGuidedDiscoveryAt',
-              'lastBalanceRefreshAt', 'nextBalanceRefreshAt', 'error',
+              'lastBalanceRefreshAt', 'nextBalanceRefreshAt', 'balanceRefreshErrorKind', 'newBankDiscoveryNextAt', 'error',
               'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
@@ -744,7 +744,7 @@ def claim_request(state, now):
 
 
 
-def refresh_balances(uid):
+def refresh_balances(uid, *, force=False):
     """Hourly alternating account discovery/refresh between full 2-hour pulls.
 
     No background request can bypass the same 24-call rolling account quota.
@@ -753,10 +753,15 @@ def refresh_balances(uid):
     """
     s, tag = reserve(uid, 'balance-refresh')
     now = int(time.time())
-    if (not s.get('access') or now < s.get('nextBalanceRefreshAt', 0)
-            or (s.get('accounts') and now >= s.get('nextSyncAt', 0))):
+    if (not s.get('access') or
+            (force and now < s.get('newBankDiscoveryNextAt', 0)) or
+            (not force and now < s.get('nextBalanceRefreshAt', 0)) or
+            (not force and s.get('accounts') and now >= s.get('nextSyncAt', 0))):
         return finish(uid, s, tag)
     s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
+    # Returning from the external Bridge may request an immediate check,
+    # but never more than once per 90 seconds or outside the shared budget.
+    s['newBankDiscoveryNextAt'] = now + 90
     try:
         claim_request(s, now)
         tag = write_state(uid, s, tag)
@@ -785,6 +790,7 @@ def refresh_balances(uid):
         record_balances(s, [prior[key] for key in fresh], now)
         s['lastBalanceRefreshAt'] = now
         s['lastAccountDiscoveryAt'] = now
+        s.pop('balanceRefreshErrorKind', None)
         s['newAccountsLastSeenCount'] = len(discovered)
         if discovered:
             s['lastNewAccountsAt'] = now
@@ -1066,6 +1072,16 @@ def reconnect(body: ConnectBody, request: Request):
         s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
         s['status'] = 'attention'
     return finish(uid, s, tag)
+
+
+@router.post('/auto-refresh')
+def auto_refresh_accounts(request: Request):
+    """Zero-click Bridge return: same credential, budget, lease and owner scope."""
+    uid = owner(request)
+    view = refresh_balances(uid, force=True)
+    state, _ = read_state(uid)
+    remaining, reset = _remaining_discovery_budget(state, int(time.time()))
+    return {**view, 'budgetRemaining': remaining, 'budgetResetAt': reset}
 
 
 @router.post('/discover-guided')
