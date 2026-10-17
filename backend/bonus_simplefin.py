@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from botocore.exceptions import ClientError
 from bonus_backups import owner, store
 from finance_category_rules import category_for, micro_deposit_refs
+from finance_ai_categories import classify_unknown, cache_key
 
 def private_response(response: Response):
     response.headers['Cache-Control'] = 'no-store'
@@ -320,6 +321,14 @@ def enrich_transactions(state, result):
                 row['categorySource'] = 'user'
             else:
                 row['categorySource'] = 'automatic'
+                if category == 'unreviewed':
+                    suggestion = state.get('financeAICache', {}).get(cache_key(row.get('description', '')))
+                    if (isinstance(suggestion, dict) and
+                            suggestion.get('category') in TRANSACTION_CATEGORIES and
+                            suggestion.get('category') not in ('unreviewed', 'bonus')):
+                        category, confidence = suggestion['category'], 'medium'
+                        row['categorySource'] = 'ai'
+                        row['confidenceScore'] = suggestion.get('confidenceScore')
             row.update(category=category, confidence=confidence, signals=signals,
                        merchant=merchant_name(row.get('description', '')),
                        stalePending=bool(row.get('pending') and row.get('lastObservedAt', 0) < int(time.time()) - 7 * DAY))
@@ -552,6 +561,12 @@ def sync(uid):
     tag = write_state(uid, s, tag)
     try:
         candidate = merge(copy.deepcopy(s), get_data(s['access'], selected), now)
+        # Optional, bounded Groq classification occurs only after successful
+        # provider data retrieval; it never writes raw activity or milestones.
+        try:
+            classify_unknown(candidate, now=now)
+        except Exception:
+            pass  # AI must not block a verified bank sync.
         s = candidate
         s.pop('error', None)
     except HTTPException as e:
