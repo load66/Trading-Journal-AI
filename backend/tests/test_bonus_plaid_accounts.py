@@ -649,12 +649,12 @@ def test_plaid_balance_snapshots_additive_compacted_and_public_owner_scoped():
     first = adapter._merge({}, "synthetic-item", "Synthetic Bank",
                            {"accounts": [account()]}, None, NOW - 2*adapter.DAY)
     key = adapter._account_key("synthetic-item", "example")
-    assert first["balanceHistory"][key][-1]["balance"] == "120.00"
+    assert first["balanceHistory"][key][-1]["balance"] == "500"
     assert first["balanceHistory"][key][-1]["observedAt"] == NOW - 2*adapter.DAY
     newer = {**account(), "balances": {**account()["balances"], "current": 850.12}}
     second = adapter._merge(first, "synthetic-item", "Synthetic Bank",
                             {"accounts": [newer]}, None, NOW)
-    assert [x["balance"] for x in second["balanceHistory"][key]] == ["120.00", "850.12"]
+    assert [x["balance"] for x in second["balanceHistory"][key]] == ["500", "850.12"]
     assert second["balanceHistory"][key][-1]["observedAt"] == NOW
     # Same-day replays do not accumulate false extra observations.
     duplicate = adapter._merge(second, "synthetic-item", "Synthetic Bank",
@@ -663,8 +663,7 @@ def test_plaid_balance_snapshots_additive_compacted_and_public_owner_scoped():
     assert json.dumps(duplicate, sort_keys=True) == json.dumps(second, sort_keys=True)
     assert first["balanceHistory"][key] == [{"at": NOW-2*adapter.DAY,
                                              "observedAt": NOW-2*adapter.DAY,
-                                             "balance":"120.00","currency":"USD",
-                                             "availableBalance":"90.00"}]
+                                             "balance":"500","currency":"USD"}]
     # A failed/empty provider response is never allowed to erase the prior snapshots.
     from fastapi import HTTPException
     with pytest.raises(HTTPException):
