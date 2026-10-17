@@ -175,7 +175,7 @@ def get_data(access, selected=None, balances=False):
     p = safe_url(access)
     endpoint = urlunsplit(('https', p.hostname, p.path.rstrip('/') + '/accounts', '', ''))
     now = int(time.time())
-    params = [('version', '2'), ('start-date', str(now - 90 * DAY)), ('end-date', str(now + 1))]
+    params = [('version', '2'), ('start-date', str(now - 89 * DAY)), ('end-date', str(now))]
     if balances:
         params.append(('balances-only', '1'))
     else:
@@ -455,6 +455,63 @@ def classify(amount, description):
     return 'deposit'
 
 
+
+INFO_PROVIDER_WARNING = re.compile(
+    r'(?:requested date range.*(?:exceeds|limit|capped)|(?:date range|history).*capped|'
+    r'partial (?:data|history|results?)|some (?:history|transactions?) (?:may be )?unavailable|'
+    r'data (?:may be )?partial|limited history|history truncated)',re.I)
+LOGIN_PROVIDER_WARNING = re.compile(
+    r'(?:log(?:in|[ -]?on)|sign[ -]?in|credential|mfa|two[ -]?factor|'
+    r'authentication (?:required|needed)|relink|reauthoriz|connect.*(?:bank|institution))',re.I)
+ACCESS_PROVIDER_WARNING = re.compile(
+    r'(?:access (?:denied|rejected|revoked)|unauthorized|invalid (?:access|token)|'
+    r'permission (?:denied|rejected)|simplefin (?:access|token).*rejected)',re.I)
+
+def classify_provider_notices(data, accounts):
+    """Map provider issues to individual connections; generic notices stay informational."""
+    references = {a.get('id'): a.get('connection') for a in accounts}
+    refs_by_conn = {a.get('connection') for a in accounts}
+    issues, info, unassigned = {}, [], []
+    entries = list(data.get('errlist', [])) + list(data.get('errors', []))
+    for entry in entries:
+        if isinstance(entry, dict):
+            message = clean(entry.get('msg') or entry.get('message') or entry.get('error'), 220)
+            raw_conn = entry.get('conn_id') or entry.get('connection_id') or entry.get('connection')
+            raw_account = entry.get('account_id') or entry.get('account')
+            connection = str(raw_conn) if raw_conn is not None else references.get(raw_account)
+        elif isinstance(entry, str):
+            message = clean(entry, 220)
+            connection = None
+        else:
+            continue
+        if not message:
+            continue
+        if INFO_PROVIDER_WARNING.search(message):
+            info.append(message)
+            continue
+        issue_type = ('access_rejected' if ACCESS_PROVIDER_WARNING.search(message)
+                      else 'bank_login' if LOGIN_PROVIDER_WARNING.search(message)
+                      else 'connection_error')
+        issue = {'type':issue_type,'message':message}
+        if connection in refs_by_conn and connection:
+            issues[connection] = issue
+        else:
+            unassigned.append(issue)
+    if info:
+        BACKGROUND_LOGGER.info('simplefin_provider_info count=%d',len(info))
+    return issues, unassigned, info
+
+def update_provider_status(state, data):
+    issues, general, notices = classify_provider_notices(data, state.get('accounts', []))
+    state['institutionIssues'] = issues
+    state['unassignedIssues'] = general[:10]
+    state['syncNotices'] = notices[:30]
+    # Never turn harmless capped history/partial data notices into red errors.
+    state['warnings'] = [i['message'] for i in general][:10]
+    state['status'] = 'attention' if (
+        issues or general or state.get('missingAccounts') or state.get('error')) else 'connected'
+
+
 def merge(state, data, now):
     old_by_key = {a['key']: a for a in state['accounts']}
     # Account IDs can collide across provider connections. A transaction sync may update only
@@ -465,9 +522,8 @@ def merge(state, data, now):
     record_balances(state, fresh, now)
     watched = {a['key'] for a in state['accounts'] if syncing(state, a)} & (set(state['mappings']) | set(state.get('monitoredAccounts', [])))
     state['missingAccounts'] = sorted(k for k in watched if k not in fresh_by_key)
-    warnings = [clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)]
-    warnings += [clean(e) for e in data.get('errors', []) if isinstance(e, str)]
-    state['warnings'] = warnings[:50]
+    update_provider_status(state, data)
+    warnings = list(state['warnings'])
     for a in data['accounts']:
         k = account_key(a)
         if k not in watched:
@@ -537,7 +593,7 @@ def merge(state, data, now):
     state['lastSuccess'] = now
     state['windowStart'] = now - 30 * DAY
     state['windowEnd'] = now
-    state['status'] = 'attention' if warnings or state['missingAccounts'] else 'connected'
+    state['status'] = 'attention' if (state.get('institutionIssues') or state.get('unassignedIssues') or state['missingAccounts'] or state.get('error')) else 'connected'
     return state
 
 
@@ -550,6 +606,19 @@ def public_state(s):
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
     out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
                        for a in public_accounts(s, s.get('accounts', []))]
+    by_key = {a['key']:a for a in s.get('accounts', [])}
+    for public in out['accounts']:
+        source = by_key.get(public['key'], {})
+        issue = s.get('institutionIssues', {}).get(source.get('connection'))
+        if issue:
+            public['syncIssue'] = copy.deepcopy(issue)
+        elif public['key'] in s.get('missingAccounts', []):
+            public['syncIssue'] = {'type':'missing_account','message':'This bank did not return the linked account.'}
+    # Legacy persisted informational warnings do not signal broken connections.
+    real_warning = any(not INFO_PROVIDER_WARNING.search(str(w)) for w in s.get('warnings', []))
+    out['status'] = 'attention' if (s.get('institutionIssues') or s.get('unassignedIssues') or
+                                  s.get('missingAccounts') or s.get('error') or real_warning) else 'connected'
+    out['warnings'] = [w for w in s.get('warnings', []) if not INFO_PROVIDER_WARNING.search(str(w))]
     for a in out['accounts']:
         a['invalidTransactionRows'] = s.get('invalidTransactionsByAccount', {}).get(a['key'], a.get('invalidTransactionRows', 0))
     out['monitoredAccounts'] = sorted(set(s.get('monitoredAccounts', [])) | (set(s.get('transactions', {})) & {a['key'] for a in s.get('accounts', [])}))
@@ -558,7 +627,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.81')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.82')
     return out
 
 
@@ -789,10 +858,7 @@ def connect(body: ConnectBody, request: Request):
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        if s['warnings']:
-            s['status'] = 'attention'
+        update_provider_status(s, data)
     except (HTTPException, UnicodeError) as e:
         s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
         s['status'] = 'attention'
@@ -862,9 +928,7 @@ def discover(request: Request):
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        s['status'] = 'attention' if s.get('error') or s['warnings'] or s.get('missingAccounts') else 'connected'
+        update_provider_status(s, data)
     except HTTPException as e:
         s['error'] = e.detail
         s['status'] = 'attention'
