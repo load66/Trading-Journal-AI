@@ -889,3 +889,35 @@ def test_net_worth_opt_out_provenance_is_preserved_in_encrypted_account_profiles
     p=AccountProfile(kind='brokerage',balanceMode='exclude',balanceModeUserSet=True,order=2)
     assert p.model_dump(exclude_none=True)['balanceModeUserSet'] is True
     assert AccountProfile(kind='brokerage',balanceMode='asset',order=2).balanceModeUserSet is None
+
+def test_guided_discovery_bypasses_day_cooldown_but_throttles_automatically(setup, monkeypatch):
+    initial = seed()
+    initial['nextDiscoveryAt'] = NOW + b.DAY
+    initial['nextSyncAt'] = NOW + b.DAY
+    b.write_state('owner', initial, None)
+    monkeypatch.setattr(b, 'owner', lambda _req: 'owner')
+    requests = []
+    def provider(*args, **kwargs):
+        requests.append(kwargs)
+        return data(account(), account('two','new'))
+    monkeypatch.setattr(b, 'get_data', provider)
+    first = b.discover_guided(None)
+    assert len(requests) == 1
+    assert len(first['accounts']) == 2
+    assert first['nextGuidedDiscoveryAt'] == NOW + 180
+    b.discover_guided(None)
+    assert len(requests) == 1  # returning twice never bypasses rate guard
+    assert b.read_state('owner')[0]['requestAttempts'] == [NOW]
+
+
+def test_guided_discovery_budget_cannot_exceed_24_requests_in_rolling_day(setup, monkeypatch):
+    initial = seed()
+    initial['nextDiscoveryAt'] = NOW + b.DAY
+    initial['requestAttempts'] = [NOW - 5] * 24
+    b.write_state('owner', initial, None)
+    monkeypatch.setattr(b, 'owner', lambda _req: 'owner')
+    monkeypatch.setattr(b, 'get_data',
+                        lambda *args, **kwargs: pytest.fail('daily budget exceeded'))
+    result = b.discover_guided(None)
+    assert result['connected']
+    assert len(b.read_state('owner')[0]['requestAttempts']) == 24
