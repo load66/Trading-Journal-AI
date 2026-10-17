@@ -7,8 +7,8 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 ## Handoff
 
 - Deployed: backend v3.4.95, main commit 3f4e0980c3a758cf00340704ffbdbab5d762537c (Railway SUCCESS)
-- In progress: frontend v3.4.95 release verification, PR #149 in load66/bonus-tracker
-- Next step: finish frontend three-browser release verification and GitHub Pages deployment
+- In progress: Release 2 v3.4.96 backend implementation completed on PR #222; merge/deploy pending
+- Next step: merge passing backend PR #222, confirm exact Railway commit SUCCESS, then release frontend PR #154
 
 ## Release 1 (v3.4.94)
 
@@ -23,3 +23,15 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 - Test status: PASS — Backend Tests and Frontend Build, CI runs 39049563177 and 39049746533
 - PR: https://github.com/load66/Trading-Journal-AI/pull/220
 - Deployment status: SUCCESS — Railway deployment 4947f9c2-b3e7-45d7-af5d-13d3fa8dc790
+
+## Release 2 — v3.4.96 Finance accuracy
+
+- Backend PR: https://github.com/load66/Trading-Journal-AI/pull/222
+- Frontend PR: https://github.com/load66/bonus-tracker/pull/154
+- Issue: https://github.com/load66/bonus-tracker/issues/151
+- Issue: P1 — Plaid balances missing persisted observation history
+- Issue: P0 — Unverified totals lack runtime invariant checks
+- Issue: P1 — Sync errors can conceal missing accounts or reviews
+- Issue: P1 — Cross-provider ledger lacks pinned cents baseline
+- Test status: Backend 631 tests and build PASS (CI 39053785663); frontend four unit areas and Chromium/Firefox/WebKit PASS (CI 39053638068); final doc-only CI pending
+- Deployment: pending complete CI, merge, Railway and GitHub Pages verification

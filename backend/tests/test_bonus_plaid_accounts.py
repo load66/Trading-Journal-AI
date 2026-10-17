@@ -639,3 +639,140 @@ def test_plaid_historical_update_complete_without_rows_is_empty_not_loading():
     shown=adapter._public({"items":{"onepay-item":state},"monitored":[key],"lastSuccess":NOW},ledger,"alice")
     assert shown["accounts"][0]["historyComplete"] is True
     assert shown["transactions"][key]=={}
+
+
+def test_plaid_balance_snapshots_additive_compacted_and_public_owner_scoped():
+    """Exact-cent snapshots survive transactions, account absence and privacy filtering."""
+    from copy import deepcopy
+    import json
+
+    first = adapter._merge({}, "synthetic-item", "Synthetic Bank",
+                           {"accounts": [account()]}, None, NOW - 2*adapter.DAY)
+    key = adapter._account_key("synthetic-item", "example")
+    assert first["balanceHistory"][key][-1]["balance"] == "500"
+    assert first["balanceHistory"][key][-1]["observedAt"] == NOW - 2*adapter.DAY
+    newer = {**account(), "balances": {**account()["balances"], "current": 850.12}}
+    second = adapter._merge(first, "synthetic-item", "Synthetic Bank",
+                            {"accounts": [newer]}, None, NOW)
+    assert [x["balance"] for x in second["balanceHistory"][key]] == ["500", "850.12"]
+    assert second["balanceHistory"][key][-1]["observedAt"] == NOW
+    # Same-day replays do not accumulate false extra observations.
+    duplicate = adapter._merge(second, "synthetic-item", "Synthetic Bank",
+                               {"accounts": [newer]}, None, NOW)
+    assert duplicate["balanceHistory"] == second["balanceHistory"]
+    assert json.dumps(duplicate, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert first["balanceHistory"][key] == [{"at": NOW-2*adapter.DAY,
+                                             "observedAt": NOW-2*adapter.DAY,
+                                             "balance":"500","currency":"USD"}]
+    # A failed/empty provider response is never allowed to erase the prior snapshots.
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        adapter._merge(second, "synthetic-item", "Synthetic Bank", {}, None, NOW+1)
+    assert len(second["balanceHistory"][key]) == 2
+    ledger = {"items": {"synthetic-item": {"owner":"alice","institution":"Synthetic Bank"}}}
+    doc = {**adapter._default(), "items":{"synthetic-item": second}, "monitored":[key]}
+    public = adapter._public(doc, ledger, "alice")
+    assert public["balanceHistory"][key] == second["balanceHistory"][key]
+    assert adapter._public(doc, ledger, "another-owner")["balanceHistory"] == {}
+    assert "synthetic-item" not in json.dumps(public)
+
+
+def test_all_plaid_provider_calls_fail_without_success_or_data_loss(monkeypatch):
+    """Never acknowledge an outage as a recent successful sync."""
+    from copy import deepcopy
+    prior = adapter._merge({}, "synthetic-item", "Synthetic",
+        {"accounts": [account()]}, (
+            {"stored":fixture(ident="stored")}, {}, set(), "saved-cursor"),
+        NOW - adapter.DAY)
+    key = adapter._account_key("synthetic-item", "example")
+    before = deepcopy(prior)
+    doc = adapter._default()
+    doc["items"] = {"synthetic-item": prior}
+    doc["monitored"] = [key]
+    doc["lastSuccess"] = NOW - adapter.DAY
+    doc["accountProfiles"] = {key: {"kind":"checking","balanceMode":"asset"}}
+    doc["transactionReviews"] = {key: {"stored":{"category":"income","fingerprint":"synthetic"}}}
+    doc["nextSyncAt"] = 0
+    storage = deepcopy(doc)
+    ledger = {"items":{"synthetic-item":{
+        "owner":"alice","institution":"Synthetic","access":"mock-only"}}}
+    monkeypatch.setattr(adapter.quota, "_ledger",lambda:(ledger,"etag"))
+    monkeypatch.setattr(adapter, "_read",lambda uid:(deepcopy(storage),"etag"))
+    monkeypatch.setattr(adapter.time,"time",lambda:NOW)
+    def save(uid,state,tag):
+        storage.clear()
+        storage.update(deepcopy(state))
+        return "etag"
+    monkeypatch.setattr(adapter,"_write",save)
+    called=[]
+    def unavailable(endpoint,token,**kw):
+        called.append(endpoint)
+        raise HTTPException(502,"Synthetic provider failure")
+    monkeypatch.setattr(adapter,"_provider",unavailable)
+    result=adapter.sync_owner("alice")
+    assert called == ["/accounts/get"]
+    assert storage["lastSuccess"] == NOW-adapter.DAY
+    assert result["status"] == "attention"
+    assert result["lastSuccess"] == NOW-adapter.DAY
+    assert result["error"]
+    assert storage["items"]["synthetic-item"]["transactions"] == before["transactions"]
+    assert storage["items"]["synthetic-item"]["balanceHistory"] == before["balanceHistory"]
+    assert storage["items"]["synthetic-item"]["cursor"] == before["cursor"]
+    assert storage["accountProfiles"] == doc["accountProfiles"]
+    assert storage["transactionReviews"] == doc["transactionReviews"]
+    assert storage["items"]["synthetic-item"]["transactionSyncStatus"] == "needs_attention"
+
+
+def test_plaid_exact_replay_is_idempotent_with_history_and_account_profiles():
+    from copy import deepcopy
+    original=adapter._merge({},"synthetic-item","Synthetic",
+        {"accounts":[account()]},(
+            {"one":fixture(ident="one")},{},set(),"cursor-1"),NOW)
+    identical=adapter._merge(original,"synthetic-item","Synthetic",
+        {"accounts":[account()]},(
+            {"one":fixture(ident="one")},{},set(),"cursor-1"),NOW)
+    assert identical == original
+    assert identical["balanceHistory"] == original["balanceHistory"]
+    changed=deepcopy(original)
+    changed["accountProfiles"]={"safe":{"kind":"checking"}}
+    second=adapter._merge(changed,"synthetic-item","Synthetic",
+        {"accounts":[account()]},None,NOW)
+    assert second["accountProfiles"] == changed["accountProfiles"]
+    assert second["transactions"] == changed["transactions"]
+
+
+def test_missing_plaid_account_retains_history_reviews_and_can_reappear():
+    """A temporarily absent account must never be erased or silently rekeyed."""
+    from copy import deepcopy
+    original_accounts = [account(),{**account(),"account_id":"temporarily-hidden",
+                                         "name":"Other synthetic checking"}]
+    first=adapter._merge({}, "synthetic-item", "Synthetic Bank",
+        {"accounts":original_accounts},(
+            {"hidden-tx":{**fixture(ident="hidden-tx"),
+                          "account_id":"temporarily-hidden"}},
+            {},set(),"cursor"),NOW-adapter.DAY)
+    before=deepcopy(first)
+    missing_key=adapter._account_key("synthetic-item","temporarily-hidden")
+    partial=adapter._merge(first,"synthetic-item","Synthetic Bank",
+        {"accounts":[account()]},None,NOW)
+    assert len(partial["accounts"]) == 2
+    assert partial["missingAccountKeys"] == [missing_key]
+    absent=next(x for x in partial["accounts"] if x["key"]==missing_key)
+    assert absent["missingFromLatest"] is True
+    assert absent["attentionKind"] == "connection"
+    assert absent["observedAt"] == before["accounts"][1]["observedAt"]
+    assert partial["transactions"] == before["transactions"]
+    assert partial["balanceHistory"][missing_key] == before["balanceHistory"][missing_key]
+    assert partial["cursor"] == before["cursor"]
+    # Discovery recovering later keeps account identity and records.
+    returned=adapter._merge(partial,"synthetic-item","Synthetic Bank",
+        {"accounts":original_accounts},None,NOW+adapter.DAY)
+    assert returned["missingAccountKeys"] == []
+    assert not any(x.get("missingFromLatest") for x in returned["accounts"])
+    assert returned["transactions"] == first["transactions"]
+    assert missing_key in returned["balanceHistory"]
+    with pytest.raises(HTTPException) as error:
+        adapter._merge(returned,"synthetic-item","Synthetic Bank",
+            {"accounts":[]},None,NOW+2*adapter.DAY)
+    assert error.value.status_code == 502
+    assert returned["transactions"] == first["transactions"]

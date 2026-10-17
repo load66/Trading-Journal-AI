@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from bonus_backups import owner, store
 from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, public_ref,
     public_state, apply_mapping_selection, apply_evidence_decision, merchant_rule_key, SelectionBody,
-    EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
+    EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody, record_balances)
 import bonus_plaid_trial as quota
 from finance_history_archive import archive_old, read_month, archive_key, purge_account
 from finance_account_management import (AccountAction, syncing, public_accounts, merge_profiles,
@@ -318,13 +318,27 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
     if len(rows) > 500:
         raise HTTPException(502, "Plaid account count is invalid.")
     accounts = [_account(item_id, name, row, now) for row in rows]
+    if not accounts and old.get("accounts"):
+        raise HTTPException(502, "Plaid returned no accounts. Existing data was preserved.")
     if len(set(a["key"] for a in accounts)) != len(accounts):
         raise HTTPException(502, "Plaid account identities are duplicated.")
     out = copy.deepcopy(old) if isinstance(old, dict) else {}
     previous = {a['key']: a.get('firstSeenAt',now) for a in out.get('accounts',[]) if isinstance(a,dict) and a.get('key')}
     for account in accounts:
         account['firstSeenAt'] = previous.get(account['key'],now)
-    out["accounts"] = accounts
+    newest_keys = {a["key"] for a in accounts}
+    omitted = [copy.deepcopy(a) for a in out.get("accounts", [])
+               if isinstance(a, dict) and a.get("key") not in newest_keys]
+    for stale in omitted:
+        stale["attentionKind"] = "connection"
+        stale["attentionReason"] = "Account missing from the latest bank update."
+        stale["missingFromLatest"] = True
+    out["missingAccountKeys"] = [a["key"] for a in omitted]
+    out["accounts"] = accounts + omitted
+    # Plaid only certifies when these values were observed by our adapter,
+    # not when the financial institution actually produced them. Persist
+    # additive snapshots with the same bounded compaction as SimpleFIN.
+    record_balances(out, accounts, now)
     if changes is None:
         out.setdefault("transactions", {})
         out.setdefault("cursor", "")
@@ -397,6 +411,7 @@ def _view(doc, ledger, uid):
                   if isinstance(row, dict) and row.get("owner") == uid and
                   ((not row.get("disconnectedAt") and not row.get("disconnectingAt")) or row.get("retainHistory"))}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
+            "balanceHistory": {},
             "financeAICache": doc.get("financeAICache", {}),
             "financeAILastSync": doc.get("financeAILastSync", {}),
             "merchantRules": doc.get("merchantRules", {}),
@@ -414,6 +429,9 @@ def _view(doc, ledger, uid):
             continue
         for account in public_accounts(doc, state.get("accounts", [])):
             key = account["key"]
+            history = state.get("balanceHistory", {}).get(key, [])
+            if isinstance(history, list):
+                view["balanceHistory"][key] = copy.deepcopy(history)
             view["accounts"].append({**{k: v for k, v in account.items() if k != "id"},
                                      "connectionHandle": connection_handle(uid, item_id),
                                      "transactionSyncStatus": state.get("transactionSyncStatus", "awaiting_first_sync"),
@@ -674,6 +692,7 @@ def sync_owner(uid):
         candidate = copy.deepcopy(doc)
         try:
             discovery_failed = False
+            history_failed = False
             for item_id, item in eligible_missing.items():
                 try:
                     raw = _provider("/accounts/get", item["access"])
@@ -694,7 +713,10 @@ def sync_owner(uid):
                         # Retain successful account discovery and clearly mark
                         # incomplete first-history coverage, never invent zero.
                         _sync_failure(state, now, exc.detail)
+                        history_failed = True
                 candidate["items"][item_id] = state
+                if state.get("missingAccountKeys"):
+                    history_failed = True
                 candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
             for item_id, item in due_items.items():
                 old = candidate["items"][item_id]
@@ -705,13 +727,16 @@ def sync_owner(uid):
                     raw = _provider("/accounts/get", item["access"])
                     candidate["items"][item_id] = _merge(
                         old, item_id, item["institution"], raw, delta, now)
+                    if candidate["items"][item_id].get("missingAccountKeys"):
+                        history_failed = True
                     candidate["lastSuccess"] = now
                 except HTTPException as exc:
                     _sync_failure(old, now, exc.detail)
+                    history_failed = True
             if eligible_missing:
                 candidate["lastAccountDiscovery"] = now
-            if discovery_failed:
-                candidate["error"] = "One or more linked banks need account discovery. Retry after the next provider window."
+            if discovery_failed or history_failed:
+                candidate["error"] = "One or more linked banks need an update. Retry after the next provider window."
             else:
                 candidate.pop("error", None)
         except HTTPException as exc:
@@ -737,6 +762,9 @@ def sync_owner(uid):
     candidate = copy.deepcopy(doc)
     try:
         monitored = set(candidate.get("monitored", []))
+        refreshed = False
+        failed = False
+        failed_account_keys = set()
         for item_id, item in known.items():
             old = candidate["items"].get(item_id, {})
             try:
@@ -745,14 +773,19 @@ def sync_owner(uid):
                     raise HTTPException(502, "This bank did not return its previously linked accounts.")
                 exposed = _merge(old, item_id, item["institution"], raw, None, now)
             except HTTPException as exc:
+                failed = True
                 # A single bank's account-discovery outage must not destroy
                 # saved transactions or prevent other Items from updating.
                 if old:
                     exposed = copy.deepcopy(old)
+                    failed_account_keys.update(a.get("key") for a in old.get("accounts", []) if a.get("key"))
                     _sync_failure(exposed, now, exc.detail)
                     candidate["items"][item_id] = exposed
                 continue
             discovered = {a["key"] for a in exposed["accounts"]}
+            if exposed.get("missingAccountKeys"):
+                failed = True
+            refreshed = True
             new_accounts = discovered - monitored
             monitored.update(discovered)
             candidate["monitored"] = sorted(monitored)
@@ -766,9 +799,11 @@ def sync_owner(uid):
                     changes = _sync_item(item["access"], old.get("cursor"))
                     exposed = _merge(old, item_id, item["institution"], raw, changes, now)
                 except HTTPException as exc:
+                    failed = True
                     # A temporarily unavailable Item must not roll back
                     # successfully synced unrelated banks or lose its cursor.
                     _sync_failure(exposed, now, exc.detail)
+                    failed_account_keys.update(a.get("key") for a in exposed.get("accounts", []) if a.get("key"))
             # Plaid returns an Item-wide delta, even when only one account is
             # selected. Discard unselected activity before encrypted persistence.
             exposed["transactions"] = {
@@ -780,12 +815,18 @@ def sync_owner(uid):
         # silently regain approval if the provider later reuses its identifier.
         current = _view(candidate, ledger, uid)["transactions"]
         for field in ("evidenceReviews", "transactionReviews"):
-            candidate[field] = {key: {raw: review for raw, review in rows.items()
-                if raw in current.get(key, {}) and review.get("fingerprint") ==
-                evidence_fingerprint(current[key][raw])}
-                for key, rows in candidate.get(field, {}).items() if key in current}
-        candidate["lastSuccess"] = now
-        candidate.pop("error", None)
+            candidate[field] = {key: (copy.deepcopy(rows) if key in failed_account_keys else
+                {raw: review for raw, review in rows.items()
+                 if raw in current.get(key, {}) and review.get("fingerprint") ==
+                 evidence_fingerprint(current[key][raw])})
+                for key, rows in candidate.get(field, {}).items()
+                if key in current or key in failed_account_keys}
+        if refreshed:
+            candidate["lastSuccess"] = now
+        if failed:
+            candidate["error"] = "Some linked banks need an update. Existing activity is preserved."
+        else:
+            candidate.pop("error", None)
     except HTTPException as exc:
         # Fail closed: no partial cursor or transaction import is acknowledged.
         candidate = doc
