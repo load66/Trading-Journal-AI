@@ -174,6 +174,7 @@ def _account(item_id, institution, row, now):
     return {"id": raw, "key": _account_key(item_id, raw),
             "name": clean(row.get("name") or "Financial account", 90),
             "bank": clean(institution, 100),
+            "mask": clean(row.get("mask"), 4) if isinstance(row.get("mask"), str) and row["mask"].isdigit() and len(row["mask"]) == 4 else None,
             "currency": clean(balance.get("iso_currency_code") or
                                balance.get("unofficial_currency_code"), 8),
             "balance": _money(balance.get("current")),
