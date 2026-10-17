@@ -1,0 +1,378 @@
+{
+  "version": 1,
+  "fixture": "synthetic Finance golden ledger October 2026",
+  "asOf": 1792134000,
+  "simplefin": {
+    "connected": true,
+    "lastSuccess": 1792134000,
+    "accounts": [
+      {
+        "key": "14d692a6a8de0799c2985207e52ee64cc914e7379f986fd2a600f9268dd9abe3",
+        "name": "Synthetic Checking",
+        "bank": "Synthetic Bank",
+        "currency": "USD",
+        "balance": "3800.00",
+        "accountType": "depository",
+        "accountSubtype": "checking",
+        "balanceDate": 1792133900
+      },
+      {
+        "key": "db92fe74abbe5a15ba5ffc1b16c166ed0ddc6a58b057d27910654021d58e29d7",
+        "name": "Synthetic Mortgage",
+        "bank": "Synthetic Servicer",
+        "currency": "USD",
+        "balance": "-240000.00",
+        "accountType": "loan",
+        "accountSubtype": "mortgage",
+        "balanceDate": 1790406000
+      },
+      {
+        "key": "d4fd9edd371a347bd69edb14c58ca571818247faac3e8769a028f1a4c74292ca",
+        "name": "Synthetic Unmonitored",
+        "bank": "Synthetic Bank",
+        "currency": "USD",
+        "balance": "900.00",
+        "accountType": "depository",
+        "accountSubtype": "checking",
+        "balanceDate": 1792133900
+      }
+    ],
+    "monitoredAccounts": [
+      "14d692a6a8de0799c2985207e52ee64cc914e7379f986fd2a600f9268dd9abe3",
+      "db92fe74abbe5a15ba5ffc1b16c166ed0ddc6a58b057d27910654021d58e29d7",
+      "d4fd9edd371a347bd69edb14c58ca571818247faac3e8769a028f1a4c74292ca"
+    ],
+    "accountProfiles": {
+      "14d692a6a8de0799c2985207e52ee64cc914e7379f986fd2a600f9268dd9abe3": {
+        "kind": "checking",
+        "balanceMode": "asset",
+        "includeSpending": true
+      },
+      "db92fe74abbe5a15ba5ffc1b16c166ed0ddc6a58b057d27910654021d58e29d7": {
+        "kind": "mortgage",
+        "balanceMode": "liability",
+        "includeSpending": false
+      },
+      "d4fd9edd371a347bd69edb14c58ca571818247faac3e8769a028f1a4c74292ca": {
+        "kind": "checking",
+        "balanceMode": "asset",
+        "includeSpending": true,
+        "syncEnabled": false
+      }
+    },
+    "transactions": {
+      "14d692a6a8de0799c2985207e52ee64cc914e7379f986fd2a600f9268dd9abe3": {
+        "pay1": {
+          "id": "pay1",
+          "amount": "2000.00",
+          "category": "income",
+          "categorySource": "user",
+          "posted": 1790856000,
+          "pending": false,
+          "description": "EXAMPLE PAYROLL",
+          "signals": []
+        },
+        "pay2": {
+          "id": "pay2",
+          "amount": "2000.00",
+          "category": "income",
+          "categorySource": "user",
+          "posted": 1792065600,
+          "pending": false,
+          "description": "EXAMPLE PAYROLL",
+          "signals": []
+        },
+        "mortgage": {
+          "id": "mortgage",
+          "amount": "-1500.00",
+          "category": "housing",
+          "categorySource": "user",
+          "posted": 1790942400,
+          "pending": false,
+          "description": "MR COOPER AUTOPAY",
+          "signals": []
+        },
+        "groceries": {
+          "id": "groceries",
+          "amount": "-150.25",
+          "category": "groceries",
+          "categorySource": "user",
+          "posted": 1791028800,
+          "pending": false,
+          "description": "Synthetic groceries",
+          "signals": []
+        },
+        "dining": {
+          "id": "dining",
+          "amount": "-45.75",
+          "category": "dining",
+          "categorySource": "user",
+          "posted": 1791115200,
+          "pending": false,
+          "description": "Synthetic dining",
+          "signals": []
+        },
+        "subscription": {
+          "id": "subscription",
+          "amount": "-12.00",
+          "category": "subscription",
+          "categorySource": "user",
+          "posted": 1791201600,
+          "pending": false,
+          "description": "Synthetic subscription",
+          "signals": []
+        },
+        "cardpay": {
+          "id": "cardpay",
+          "amount": "-500.00",
+          "category": "unreviewed",
+          "categorySource": "automatic",
+          "posted": 1791288000,
+          "pending": false,
+          "description": "Card payment",
+          "signals": []
+        },
+        "walletout": {
+          "id": "walletout",
+          "amount": "-1000.00",
+          "category": "unreviewed",
+          "categorySource": "automatic",
+          "posted": 1791374400,
+          "pending": false,
+          "description": "Transfer to wallet",
+          "signals": [
+            "possible_transfer"
+          ]
+        },
+        "refund": {
+          "id": "refund",
+          "amount": "25.15",
+          "category": "refund",
+          "categorySource": "user",
+          "posted": 1791547200,
+          "pending": false,
+          "description": "Synthetic refund",
+          "signals": []
+        },
+        "verify1": {
+          "id": "verify1",
+          "amount": "0.01",
+          "category": "verification",
+          "categorySource": "user",
+          "posted": 1791547200,
+          "pending": false,
+          "description": "Synthetic verify1",
+          "signals": []
+        },
+        "verify2": {
+          "id": "verify2",
+          "amount": "-0.01",
+          "category": "verification",
+          "categorySource": "user",
+          "posted": 1791547200,
+          "pending": false,
+          "description": "Synthetic verify2",
+          "signals": []
+        },
+        "pendingOld": {
+          "id": "pendingOld",
+          "amount": "-7.31",
+          "category": "shopping",
+          "categorySource": "user",
+          "posted": 1791633600,
+          "pending": true,
+          "description": "Synthetic pendingOld",
+          "signals": []
+        },
+        "postedNew": {
+          "id": "postedNew",
+          "amount": "-7.31",
+          "category": "shopping",
+          "categorySource": "user",
+          "posted": 1791720000,
+          "pending": false,
+          "description": "Synthetic postedNew",
+          "signals": []
+        },
+        "edited": {
+          "id": "edited",
+          "amount": "-22.89",
+          "category": "entertainment",
+          "categorySource": "user",
+          "posted": 1791806400,
+          "pending": false,
+          "description": "Synthetic edited",
+          "signals": [],
+          "revisions": [
+            {
+              "amount": "-20.00"
+            }
+          ]
+        },
+        "repeat": {
+          "id": "repeat",
+          "amount": "-0.00",
+          "category": "unreviewed",
+          "categorySource": "user",
+          "posted": 1791892800,
+          "pending": false,
+          "description": "Synthetic repeat",
+          "signals": []
+        },
+        "ambigOut1": {
+          "id": "ambigOut1",
+          "amount": "-333.00",
+          "category": "transfer",
+          "categorySource": "user",
+          "posted": 1791892800,
+          "pending": false,
+          "description": "Synthetic ambigOut1",
+          "signals": []
+        },
+        "ambigOut2": {
+          "id": "ambigOut2",
+          "amount": "-333.00",
+          "category": "transfer",
+          "categorySource": "user",
+          "posted": 1791892800,
+          "pending": false,
+          "description": "Synthetic ambigOut2",
+          "signals": []
+        }
+      },
+      "db92fe74abbe5a15ba5ffc1b16c166ed0ddc6a58b057d27910654021d58e29d7": {},
+      "d4fd9edd371a347bd69edb14c58ca571818247faac3e8769a028f1a4c74292ca": {
+        "off": {
+          "id": "off",
+          "amount": "9999.00",
+          "category": "income",
+          "categorySource": "user",
+          "posted": 1791028800,
+          "pending": false,
+          "description": "Synthetic off",
+          "signals": []
+        }
+      }
+    },
+    "balanceHistory": {
+      "14d692a6a8de0799c2985207e52ee64cc914e7379f986fd2a600f9268dd9abe3": [
+        {
+          "at": 1792133900,
+          "observedAt": 1792133900,
+          "balance": "3800.00",
+          "currency": "USD"
+        }
+      ],
+      "db92fe74abbe5a15ba5ffc1b16c166ed0ddc6a58b057d27910654021d58e29d7": [
+        {
+          "at": 1790406000,
+          "observedAt": 1792133900,
+          "balance": "-240000.00",
+          "currency": "USD"
+        }
+      ]
+    }
+  },
+  "plaid": {
+    "connected": true,
+    "lastSuccess": 1792134000,
+    "accounts": [
+      {
+        "key": "46d6d9ac81f9bf7af2d5ee1fb4e4629f0758721f40fd25f4c314710ce3d249ca",
+        "name": "Synthetic Wallet",
+        "bank": "Synthetic Wallet",
+        "currency": "USD",
+        "balance": "1200.00",
+        "accountType": "depository",
+        "accountSubtype": "checking",
+        "balanceDate": null,
+        "observedAt": 1792133900,
+        "historyComplete": true
+      },
+      {
+        "key": "e5ba13de660a62085984cc630232945e874c1f75c7d60ad6798f44eb2bdb06e2",
+        "name": "Synthetic Credit Card",
+        "bank": "Synthetic Card",
+        "currency": "USD",
+        "balance": "500.00",
+        "accountType": "credit",
+        "accountSubtype": "credit_card",
+        "balanceDate": null,
+        "observedAt": 1792133900,
+        "historyComplete": true
+      }
+    ],
+    "monitoredAccounts": [
+      "46d6d9ac81f9bf7af2d5ee1fb4e4629f0758721f40fd25f4c314710ce3d249ca",
+      "e5ba13de660a62085984cc630232945e874c1f75c7d60ad6798f44eb2bdb06e2"
+    ],
+    "accountProfiles": {
+      "46d6d9ac81f9bf7af2d5ee1fb4e4629f0758721f40fd25f4c314710ce3d249ca": {
+        "kind": "checking",
+        "balanceMode": "asset",
+        "includeSpending": true
+      },
+      "e5ba13de660a62085984cc630232945e874c1f75c7d60ad6798f44eb2bdb06e2": {
+        "kind": "credit_card",
+        "balanceMode": "liability",
+        "includeSpending": true
+      }
+    },
+    "transactions": {
+      "46d6d9ac81f9bf7af2d5ee1fb4e4629f0758721f40fd25f4c314710ce3d249ca": {
+        "walletin": {
+          "id": "walletin",
+          "amount": "1000.00",
+          "category": "unreviewed",
+          "categorySource": "automatic",
+          "posted": 1791460800,
+          "pending": false,
+          "description": "Payment",
+          "signals": [
+            "possible_transfer"
+          ]
+        },
+        "ambigIn": {
+          "id": "ambigIn",
+          "amount": "333.00",
+          "category": "transfer",
+          "categorySource": "user",
+          "posted": 1791892800,
+          "pending": false,
+          "description": "Synthetic ambigIn",
+          "signals": []
+        }
+      },
+      "e5ba13de660a62085984cc630232945e874c1f75c7d60ad6798f44eb2bdb06e2": {
+        "cardcredit": {
+          "id": "cardcredit",
+          "amount": "500.00",
+          "category": "unreviewed",
+          "categorySource": "automatic",
+          "posted": 1791288000,
+          "pending": false,
+          "description": "Credit card payment",
+          "signals": []
+        }
+      }
+    },
+    "balanceHistory": {
+      "46d6d9ac81f9bf7af2d5ee1fb4e4629f0758721f40fd25f4c314710ce3d249ca": [
+        {
+          "at": 1792133900,
+          "observedAt": 1792133900,
+          "balance": "1200.00",
+          "currency": "USD"
+        }
+      ],
+      "e5ba13de660a62085984cc630232945e874c1f75c7d60ad6798f44eb2bdb06e2": [
+        {
+          "at": 1792133900,
+          "observedAt": 1792133900,
+          "balance": "500.00",
+          "currency": "USD"
+        }
+      ]
+    }
+  }
+}
