@@ -164,3 +164,17 @@ def test_all_simplefin_requests_share_24_per_day_budget(bank,monkeypatch):
     result=sf.sync('alice')
     assert result['status']=='attention'
     assert 'Daily bank refresh limit' in result['error']
+
+
+def test_resumed_plaid_account_backfills_existing_item_without_resetting_budget():
+    doc={'items':{'one':{'accounts':[{'key':'a'}],'cursor':'old',
+                          'nextTransactionSyncAt':NOW+3600,
+                          'transactionUpdateStatus':'HISTORICAL_UPDATE_COMPLETE'},
+                  'sibling':{'accounts':[{'key':'b'}],'cursor':'untouched','nextTransactionSyncAt':NOW+86400}}}
+    sibling=copy.deepcopy(doc['items']['sibling'])
+    pa._resume_accounts(doc,{'a'})
+    assert doc['items']['one']['cursor']==''
+    assert doc['items']['one']['nextTransactionSyncAt']==NOW+3600
+    assert doc['items']['one']['transactionSyncStatus']=='history_still_loading'
+    assert 'transactionUpdateStatus' not in doc['items']['one']
+    assert doc['items']['sibling']==sibling

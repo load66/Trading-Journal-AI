@@ -455,6 +455,10 @@ def profiles(body: AccountProfilesBody, request: Request):
     if not set(body.profiles).issubset({a["key"] for a in view["accounts"]}):
         raise HTTPException(400, "Choose only your discovered Plaid accounts.")
     new_profiles = {key: value.model_dump(exclude_none=True) for key, value in body.profiles.items()}
+    resumed = {key for key, profile in new_profiles.items()
+               if profile.get('syncEnabled') is True and
+               doc.get('accountProfiles', {}).get(key, {}).get('syncEnabled') is False}
+    _resume_accounts(doc, resumed)
     doc["accountProfiles"] = merge_profiles(doc.get("accountProfiles", {}), new_profiles)
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
@@ -799,9 +803,24 @@ def _preserve_excluded(candidate, previous):
 @router.post('/accounts/account-action', dependencies=[Depends(_private)])
 def manage_account(body: AccountAction, request: Request):
     uid, ledger, doc, etag, view = _editable(request)
+    was_removed = bool(doc.get('accountExclusions', {}).get(body.account, {}).get('removedAt'))
     result = account_action(doc, view['accounts'], body)
+    if body.action == 'restore' and was_removed:
+        _resume_accounts(doc, {body.account})
     if result.get('delete'):
         purge_account(store(), cipher(), 'plaid', uid, doc.get('historyMonths', []), body.account)
         purge_history(doc, body.account)
     _write(uid, doc, etag)
     return {**_public(doc, ledger, uid), 'accountAction': result}
+
+
+def _resume_accounts(doc, keys):
+    """Resume an existing Item without losing rows skipped while an account was paused.
+
+    Reset only its cursor; keep the already-reserved provider deadline and Trial ledger.
+    """
+    for state in doc.get('items', {}).values():
+        if any(a['key'] in keys for a in state.get('accounts', [])):
+            state['cursor'] = ''
+            state['transactionSyncStatus'] = 'history_still_loading'
+            state.pop('transactionUpdateStatus', None)
