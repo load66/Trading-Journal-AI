@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from botocore.exceptions import ClientError
 from bonus_backups import owner, store
 from finance_category_rules import category_for, micro_deposit_refs
+from finance_income_rules import annotate_paychecks
 from finance_ai_categories import classify_unknown, cache_key
 from finance_history_archive import archive_old, read_month, HOT_DAYS, purge_account
 from finance_account_management import (AccountAction, institution_handle, syncing, public_accounts,
@@ -481,6 +482,10 @@ def enrich_transactions(state, result):
             row.update(category='transfer', confidence='high')
             row['signals'] = sorted(set(row['signals'] + ['matched_internal_transfer']))
 
+    # Employer recurrence is inferred from presentation rows only. Money movements
+    # are paired first and are never counted as paychecks.
+    annotate_paychecks([row for _account, _raw, row in records])
+
     # Detect classic two-small-deposit account verification patterns. Keep raw
     # rows and review receipts untouched, and never override a user's correction.
     micro = micro_deposit_refs([
@@ -629,7 +634,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.82')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.83')
     return out
 
 
