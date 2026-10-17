@@ -99,7 +99,7 @@ def test_invalid_amount_is_skipped_and_valid_rows_are_retained(setup,monkeypatch
         txn(ident='bad',amount='NaN'),txn(ident='good',amount='2.00',description='Coffee shop')])))
     result=b.sync('owner')
     k=b.account_key(account())
-    assert result['status']=='attention'
+    assert result['status']=='connected'
     assert len(result['transactions'][k]) == 1
     assert 'invalid transaction' in result['warnings'][0]
     assert b.read_state('owner')[0]['transactions'][k]['good']['amount']=='2.00'
@@ -221,7 +221,9 @@ def test_network_never_follows_redirects_or_sends_credentials_in_url(setup,monke
     assert called[0][1]['auth']==('synthetic','secret')
     assert ('account','a') in called[0][1]['params']
     assert ('pending','1') in called[0][1]['params']
-    assert int(dict(called[0][1]['params'])['start-date']) == NOW-90*b.DAY
+    assert int(dict(called[0][1]['params'])['start-date']) == NOW-89*b.DAY
+    assert int(dict(called[0][1]['params'])['end-date']) == NOW
+    assert int(dict(called[0][1]['params'])['end-date'])-int(dict(called[0][1]['params'])['start-date']) <= 89*b.DAY
 
 
 def test_private_routes_disable_caching(setup,monkeypatch):
@@ -814,3 +816,68 @@ def test_saved_automatic_old_subscription_reclassified_without_mutating_ledger()
     assert row['category']=='transfer'
     assert 'investment_transfer' in row['signals']
     assert s['transactions'][a]['old']==before
+
+def test_date_window_is_bounded_for_discovery_and_activity(setup, monkeypatch):
+    requests=[]
+    def fake_network(*args,**kwargs):
+        request_params=dict(kwargs['params'])
+        requests.append(request_params)
+        return json.dumps(data(account())).encode()
+    monkeypatch.setattr(b,'network',fake_network)
+    b.get_data(ACCESS, balances=True)
+    b.get_data(ACCESS,[{'id':'a'}])
+    for params in requests:
+        assert int(params['end-date'])==NOW
+        assert int(params['start-date'])==NOW-89*b.DAY
+        assert 0<int(params['end-date'])-int(params['start-date'])<=90*b.DAY
+
+
+def test_capped_notice_is_not_attention_and_old_warning_clears(setup):
+    initial=seed()
+    initial['warnings']=['Requested date range exceeds limit of 90 days and was capped.']
+    initial['status']='attention'
+    initial['error']='Old connection timeout'
+    k=b.account_key(account())
+    initial['monitoredAccounts']=[k]
+    payload=data(account(transactions=[txn('fresh','-4.00','Coffee Shop')]))
+    payload['errlist']=[{'conn_id':'one','msg':'Requested date range exceeds limit of 90 days and was capped.'}]
+    merged=b.merge(copy.deepcopy(initial),payload,NOW)
+    assert merged['status']=='attention'  # old error until successful request clears it
+    assert merged['warnings']==[]
+    assert len(merged['notices'])==1
+    assert merged['institutionIssues']=={}
+    merged.pop('error',None)
+    b.set_provider_status(merged)
+    assert merged['status']=='connected'
+    assert 'attentionKind' not in b.public_state(merged)['accounts'][0]
+    assert 'fresh' in merged['transactions'][k]
+
+
+def test_per_bank_login_issue_does_not_flag_other_institution(setup):
+    other=account(conn='two',ident='b')
+    initial=seed()
+    initial['accounts']=b.normalize_accounts({
+        'accounts':[account(),other],
+        'connections':[{'conn_id':'one','name':'Chase'},{'conn_id':'two','name':'Robinhood'}]})
+    initial['monitoredAccounts']=[a['key'] for a in initial['accounts']]
+    payload={'accounts':[account(),other],
+             'connections':[{'conn_id':'one','name':'Chase'},{'conn_id':'two','name':'Robinhood'}],
+             'errlist':[{'conn_id':'one','msg':'Chase bank login required'}]}
+    merged=b.merge(initial,payload,NOW)
+    result=b.public_state(merged)
+    assert result['status']=='attention'
+    bank_map={row['bank']:row for row in result['accounts']}
+    assert bank_map['Chase']['attentionKind']=='bank_login'
+    assert bank_map['Chase']['attentionReason']=='Chase bank login required'
+    assert 'attentionKind' not in bank_map['Robinhood']
+    assert len(merged['institutionIssues'])==1
+    assert b.warning_details({
+      'connections':payload['connections'],
+      'errlist':[{'conn_id':'two','msg':'SimpleFIN access rejected'}]})[2]['two']['kind']=='rejected'
+
+
+def test_unattributed_notice_does_not_flag_every_bank(setup):
+    payload={'connections':[{'conn_id':'one','name':'Chase'},{'conn_id':'two','name':'Robinhood'}],
+             'errlist':[{'msg':'Bank login required, please sign in.'}]}
+    notices,warnings,issues=b.warning_details(payload)
+    assert warnings and issues=={} and notices==[]
