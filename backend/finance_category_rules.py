@@ -129,13 +129,13 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'verification','high',[]
     if pending:
         return 'unreviewed','low',[]
+    financial = movement(text, number)
+    if financial:
+        return financial
     if kind == 'possible_bonus':
         return 'bonus','high',['possible_bonus']
     if kind == 'possible_reversal':
         return 'unreviewed','high',['possible_reversal']
-    financial = movement(text, number)
-    if financial:
-        return financial
     if number > 0 and REFUND.search(text):
         return 'refund','high',['possible_refund']
     if number > 0 and PAYROLL.search(text):
