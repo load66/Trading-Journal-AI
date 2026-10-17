@@ -414,12 +414,19 @@ def enrich_transactions(state, result):
             ref = public_ref(account, raw_id)
             row['id'] = ref
             category, confidence, signals = automatic_category(row)
+            plaidCategory = row.get('plaidSuggestedCategory')
+            if (plaidCategory in TRANSACTION_CATEGORIES and row.get('kind') not in ('possible_bonus','possible_reversal')
+                    and category not in ('transfer','verification','bonus','refund') and not row.get('pending')
+                    and not ('possible_transfer' in signals)):
+                category, confidence = plaidCategory, ('high' if row.get('plaidConfidence') in ('VERY_HIGH','HIGH') else 'medium')
+                signals = sorted(set(signals + (row.get('plaidCategorySignals') or [])))
+                row['categorySource'] = 'plaid'
             review = reviews.get(account, {}).get(raw_id)
             if isinstance(review, dict) and review.get('category') in TRANSACTION_CATEGORIES:
                 category, confidence = review['category'], 'confirmed'
                 row['categorySource'] = 'user'
             else:
-                row['categorySource'] = 'automatic'
+                row.setdefault('categorySource','automatic')
                 learned = state.get('merchantRules', {}).get(cache_key(row.get('description', '')))
                 if isinstance(learned, dict) and learned.get('category') in TRANSACTION_CATEGORIES:
                     category, confidence = learned['category'], 'confirmed'
@@ -434,7 +441,7 @@ def enrich_transactions(state, result):
                             row['categorySource'] = 'ai'
                             row['confidenceScore'] = suggestion.get('confidenceScore')
             row.update(category=category, confidence=confidence, signals=signals,
-                       merchant=merchant_name(row.get('description', '')),
+                       merchant=clean(row.get('merchantName'),100) or merchant_name(row.get('description', '')),
                        stalePending=bool(row.get('pending') and row.get('lastObservedAt', 0) < int(time.time()) - 7 * DAY))
             public_rows[ref] = row
             records.append((account, raw_id, row))
