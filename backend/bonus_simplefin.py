@@ -33,7 +33,7 @@ HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
 ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card', 'brokerage',
                            'retirement', 'loan', 'mortgage', 'other_asset', 'other_liability'))
 BALANCE_MODES = frozenset(('exclude', 'asset', 'liability'))
-TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilities', 'groceries',
+TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'loan', 'utilities', 'groceries',
                                     'dining', 'transportation', 'shopping', 'health', 'entertainment',
                                     'fees', 'taxes', 'travel', 'subscription', 'transfer', 'refund',
                                     'bonus', 'verification', 'other'))
@@ -320,6 +320,7 @@ def automatic_category(row):
         ('shopping', r'amazon|ebay|best buy|etsy|home depot|lowe.s'),
         ('subscription', r'netflix|spotify|youtube premium|hulu|disney plus|apple.com/bill'),
         ('housing', r'mortgage|rent payment|home loan'),
+        ('loan', r'auto loan|student loan|loan pmt|loan payment|personal loan'),
         ('dining', r'restaurant|cafe|coffee|doordash|ubereats|grubhub'),
         ('transportation', r'fuel|gas station|uber|lyft|parking|toll'),
         ('utilities', r'electric|water utility|internet|wireless|phone bill'),
