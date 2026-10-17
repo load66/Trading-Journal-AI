@@ -52,9 +52,12 @@ def test_429_and_bad_reply_leave_activity_unmodified(monkeypatch):
     assert classify_unknown(s,post=lambda *_a,**_kw:Reply({"items":[
         {"i":0,"category":"transfer","confidence":"high"}]}),now=1792134000)==0
     assert s["financeAICache"]=={}
+    # Two further failed attempts exhaust the conservative four-call daily cap.
+    for _ in range(2):
+        assert classify_unknown(s,post=lambda *_a,**_kw:Reply({},429),now=1792134000)==0
     attempts=[]
     assert classify_unknown(s,post=lambda *_a,**_kw:attempts.append(True),now=1792134000)==0
-    assert not attempts, "Two requests per UTC day, including failures"
+    assert not attempts, "Four requests per UTC day, including failures"
 
 
 def test_no_key_never_calls_provider(monkeypatch):
@@ -77,3 +80,19 @@ def test_ambiguous_ai_subscription_requires_high_confidence(monkeypatch):
     assert classify_unknown(s,post=lambda *_a,**_k:r,now=1792134000)==0
     assert s["financeAILastSync"]=={"attempted":1,"categorized":0,"failed":1,"at":1792134000}
     assert not s["financeAICache"]
+
+def test_groq_can_classify_sixty_five_distinct_synthetic_descriptions_in_a_day(monkeypatch):
+    monkeypatch.setenv('GROQ_API_KEY','synthetic-only')
+    s={'transactions':{'synthetic':{
+      't'+str(i):{'amount':'-17.52','description':'Unfamiliar Cafe '+chr(65+i//26)+chr(65+i%26),
+        'posted':1792134000,'pending':False,'kind':'withdrawal'} for i in range(65)}}}
+    calls=[]
+    def mock_post(_url,**kwargs):
+        items=json.loads(kwargs['json']['messages'][1]['content'])['items']
+        calls.append(len(items))
+        return Reply({'items':[{'i':entry['i'],'category':'dining','confidence':0.94} for entry in items]})
+    assert classify_unknown(s,post=mock_post,now=1792134000)==65
+    assert calls==[25,25,15]
+    assert s['financeAILastSync']['attempted']==65
+    assert s['financeAILastSync']['categorized']==65
+    assert s['financeAILastSync']['failed']==0

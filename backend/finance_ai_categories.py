@@ -18,8 +18,8 @@ from finance_category_rules import CATEGORIES, category_for
 
 MODEL_DEFAULT = "openai/gpt-oss-120b"
 CATEGORIES_AI = CATEGORIES - frozenset(("unreviewed", "bonus"))
-MAX_DAILY_REQUESTS = 2
-MAX_BATCH = 50
+MAX_DAILY_REQUESTS = 4
+MAX_BATCH = 25
 MAX_CACHE = 10000
 URI = "https://api.groq.com/openai/v1/chat/completions"
 LOGGER = logging.getLogger(__name__)
@@ -91,8 +91,9 @@ def classify_unknown(state, *, post=httpx.post, now=None):
     cache = state.setdefault("financeAICache", {})
     if not isinstance(cache, dict) or len(cache) >= MAX_CACHE:
         return 0
-    remaining = min(MAX_DAILY_REQUESTS - int(usage.get("calls", 0)), 2)
+    remaining = min(MAX_DAILY_REQUESTS - int(usage.get("calls", 0)), 4)
     if remaining <= 0:
+        LOGGER.info("finance_ai attempted=0 categorized=0 failed=0")
         return 0
     unique = {}
     for row in candidates(state):
@@ -115,6 +116,7 @@ def classify_unknown(state, *, post=httpx.post, now=None):
         if len(unique) >= MAX_BATCH * remaining:
             break
     if not unique:
+        LOGGER.info("finance_ai attempted=0 categorized=0 failed=0")
         return 0
     model = os.getenv("FINANCE_CATEGORY_MODEL") or os.getenv("GROQ_MODEL") or MODEL_DEFAULT
     total = 0
@@ -129,7 +131,7 @@ def classify_unknown(state, *, post=httpx.post, now=None):
         try:
             response = post(URI, timeout=20, headers={"Authorization": "Bearer " + key},
                             json={
-                                "model": model, "temperature": 0, "max_completion_tokens": 1200,
+                                "model": model, "temperature": 0, "max_completion_tokens": 2400,
                                 "response_format": {"type": "json_object"},
                                 "messages": [
                                     {"role": "system", "content": SYSTEM},
