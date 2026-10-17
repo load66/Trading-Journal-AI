@@ -732,3 +732,13 @@ def test_simplefin_empty_or_malformed_response_does_not_hide_pending(setup):
     b.merge(s,data(account(transactions=[bad])),NOW+2)
     assert len(b.public_state(s)['transactions'][k])==1
     assert 'pendingClearedAt' not in s['transactions'][k]['pending']
+
+
+def test_loan_category_matches_frontend_and_accepts_user_corrections():
+    assert 'loan' in b.TRANSACTION_CATEGORIES
+    loan=b.automatic_category({'pending':False,'amount':'-250.00',
+                              'description':'AUTO LOAN PAYMENT','kind':'withdrawal'})
+    mortgage=b.automatic_category({'pending':False,'amount':'-1350.00',
+                                  'description':'Mortgage payment','kind':'withdrawal'})
+    assert loan[0]=='loan'
+    assert mortgage[0]=='housing'
