@@ -6,6 +6,7 @@ Call this during an authenticated provider sync, NEVER during a public GET.
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,7 @@ MAX_DAILY_REQUESTS = 2
 MAX_BATCH = 50
 MAX_CACHE = 10000
 URI = "https://api.groq.com/openai/v1/chat/completions"
+LOGGER = logging.getLogger(__name__)
 SYSTEM = (
     "Categorize these synthetic-shape banking descriptions conservatively. "
     "Return one JSON object with an items array of objects with i (integer), "
@@ -75,10 +77,13 @@ def candidates(state):
 
 def classify_unknown(state, *, post=httpx.post, now=None):
     """Add suggestions only. Network errors fail open to Uncategorized, no retries."""
+    now = int(time.time()) if now is None else int(now)
+    stats = {"attempted":0,"categorized":0,"failed":0}
+    state["financeAILastSync"] = {**stats,"at":now}
     key = os.getenv("GROQ_API_KEY", "").strip()
     if not key:
+        LOGGER.info("finance_ai attempted=0 categorized=0 failed=0")
         return 0
-    now = int(time.time()) if now is None else int(now)
     today = time.strftime("%Y-%m-%d", time.gmtime(now))
     usage = state.setdefault("financeAIUsage", {})
     if usage.get("day") != today:
@@ -120,6 +125,7 @@ def classify_unknown(state, *, post=httpx.post, now=None):
         batch = items[offset:offset + MAX_BATCH]
         request = [{**payload, "i": i} for i, (_, payload) in enumerate(batch)]
         usage["calls"] += 1
+        stats["attempted"] += len(batch)
         try:
             response = post(URI, timeout=20, headers={"Authorization": "Bearer " + key},
                             json={
@@ -131,18 +137,23 @@ def classify_unknown(state, *, post=httpx.post, now=None):
                                 ]
                             })
             if response.status_code == 429:
+                stats["failed"] += len(batch)
                 break
             if response.status_code != 200:
+                stats["failed"] += len(batch)
                 continue
             response_json = response.json()
             choice = response_json["choices"][0]
             if choice.get("finish_reason") != "stop":
+                stats["failed"] += len(batch)
                 continue
             parsed = json.loads(choice["message"]["content"])
             if not isinstance(parsed, dict) or set(parsed) != {"items"}:
+                stats["failed"] += len(batch)
                 continue
             predicted = parsed.get("items")
             if not isinstance(predicted, list) or len(predicted) > len(batch):
+                stats["failed"] += len(batch)
                 continue
             seen = set()
             validated = {}
@@ -158,12 +169,18 @@ def classify_unknown(state, *, post=httpx.post, now=None):
                     validated = {}
                     break
                 seen.add(index)
-                if confidence >= 0.7:
+                if confidence >= (0.90 if category == "subscription" else 0.7):
                     validated[batch[index][0]] = {"category": category, "confidenceScore": round(confidence, 2)}
             for hashed, result in validated.items():
                 if len(cache) < MAX_CACHE:
                     cache.setdefault(hashed, result)
                     total += 1
+            stats["categorized"] += len(validated)
+            stats["failed"] += len(batch) - len(validated)
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+            stats["failed"] += len(batch)
             continue
+    state["financeAILastSync"] = {**stats,"at":now}
+    LOGGER.info("finance_ai attempted=%d categorized=%d failed=%d",
+                stats["attempted"],stats["categorized"],stats["failed"])
     return total

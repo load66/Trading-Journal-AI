@@ -336,6 +336,7 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
         _account_key(item_id, raw): count for raw, count in malformed.items() if raw != "unknown"
     }
     out["unassignedInvalidTransactions"] = malformed.get("unknown", 0)
+    out.setdefault("firstTransactionAttemptAt", now)
     out["lastTransactionAttemptAt"] = now
     out["lastTransactionSyncAt"] = now
     out.pop("transactionSyncError", None)
@@ -351,7 +352,8 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
         out["transactionRetryAttempts"] = 0 if out.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE" else out.get("transactionRetryAttempts", 0)
         out["nextTransactionSyncAt"] = now + DAY
         out["transactionSyncStatus"] = (
-            "ready" if any(not x.get("pending") for x in out["transactions"].values())
+            "ready" if out.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE"
+            else "ready" if any(not x.get("pending") for x in out["transactions"].values())
             else "pending_only" if out["transactions"] else "awaiting_provider_data")
         if out.get("transactionUpdateStatus") in ("NOT_READY", "INITIAL_UPDATE_COMPLETE"):
             out["transactionSyncStatus"] = "history_still_loading"
@@ -384,7 +386,8 @@ def _view(doc, ledger, uid):
                                      "transactionSyncStatus": state.get("transactionSyncStatus", "awaiting_first_sync"),
                                      "transactionUpdateStatus": state.get("transactionUpdateStatus"),
                                      "invalidTransactionRows": state.get("invalidTransactionsByAccount", {}).get(key, 0),
-                                     "historyComplete": (state.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE" and any(not tx.get("pending") for tx in state.get("transactions", {}).values())),
+                                     "historyComplete": (state.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE"),
+                                     "transactionFirstSyncAt": state.get("firstTransactionAttemptAt"),
                                      "transactionLastSyncAt": state.get("lastTransactionSyncAt"),
                                      "transactionNextSyncAt": state.get("nextTransactionSyncAt", doc.get("nextSyncAt")),
                                      "transactionSyncError": state.get("transactionSyncError"),

@@ -68,3 +68,12 @@ def test_description_is_redacted_and_bounded():
     assert "customer@example" not in sanitized_description("Transfer customer@example.com 1234567")
     assert "1234567" not in sanitized_description("Transfer 1234567")
     assert len(sanitized_description("words "*100))<=96
+
+
+def test_ambiguous_ai_subscription_requires_high_confidence(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY","synthetic-only")
+    s=state()
+    r=Reply({"items":[{"i":0,"category":"subscription","confidence":0.83}]})
+    assert classify_unknown(s,post=lambda *_a,**_k:r,now=1792134000)==0
+    assert s["financeAILastSync"]=={"attempted":1,"categorized":0,"failed":1,"at":1792134000}
+    assert not s["financeAICache"]

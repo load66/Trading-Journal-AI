@@ -367,7 +367,8 @@ def test_high_confidence_internal_transfer_and_recurring_detection(setup):
     lkey, rkey, skey = [a['key'] for a in s['accounts']]
     assert public['transactions'][lkey][b.public_ref(lkey,'out')]['confidence'] == 'high'
     assert 'matched_internal_transfer' in public['transactions'][rkey][b.public_ref(rkey,'in')]['signals']
-    assert public['transactions'][skey][b.public_ref(skey,'m1')]['category'] == 'subscription'
+    assert public['transactions'][skey][b.public_ref(skey,'m1')]['category'] == 'unreviewed'
+    assert 'possible_recurring' in public['transactions'][skey][b.public_ref(skey,'m1')]['signals']
 
 
 def test_ambiguous_same_amount_transfer_remains_unconfirmed(setup):
@@ -745,3 +746,31 @@ def test_user_learned_category_precedence_over_automatic_matching(setup):
 ])
 def test_generic_merchant_title_keeps_original_bank_description(bank_description):
     assert b.merchant_name(bank_description) == bank_description
+
+
+def test_monthly_card_and_transfer_debits_do_not_become_subscriptions():
+    account="a"*64
+    s=b.empty_state()
+    s["transactions"]={account:{
+        "card1":{"id":"card1","description":"Capital One CRCARDPMT","amount":"-200.00","posted":NOW-35*b.DAY,"pending":False,"kind":"withdrawal"},
+        "card2":{"id":"card2","description":"Capital One CRCARDPMT","amount":"-200.00","posted":NOW-5*b.DAY,"pending":False,"kind":"withdrawal"},
+        "move1":{"id":"move1","description":"External account transfer","amount":"-1000.00","posted":NOW-35*b.DAY,"pending":False,"kind":"withdrawal"},
+        "move2":{"id":"move2","description":"External account transfer","amount":"-1000.00","posted":NOW-5*b.DAY,"pending":False,"kind":"withdrawal"}
+    }}
+    result={}
+    b.enrich_transactions(s,result)
+    rows=list(result["transactions"][account].values())
+    assert all(row["category"]=="transfer" for row in rows)
+    assert all("possible_recurring" in row["signals"] for row in rows)
+    s["transactionReviews"]={account:{"card1":{"category":"subscription"}}}
+    result={}
+    b.enrich_transactions(s,result)
+    assert next(row for row in result["transactions"][account].values() if row["description"]=="Capital One CRCARDPMT" and row["posted"]==NOW-35*b.DAY)["category"]=="subscription"
+
+
+def test_simplefin_preserves_brokerage_type_metadata():
+    raw={"accounts":[{"id":"acct1","conn_id":"conn1","name":"Robinhood individual",
+                       "type":"investment","subtype":"individual","balance":"100","currency":"USD"}]}
+    found=b.normalize_accounts(raw)
+    assert found[0]["accountType"]=="investment"
+    assert found[0]["accountSubtype"]=="individual"
