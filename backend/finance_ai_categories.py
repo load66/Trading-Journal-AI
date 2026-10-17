@@ -33,10 +33,10 @@ SYSTEM = (
 
 def sanitized_description(value):
     text = str(value or "")[:350]
-    text = re.sub(r"https?://\\S+|\\S+@\\S+", " ", text)
-    text = re.sub(r"(?<!\\w)\\d{3,}(?!\\w)", " ", text)
-    text = re.sub(r"\\b\\d{1,2}[/.-]\\d{1,2}(?:[/.-]\\d{2,4})?\\b", " ", text)
-    text = re.sub(r"\\s+", " ", text).strip()
+    text = re.sub(r"https?://\S+|\S+@\S+", " ", text)
+    text = re.sub(r"(?<!\w)\d{3,}(?!\w)", " ", text)
+    text = re.sub(r"\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     return text[:96]
 
 
@@ -91,7 +91,7 @@ def classify_unknown(state, *, post=httpx.post, now=None):
         return 0
     unique = {}
     for row in candidates(state):
-        if not isinstance(row, dict) or row.get("pending"):
+        if not isinstance(row, dict) or row.get("pending") or row.get("kind") == "possible_reversal":
             continue
         if category_for(row.get("description"), row.get("amount"), pending=False,
                         kind=row.get("kind"))[0] != "unreviewed":
