@@ -381,7 +381,10 @@ def enrich_transactions(state, result):
     for account, raw_id, row in records:
         if (row.get('pending') or row.get('categorySource') in ('user', 'user_rule')
                 or Decimal(row['amount']) == 0
-                or row.get('kind') in ('possible_bonus', 'possible_reversal')):
+                or row.get('kind') in ('possible_bonus', 'possible_reversal')
+                or (Decimal(row['amount']) > 0 and row.get('category') in ('income','bonus')
+                    and re.search(r'\b(?:payroll|salary|wages|employer|bonus|dividend|interest)\b',
+                                  row.get('description', ''), re.I))):
             continue
         eligible.append((account, raw_id, row))
     counterpart = {i: [] for i in range(len(eligible))}
