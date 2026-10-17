@@ -516,7 +516,7 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
         out["transactionSyncStatus"] = "history_still_loading"
     else:
         out["transactionRetryAttempts"] = 0 if out.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE" else out.get("transactionRetryAttempts", 0)
-        out["nextTransactionSyncAt"] = now + DAY
+        out["nextTransactionSyncAt"] = now + ITEM_POLL_SECONDS
         out["transactionSyncStatus"] = (
             "ready" if out.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE"
             else "ready" if any(not x.get("pending") for x in out["transactions"].values())
