@@ -23,6 +23,7 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
     public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
+from finance_history_archive import archive_old, read_month, archive_key
 from finance_ai_categories import classify_unknown, cache_key
 
 BACKGROUND_LOGGER = logging.getLogger(__name__)
@@ -105,6 +106,22 @@ def _read(uid):
 
 
 def _write(uid, doc, etag):
+    # Move older provider data only after encrypted, conditional archive readback.
+    # Transactions are Item-indexed here; archive shards use opaque account keys.
+    source = {}
+    for item_id, item in doc.get("items", {}).items():
+        for ident, row in item.get("transactions", {}).items():
+            if isinstance(row, dict):
+                account = _account_key(item_id, str(row.get("account", "")))
+                source.setdefault(account, {})[ident] = row
+    hot, months = archive_old(store(), cipher(), "plaid", uid, source, int(time.time()))
+    if months:
+        doc["historyMonths"] = sorted(set(doc.get("historyMonths", [])) | set(months))
+        for item_id, item in doc.get("items", {}).items():
+            item["transactions"] = {
+                ident: row for ident, row in item.get("transactions", {}).items()
+                if ident in hot.get(_account_key(item_id, str(row.get("account", ""))), {})
+            }
     raw = cipher().encrypt(json.dumps(doc, separators=(",", ":"), sort_keys=True).encode())
     if len(raw) > MAX_BYTES:
         raise HTTPException(413, "Plaid activity exceeds its safe storage limit.")
@@ -307,12 +324,9 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
                     if k in existing:
                         converted[k] = existing[k]
         transactions[ident] = converted
-    cutoff = now - 90 * DAY
-    # Pending entries remain visible as pending, never in posted-only totals
-    # or automatic bonus evidence. Plaid's removal/replacement delta controls
-    # when a pending authorization disappears.
-    out["transactions"] = {k: v for k, v in transactions.items()
-                          if isinstance(v, dict) and v.get("posted", 0) >= cutoff}
+    # Preserve all received history until verified encrypted monthly archival;
+    # the provider's explicit remove/replacement delta controls pending rows.
+    out["transactions"] = transactions
     out["cursor"] = cursor
     out["invalidTransactionsByAccount"] = {
         _account_key(item_id, raw): count for raw, count in malformed.items() if raw != "unknown"
@@ -350,6 +364,7 @@ def _view(doc, ledger, uid):
             **{key: copy.deepcopy(doc.get(key, {})) for key in
                ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
             "lastSuccess": doc.get("lastSuccess"), "nextSyncAt": doc.get("nextSyncAt"),
+            "historyMonths": doc.get("historyMonths", []),
             "error": doc.get("error"), "status": "attention" if doc.get("error") else "connected"}
     permitted = set(doc.get("monitored", []))
     for item_id, state in doc.get("items", {}).items():
@@ -458,6 +473,26 @@ def transaction_review(body: TransactionReviewBody, request: Request):
                 "category": body.category, "updatedAt": int(time.time())}
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
+
+
+@router.get("/accounts/history/{month}", dependencies=[Depends(_private)])
+def history_month(month: str, request: Request):
+    uid = owner(request)
+    try:
+        archive_key("plaid", uid, month)
+    except ValueError:
+        raise HTTPException(400, "Choose a valid month.")
+    ledger, _ = quota._ledger()
+    allowed_items = {ident for ident, row in ledger.get("items", {}).items()
+                     if row.get("owner") == uid and not row.get("disconnectedAt")}
+    doc, _ = _read(uid)
+    account_keys = {a["key"] for item, rows in doc.get("items", {}).items()
+                    if item in allowed_items for a in rows.get("accounts", [])}
+    archived = read_month(store(), cipher(), "plaid", uid, month)
+    return {"month": month, "transactions": {
+        key: {ident: {k: v for k, v in tx.items() if k not in ("id", "account")}
+              for ident, tx in rows.items()}
+        for key, rows in archived.items() if key in account_keys}}
 
 
 @router.get("/accounts", dependencies=[Depends(_private)])
