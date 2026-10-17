@@ -222,7 +222,9 @@ def normalize_accounts(data):
                        'mask': (str(a.get('mask') or a.get('last4') or '')[-4:] if str(a.get('mask') or a.get('last4') or '').isdigit() and len(str(a.get('mask') or a.get('last4') or '')) == 4 else None),
                        'currency': clean(a.get('currency'), 40), 'balance': clean(a.get('balance'), 40),
                        'availableBalance': clean(a.get('available-balance'), 40) if a.get('available-balance') is not None else None,
-                       'balanceDate': a.get('balance-date') if isinstance(a.get('balance-date'), (int, float)) else None})
+                       'balanceDate': a.get('balance-date') if isinstance(a.get('balance-date'), (int, float)) else None,
+                       'accountType': clean(a.get('type') or a.get('account-type'), 40),
+                       'accountSubtype': clean(a.get('subtype') or a.get('account-subtype'), 40)})
     if len({a['key'] for a in result}) != len(result):
         raise HTTPException(502, 'SimpleFIN returned conflicting account identities.')
     return result
@@ -361,9 +363,10 @@ def enrich_transactions(state, result):
                     if (isinstance(suggestion, dict) and
                             suggestion.get('category') in TRANSACTION_CATEGORIES and
                             suggestion.get('category') not in ('unreviewed', 'bonus')):
-                        category, confidence = suggestion['category'], 'medium'
-                        row['categorySource'] = 'ai'
-                        row['confidenceScore'] = suggestion.get('confidenceScore')
+                        if suggestion['category'] != 'subscription' or float(suggestion.get('confidenceScore') or 0) >= .90:
+                            category, confidence = suggestion['category'], 'medium'
+                            row['categorySource'] = 'ai'
+                            row['confidenceScore'] = suggestion.get('confidenceScore')
             row.update(category=category, confidence=confidence, signals=signals,
                        merchant=merchant_name(row.get('description', '')),
                        stalePending=bool(row.get('pending') and row.get('lastObservedAt', 0) < int(time.time()) - 7 * DAY))
@@ -436,8 +439,7 @@ def enrich_transactions(state, result):
         if any(20 * DAY <= b['posted'] - a['posted'] <= 40 * DAY for a, b in zip(ordered, ordered[1:])):
             for row in ordered:
                 row['signals'] = sorted(set(row['signals'] + ['possible_recurring']))
-                if row['category'] == 'unreviewed':
-                    row.update(category='subscription', confidence='medium')
+                # A recurring debit is evidence, not proof of a subscription.
 
 
 def classify(amount, description):
@@ -558,7 +560,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.78')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.79')
     return out
 
 
