@@ -1312,6 +1312,26 @@ def test_scheduled_empty_or_failed_provider_preserves_saved_state(setup,monkeypa
         assert after_failed[name]==before[name]
 
 
+
+
+def test_automatic_new_account_without_activity_keeps_waiting_status(setup,monkeypatch):
+    s=seed()
+    b.write_state('owner',s,None)
+    new=account('new-conn','new-account',[])
+    monkeypatch.setattr(b,'get_data',lambda *_args,**_kwargs:{
+      'accounts':[account(),new],
+      'connections':[{'conn_id':'one','name':'Example Existing'},
+                     {'conn_id':'new-conn','name':'Example New'}],
+      'errlist':[]})
+    result=b.auto_refresh('owner')
+    key=b.account_key(new)
+    found=next(a for a in result['accounts'] if a['key']==key)
+    assert found['firstSyncStatus']=='awaiting_provider_data'
+    assert not found.get('firstSyncAt')
+    assert result['autoRefreshStatus']=='complete'
+    assert key in result['monitoredAccounts']
+    assert result['transactions'].get(key, {})=={}
+
 def test_combined_hourly_get_data_omits_account_filter(monkeypatch):
     queries=[]
     def network(*_args,**kwargs):
