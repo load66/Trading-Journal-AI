@@ -33,7 +33,7 @@ def _key(uid):
 
 def _default():
     return {"version":1,"revision":0,"budgets":{},"duplicates":{},
-            "recurring":{},"transactionMeta":{}}
+            "recurring":{},"transactionMeta":{},"accountAliases":{}}
 
 
 def _read(uid):
@@ -118,6 +118,12 @@ def _validate(section,key,value):
         if not isinstance(name,str) or len(name)>90 or not isinstance(value.get("dismissed",False),bool) or not isinstance(value.get("confirmed",False),bool):
             raise HTTPException(422,"Invalid recurring item changes.")
         return {"name":name.strip(),"dismissed":value.get("dismissed",False),"confirmed":value.get("confirmed",False)}
+    if section=="accountAliases":
+        if not ACCOUNT.fullmatch(key) or (value is not None and
+            (not isinstance(value,dict) or set(value)!={"name"} or
+             not isinstance(value.get("name"),str) or len(value["name"])>90)):
+            raise HTTPException(422,"Invalid account nickname.")
+        return None if value is None else {"name":value["name"].strip()}
     if section=="transactionMeta":
         if not ENTRY.fullmatch(key):
             raise HTTPException(422,"Invalid transaction.")
@@ -147,7 +153,7 @@ def update_preferences(body:Change,request:Request,response:Response):
     doc,etag=_read(uid)
     if body.revision!=doc.get("revision",0):
         raise HTTPException(409,"These settings changed; reload before saving.")
-    if body.section not in ("budgets","duplicates","recurring","transactionMeta"):
+    if body.section not in ("budgets","duplicates","recurring","transactionMeta","accountAliases"):
         raise HTTPException(422,"Unknown Finance settings section.")
     value=_validate(body.section,body.key,body.value)
     new=copy.deepcopy(doc)
