@@ -409,7 +409,11 @@ def profiles(body: AccountProfilesBody, request: Request):
     uid, ledger, doc, etag, view = _editable(request)
     if not set(body.profiles).issubset({a["key"] for a in view["accounts"]}):
         raise HTTPException(400, "Choose only your discovered Plaid accounts.")
-    doc["accountProfiles"] = {key: value.model_dump() for key, value in body.profiles.items()}
+    new_profiles = {key: value.model_dump(exclude_none=True) for key, value in body.profiles.items()}
+    for key, profile in new_profiles.items():
+        if 'hidden' not in profile and doc.get("accountProfiles", {}).get(key, {}).get("hidden") is True:
+            profile["hidden"] = True
+    doc["accountProfiles"] = new_profiles
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
 
