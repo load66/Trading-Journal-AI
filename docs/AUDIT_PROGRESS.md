@@ -20,5 +20,5 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 - Issue: P1 — Recognize mortgage servicer debits as housing, not issuer transfers
 - Issue: P1 — Keep card-payment detection for non-housing movements
-- Test status: New synthetic exact-cents regression tests; CI pending
+- Test status: Exact-cents synthetic mortgage and card-payment regressions submitted to full backend CI
 - Deployment: pending PR, full tests and Railway verification
