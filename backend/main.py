@@ -100,30 +100,9 @@ async def lifespan(app: FastAPI):
     backup_task = asyncio.create_task(scheduled_recovery_loop())
     from bank_availability import scheduled_availability_loop
     availability_task = asyncio.create_task(scheduled_availability_loop())
-    from bonus_simplefin import scheduled_simplefin_loop
-    simplefin_task = asyncio.create_task(scheduled_simplefin_loop())
-    from bonus_plaid_accounts import scheduled_plaid_loop
-    plaid_task = asyncio.create_task(scheduled_plaid_loop())
-    from bonus_plaid_sandbox import run_configured_check
-    sandbox_check_task = asyncio.create_task(asyncio.to_thread(run_configured_check))
     try:
         yield
     finally:
-        plaid_task.cancel()
-        try:
-            await plaid_task
-        except asyncio.CancelledError:
-            pass
-        sandbox_check_task.cancel()
-        try:
-            await sandbox_check_task
-        except asyncio.CancelledError:
-            pass
-        simplefin_task.cancel()
-        try:
-            await simplefin_task
-        except asyncio.CancelledError:
-            pass
         availability_task.cancel()
         try:
             await availability_task
@@ -152,21 +131,20 @@ async def authentication_middleware(request, call_next):
     path = request.url.path
     protected = path == "/api" or path.startswith("/api/") or path.startswith("/uploads/")
     is_cors_preflight = request.method == "OPTIONS"
-    private_simplefin = (path == "/api/bonus-tracker/simplefin" or path.startswith("/api/bonus-tracker/simplefin/")
-                         or path == "/api/bonus-tracker/plaid" or path.startswith("/api/bonus-tracker/plaid/"))
+    private_cleanup = path.startswith("/api/bonus-tracker/finance-retirement/")
     if protected and auth_required() and not is_cors_preflight:
         try:
             authorize_header(request.headers.get("Authorization"))
         except AuthError as exc:
             result = JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
-            if private_simplefin:
+            if private_cleanup:
                 # Router dependencies never run when middleware rejects a bearer
                 # token. Auth failures must not lose the private cache policy.
                 result.headers["Cache-Control"] = "no-store"
                 result.headers["Pragma"] = "no-cache"
             return result
     result = await call_next(request)
-    if private_simplefin:
+    if private_cleanup:
         # Covers success, validation failure and router-generated error responses.
         result.headers["Cache-Control"] = "no-store"
         result.headers["Pragma"] = "no-cache"
@@ -201,14 +179,9 @@ from bonus_questions import router as bonus_questions_router
 app.include_router(bonus_questions_router)
 from bonus_backups import router as bonus_backups_router
 app.include_router(bonus_backups_router)
-from bonus_simplefin import router as bonus_simplefin_router
-app.include_router(bonus_simplefin_router)
-from bonus_plaid_trial import router as bonus_plaid_trial_router
-app.include_router(bonus_plaid_trial_router)
-from bonus_plaid_accounts import router as bonus_plaid_accounts_router
-app.include_router(bonus_plaid_accounts_router)
-from finance_preferences import router as finance_preferences_router
-app.include_router(finance_preferences_router)
+# Owner-invoked R2 cleanup; no Finance account, provider, or sync endpoints survive.
+from finance_retirement import router as finance_retirement_router
+app.include_router(finance_retirement_router)
 from venza_cloud import router as venza_cloud_router
 app.include_router(venza_cloud_router)
 
