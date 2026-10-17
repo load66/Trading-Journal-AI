@@ -44,8 +44,8 @@ ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card',
                            'retirement', 'loan', 'mortgage', 'other_asset', 'other_liability'))
 BALANCE_MODES = frozenset(('exclude', 'asset', 'liability'))
 TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilities', 'groceries',
-                                    'dining', 'transportation', 'shopping', 'health', 'entertainment',
-                                    'fees', 'taxes', 'travel', 'subscription', 'transfer', 'refund',
+                                    'dining', 'transportation', 'shopping', 'insurance', 'health', 'entertainment',
+                                    'fees', 'taxes', 'travel', 'subscription', 'transfer', 'loan_proceeds', 'refund',
                                     'bonus', 'verification', 'loan', 'other'))
 
 
