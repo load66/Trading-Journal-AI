@@ -736,6 +736,7 @@ class AccountProfile(BaseModel):
     kind: str
     order: int = Field(ge=0, le=499)
     balanceMode: str = 'exclude'
+    balanceModeUserSet: bool | None = None
     hidden: bool | None = None
     displayName: str | None = Field(default=None, max_length=90)
     includeSpending: bool | None = None
