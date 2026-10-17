@@ -51,7 +51,7 @@ def test_transaction_revision_and_provider_removal():
     assert removed["cursor"]=="cursor3"
 
 def test_readonly_provider_route_allowlist():
-    assert adapter.ROUTES == frozenset(("/accounts/get","/transactions/sync"))
+    assert adapter.ROUTES == frozenset(("/item/get","/accounts/get","/transactions/sync"))
     assert adapter.MAX_PAGES<=25
 
 
