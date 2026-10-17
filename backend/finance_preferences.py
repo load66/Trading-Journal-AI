@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/bonus-tracker/finances")
 MAX_OBJECT = 512 * 1024
 LIMIT_ENTRIES = 2000
 CATEGORIES = frozenset(("housing","loan","utilities","groceries","dining","transportation",
-    "shopping","health","entertainment","fees","taxes","travel","subscription","other"))
+    "shopping","health","entertainment","fees","taxes","travel","subscription","other","unreviewed"))
 ACCOUNT = re.compile(r"^(simplefin|plaid):[a-f0-9]{64}$")
 PAIR = re.compile(r"^((simplefin):[a-f0-9]{64})\|((plaid):[a-f0-9]{64})$")
 ENTRY = re.compile(r"^(simplefin|plaid):[a-f0-9]{64}:[a-zA-Z0-9_-]{1,128}$")

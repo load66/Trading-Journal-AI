@@ -65,3 +65,9 @@ def test_safe_metadata_validation(section,key,value):
 def test_invalid_preferences_fail_closed(section,key,value):
     with pytest.raises(HTTPException):
         f._validate(section,key,value)
+
+
+def test_uncategorized_budget_is_allowed_without_changing_transaction_classification():
+    assert f._validate('budgets', 'unreviewed', {'amount':'125.50'}) == {'amount':'125.50'}
+    with pytest.raises(HTTPException):
+        f._validate('budgets', 'transfer', {'amount':'125.50'})
