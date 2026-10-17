@@ -781,4 +781,24 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.80'
+    assert public['financeVersion']=='3.4.81'
+
+def test_same_institution_two_accounts_match_nonround_financial_transfer():
+    a=account('one','Checking',[txn('o','-7379.04','To Personal Checking')])
+    b_account=account('two','Savings',[txn('i','7379.04','From Personal Savings')])
+    state=b.empty_state()
+    state['accounts']=b.normalize_accounts(data(a,b_account))
+    state['monitoredAccounts']=[x['key'] for x in state['accounts']]
+    b.merge(state,data(a,b_account),NOW)
+    shown=b.public_state(state)
+    for account_item,identifier in [(a,'o'),(b_account,'i')]:
+        key=b.account_key(account_item)
+        row=shown['transactions'][key][b.public_ref(key,identifier)]
+        assert row['category']=='transfer'
+        assert 'matched_internal_transfer' in row['signals']
+    # Re-rendering archived automatic data recalculates the category, but
+    # a category explicitly set by the owner always wins.
+    key=b.account_key(a)
+    state['transactionReviews']={key:{'o':{'category':'shopping'}}}
+    fresh=b.public_state(state)
+    assert fresh['transactions'][key][b.public_ref(key,'o')]['category']=='shopping'
