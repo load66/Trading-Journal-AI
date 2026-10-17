@@ -101,7 +101,8 @@ def test_groq_can_classify_sixty_five_distinct_synthetic_descriptions_in_a_day(m
 def test_possible_transfer_is_never_sent_to_groq(monkeypatch):
     monkeypatch.setenv('GROQ_API_KEY','synthetic-only')
     s=state()
-    for row in s['transactions']['a'].values():
+    for account in s['transactions'].values():
+      for row in account.values():
         row['description']='To Unrecognized Wallet'
         row['amount']='-2000.00'
     attempts=[]
