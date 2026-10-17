@@ -33,8 +33,8 @@ LOAN_PROCEEDS = re.compile(
 )
 OWNER_TRANSFER_ACTION = re.compile(r'\b(?:transfr|transfer|ach\s*transfer|ach\s*xfer|xfer|zelle\s+from|from)\b',re.I)
 P2P_PREFIX = re.compile(r'^\s*(?:(?:zelle|venmo|cash\s*app|p2p)\s+(?:from\s+)?|from\s+)(.+?)\s*$',re.I)
-P2P_PERSON = re.compile(r'^[A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+){1,2}$')
-P2P_BUSINESS = re.compile(r'\b(?:llc|inc|ltd|corp|company|payroll|salary|wages|deposit|loan|lending|bank|fcu)\b',re.I)
+P2P_PERSON = re.compile(r'^[A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+){1,2}$',re.I)
+P2P_BUSINESS = re.compile(r'\b(?:llc|inc|ltd|corp|company|payroll|salary|wages|deposit|loan|lending|bank|fcu|savings|checking|account|brokerage|investment|retirement|personal)\b',re.I)
 
 def owner_transfer_description(description, owner_names):
     """Only a private owner-supplied name together with an explicit transfer action."""
