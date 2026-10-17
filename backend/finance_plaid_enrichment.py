@@ -19,6 +19,16 @@ def _safe_url(value):
         pass
     return None
 
+def _safe_logo(value):
+    url = _safe_url(value)
+    if not url:
+        return None
+    host = urlsplit(url).hostname
+    return url if host in ("plaid-merchant-logos.plaid.com",
+                          "plaid-counterparty-logos.plaid.com",
+                          "plaid-category-icons.plaid.com") else None
+
+
 def enrich(row):
     pfc=row.get('personal_finance_category') or {}
     if not isinstance(pfc,dict):
@@ -59,7 +69,8 @@ def enrich(row):
     for p in (row.get('counterparties') or [])[:8]:
         if isinstance(p,dict):
             counterparties.append({'name':_plain(p.get('name'),100),'type':_plain(p.get('type'),35),
-                                   'entityId':_plain(p.get('entity_id'),100)})
+                                   'entityId':_plain(p.get('entity_id'),100),
+                                   'logoUrl':_safe_logo(p.get('logo_url'))})
     location=row.get('location') or {}
     if not isinstance(location,dict):
         location={}
@@ -67,7 +78,7 @@ def enrich(row):
             'plaidConfidence':confidence or None,'plaidSuggestedCategory':category,
             'plaidCategorySignals':signals,'counterparties':counterparties,
             'merchantName':_plain(row.get('merchant_name'),100),
-            'merchantLogoUrl':_safe_url(row.get('logo_url')),
+            'merchantLogoUrl':_safe_logo(row.get('logo_url')) or next((v['logoUrl'] for v in counterparties if v.get('logoUrl')),None),
             'merchantWebsite':_safe_url(row.get('website')),
             'paymentChannel':_plain(row.get('payment_channel'),32),
             'authorizedDate':_plain(row.get('authorized_date'),10),
