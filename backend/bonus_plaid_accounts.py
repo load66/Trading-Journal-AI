@@ -9,6 +9,8 @@ import hashlib
 import json
 import logging
 import time
+import hmac
+import jwt
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -68,7 +70,16 @@ def connection_handle(uid, item_id):
     return hashlib.sha256((uid + "\0" + item_id).encode()).hexdigest()
 
 
-ROUTES = frozenset(("/item/get", "/accounts/get", "/transactions/sync"))
+# Plaid's pricing guide: Items endpoints and product-neutral key lookups are
+# typically free; /transactions/sync reads an already active Transactions
+# subscription. These are the only two new permitted endpoints:
+# https://plaid.com/docs/account/billing/
+# https://plaid.com/docs/api/items/#itemwebhookupdate
+# https://plaid.com/docs/api/webhooks/webhook-verification/
+ROUTES = frozenset(("/item/get", "/accounts/get", "/transactions/sync",
+                    "/item/webhook/update", "/webhook_verification_key/get"))
+_WEBHOOK_KEY_CACHE = {}
+WEBHOOK_KEY_TTL = 300
 _ITEM_PRODUCTS = {}  # Process-local verified item capabilities; never persist tokens.
 
 def _catalog(token):
@@ -167,30 +178,96 @@ def _write(uid, doc, etag):
     return new_tag
 
 
-def _provider(endpoint, token, **kwargs):
-    # Read-only allowlist; NEVER add /item/remove, /transfer, /bank_transfer,
-    # production-access requests, or any other billable/financial action.
+def _provider(endpoint, token=None, **kwargs):
+    """Fail-closed, non-billable allowlist for existing Plaid Items only."""
     if endpoint not in ROUTES:
         raise HTTPException(500, "Unsupported read-only Plaid operation.")
     if not quota._ready():
         raise HTTPException(503, "Plaid fallback is not activated.")
-    if endpoint != "/item/get":
-        catalog = _catalog(token)
-        if endpoint == "/transactions/sync" and "transactions" not in (
-                set(catalog["products"]) | set(catalog["billed_products"])):
-            raise HTTPException(403, "This Item does not have an existing Transactions product. No paid activation attempted.")
+    if endpoint == "/webhook_verification_key/get":
+        # Public webhook authenticity requires a signing JWK, not an Item.
+        kid = kwargs.get("key_id")
+        if token is not None or not isinstance(kid, str) or not kid or len(kid) > 128 or set(kwargs) != {"key_id"}:
+            raise HTTPException(500, "Invalid webhook key request.")
+        body = {"key_id": kid}
+    else:
+        if not isinstance(token, str) or not token:
+            raise HTTPException(500, "Existing Item token required.")
+        if endpoint not in ("/item/get", "/item/webhook/update"):
+            catalog = _catalog(token)
+            if endpoint == "/transactions/sync" and "transactions" not in (
+                    set(catalog["products"]) | set(catalog["billed_products"])):
+                raise HTTPException(403, "This Item has no existing Transactions product.")
+        if endpoint == "/item/webhook/update":
+            # Only changes the URL of an EXISTING Item. Never adds products.
+            if set(kwargs) != {"webhook"} or not isinstance(kwargs["webhook"], str) or not kwargs["webhook"].startswith("https://"):
+                raise HTTPException(500, "Invalid existing-Item webhook update.")
+        body = {"access_token": token, **kwargs}
     try:
         response = httpx.post(quota.BASE + endpoint,
             json={"client_id": quota.os.environ["PLAID_CLIENT_ID"],
-                  "secret": quota.os.environ["PLAID_SECRET"],
-                  "access_token": token, **kwargs},
+                  "secret": quota.os.environ["PLAID_SECRET"], **body},
             timeout=25, follow_redirects=False)
         if response.status_code != 200:
-            # Never log raw request/response bodies: they may contain bank data.
+            # Never log provider responses or webhook signing key material.
             raise HTTPException(502, "Plaid could not return account activity.")
         return response.json()
     except (httpx.HTTPError, ValueError):
         raise HTTPException(502, "Plaid read-only sync is temporarily unavailable.") from None
+
+
+def _webhook_key_get(kid):
+    response = _provider("/webhook_verification_key/get", key_id=kid)
+    key = response.get("key") if isinstance(response, dict) else None
+    if not isinstance(key, dict) or key.get("kid") != kid or key.get("alg") != "ES256" or (
+            key.get("crv") != "P-256" or key.get("kty") != "EC" or key.get("use") != "sig"):
+        raise HTTPException(401, "Unauthorized")
+    return key
+
+
+def _verify_webhook(signature, raw_body, *, now=None):
+    """Plaid ES256 JWT, short-lived key, and constant-time raw-body SHA-256.
+
+    Source: https://plaid.com/docs/api/webhooks/webhook-verification/
+    The function never logs the JWT, body, kid, or verification key.
+    """
+    if now is None:
+        now = time.time()
+    try:
+        if not isinstance(signature, str) or len(signature) > 4096 or not isinstance(raw_body, bytes):
+            raise ValueError()
+        header = jwt.get_unverified_header(signature)
+        kid = header.get("kid")
+        if header.get("alg") != "ES256" or not isinstance(kid, str) or not (1 <= len(kid) <= 128):
+            raise ValueError()
+        if any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for ch in kid):
+            raise ValueError()
+        cached = _WEBHOOK_KEY_CACHE.get(kid)
+        if not cached or cached["expires"] <= time.time():
+            jwk = _webhook_key_get(kid)
+            expiry = jwk.get("expired_at")
+            if expiry is not None and (type(expiry) is not int or expiry <= now):
+                raise ValueError()
+            _WEBHOOK_KEY_CACHE[kid] = {"key": jwk, "expires": time.time() + WEBHOOK_KEY_TTL}
+            if len(_WEBHOOK_KEY_CACHE) > 64:
+                _WEBHOOK_KEY_CACHE.clear()
+                _WEBHOOK_KEY_CACHE[kid] = {"key": jwk, "expires": time.time() + WEBHOOK_KEY_TTL}
+        else:
+            jwk = cached["key"]
+        public_key = jwt.algorithms.ECAlgorithm.from_jwk(json.dumps(jwk))
+        payload = jwt.decode(signature, key=public_key, algorithms=["ES256"],
+                             options={"verify_aud": False, "verify_iat": False})
+        issued = payload.get("iat")
+        digest = payload.get("request_body_sha256")
+        if type(issued) is not int or now - issued > 300 or issued - now > 60:
+            raise ValueError()
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError()
+        if not hmac.compare_digest(hashlib.sha256(raw_body).hexdigest(), digest):
+            raise ValueError()
+        return True
+    except Exception:
+        raise HTTPException(401, "Unauthorized") from None
 
 
 def _money(v):
