@@ -36,8 +36,9 @@ router = APIRouter(prefix='/api/bonus-tracker/simplefin', dependencies=[Depends(
 BACKGROUND_LOGGER = logging.getLogger(__name__)
 
 DAY = 86400
-FULL_SYNC_INTERVAL = 6 * 3600
-BALANCE_SYNC_INTERVAL = 3 * 3600
+FULL_SYNC_INTERVAL = 2 * 3600
+BALANCE_SYNC_INTERVAL = 2 * 3600
+AUTOMATIC_REQUEST_RESERVE = 4
 MAX_STATE = 8 * 1024 * 1024
 HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
 ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card', 'brokerage',
@@ -684,9 +685,9 @@ def merge(state, data, now):
 
 def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
-    fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'notices', 'institutionIssues', 'missingAccounts', 'lastSuccess',
+    fields = ('accounts', 'mappings', 'monitoredAccounts', 'lastAccountDiscoveryAt', 'lastNewAccountsAt', 'newAccountsLastSeenCount', 'warnings', 'notices', 'institutionIssues', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'nextGuidedDiscoveryAt',
-              'lastBalanceRefreshAt', 'nextBalanceRefreshAt', 'error',
+              'lastBalanceRefreshAt', 'nextBalanceRefreshAt', 'balanceRefreshErrorKind', 'newBankDiscoveryNextAt', 'error',
               'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
@@ -744,8 +745,8 @@ def claim_request(state, now):
 
 
 
-def refresh_balances(uid):
-    """Nontransaction balance refresh between full 6-hour pulls.
+def refresh_balances(uid, *, force=False):
+    """Hourly alternating account discovery/refresh between full 2-hour pulls.
 
     No background request can bypass the same 24-call rolling account quota.
     History, bonus reviews, user corrections and the next transaction cursor
@@ -753,21 +754,85 @@ def refresh_balances(uid):
     """
     s, tag = reserve(uid, 'balance-refresh')
     now = int(time.time())
-    if (not s.get('access') or not s.get('accounts')
-            or now < s.get('nextBalanceRefreshAt', 0)
-            or now >= s.get('nextSyncAt', 0)):
+    if (not s.get('access') or
+            (force and now < s.get('newBankDiscoveryNextAt', 0)) or
+            (not force and now < s.get('nextBalanceRefreshAt', 0)) or
+            (not force and s.get('accounts') and now >= s.get('nextSyncAt', 0))):
         return finish(uid, s, tag)
-    s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
+    remaining, _reset = _remaining_discovery_budget(s, now)
+    if force and remaining <= AUTOMATIC_REQUEST_RESERVE:
+        s['balanceRefreshErrorKind'] = 429
+        return finish(uid, s, tag)
+    s['nextBalanceRefreshAt'] = now + (BALANCE_SYNC_INTERVAL if any(syncing(s,a) for a in s.get('accounts', [])) else 3600)
+    if force:
+        # Failed startup probes cannot loop every scheduler minute or waste
+        # the shared provider budget while waiting for delayed Bridge data.
+        s['autoStartupRetryAt'] = now + 3600
+    # Returning from the external Bridge may request an immediate check,
+    # but never more than once per 90 seconds or outside the shared budget.
+    s['newBankDiscoveryNextAt'] = now + 90
     try:
         claim_request(s, now)
         tag = write_state(uid, s, tag)
         data = get_data(s['access'], balances=True)
-        fresh = {row['key']: {**row, 'firstSeenAt': next((a.get('firstSeenAt',now) for a in s['accounts'] if a['key']==row['key']),now)} for row in normalize_accounts(data)}
-        old = s.get('accounts', [])
-        s['accounts'] = [{**row, **fresh[row['key']]} if row['key'] in fresh else row
-                         for row in old]
-        record_balances(s, [row for row in s['accounts'] if row['key'] in fresh], now)
+        fresh = {row['key']: row for row in normalize_accounts(data)}
+        if not fresh and s.get('accounts'):
+            raise HTTPException(502, 'SimpleFIN returned no accounts. Saved accounts are unchanged.')
+        prior = {row['key']: row for row in s.get('accounts', [])}
+        # Preserve existing identity, profiles, monitoring preferences, reviews
+        # and transaction history; never replace an existing row from an
+        # accounts-only response or lose one because SimpleFIN omitted it.
+        discovered = []
+        for key, row in fresh.items():
+            if key not in prior:
+                row['firstSeenAt'] = now
+                row['discovered'] = True
+                prior[key] = row
+                discovered.append(row)
+            else:
+                existing = prior[key]
+                for field in ('name','bank','currency','balance','availableBalance',
+                              'balanceDate','accountType','accountSubtype','mask'):
+                    if row.get(field) is not None:
+                        existing[field] = row[field]
+        s['accounts'] = list(prior.values())
+        record_balances(s, [prior[key] for key in fresh], now)
         s['lastBalanceRefreshAt'] = now
+        s['lastAccountDiscoveryAt'] = now
+        s.pop('balanceRefreshErrorKind', None)
+        s['newAccountsLastSeenCount'] = len(discovered)
+        if discovered:
+            s['lastNewAccountsAt'] = now
+            # The owner requested automatic monitoring of new institutions.
+            # Explicitly excluded/disabled accounts remain excluded.
+            monitored = set(s.get('monitoredAccounts', []))
+            monitored.update(a['key'] for a in discovered if syncing(s, a))
+            s['monitoredAccounts'] = sorted(monitored)
+            s['nextSyncAt'] = min(s.get('nextSyncAt', now), now + 3600)
+            # One scoped initial transaction request for all newly discovered
+            # accounts when capacity remains. Existing account rows are intact.
+            remaining, _ = _remaining_discovery_budget(s, now)
+            selected = [a for a in discovered if syncing(s, a)]
+            if selected and remaining > AUTOMATIC_REQUEST_RESERVE:
+                claim_request(s, now)
+                tag = write_state(uid, s, tag)
+                initial = get_data(s['access'], selected)
+                selected_keys = {a['key'] for a in selected}
+                scoped = {**initial, 'accounts': [
+                    a for a in initial.get('accounts', [])
+                    if account_key(a) in selected_keys]}
+                if scoped['accounts']:
+                    before_missing = copy.deepcopy(s.get('missingAccounts', []))
+                    candidate = merge(copy.deepcopy(s), scoped, now)
+                    candidate['missingAccounts'] = before_missing
+                    for account in candidate['accounts']:
+                        if account['key'] in selected_keys and any(
+                            not t.get('pending', False)
+                            for a in scoped['accounts'] if account_key(a)==account['key']
+                            for t in a.get('transactions', [])):
+                            account['firstSyncAt'] = now
+                            account.pop('discovered', None)
+                    s = candidate
     except HTTPException as exc:
         # Retain the saved ledger. A temporary balance refresh failure alone
         # does not claim every institution needs reconnection.
@@ -791,7 +856,7 @@ def sync(uid):
     s['lastAttempt'] = now
     # Reserve the next attempt before network I/O. Restart/timeout cannot exhaust provider quotas.
     s['nextSyncAt'] = now + FULL_SYNC_INTERVAL
-    s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
+    s['nextBalanceRefreshAt'] = now + 3600
     try:
         claim_request(s, now)
         tag = write_state(uid, s, tag)
@@ -1016,6 +1081,16 @@ def reconnect(body: ConnectBody, request: Request):
         s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
         s['status'] = 'attention'
     return finish(uid, s, tag)
+
+
+@router.post('/auto-refresh')
+def auto_refresh_accounts(request: Request):
+    """Zero-click Bridge return: same credential, budget, lease and owner scope."""
+    uid = owner(request)
+    view = refresh_balances(uid, force=True)
+    state, _ = read_state(uid)
+    remaining, reset = _remaining_discovery_budget(state, int(time.time()))
+    return {**view, 'budgetRemaining': remaining, 'budgetResetAt': reset}
 
 
 @router.post('/discover-guided')
@@ -1397,17 +1472,33 @@ def disconnect(request: Request):
     return finish(uid, tombstone, tag)
 
 
+def startup_discovery_due(state, now):
+    """One automatic post-upgrade probe, never a failed-probe request storm."""
+    return (not state.get('lastAccountDiscoveryAt')
+            and now >= state.get('autoStartupRetryAt', 0))
+
+
 async def scheduled_simplefin_loop():
     while True:
         try:
             if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
                 uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
                 s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and s.get('accounts'):
-                    if time.time() >= s.get('nextSyncAt', 0):
-                        await run_in_threadpool(sync, uid)
-                    elif time.time() >= s.get('nextBalanceRefreshAt', 0):
-                        await run_in_threadpool(refresh_balances, uid)
+                if s.get('access'):
+                    # Keep several daily calls available for initial history
+                    # and recovery. Zero-click startup scans legacy linked
+                    # accounts immediately after this additive release.
+                    remaining, _ = _remaining_discovery_budget(s, int(time.time()))
+                    if remaining > AUTOMATIC_REQUEST_RESERVE:
+                        initial_scan=startup_discovery_due(s, int(time.time()))
+                        if initial_scan:
+                            await run_in_threadpool(refresh_balances, uid, force=True)
+                        elif (s.get('accounts') and
+                              any(syncing(s, a) for a in s['accounts']) and
+                              time.time() >= s.get('nextSyncAt', 0)):
+                            await run_in_threadpool(sync, uid)
+                        elif time.time() >= s.get('nextBalanceRefreshAt', 0):
+                            await run_in_threadpool(refresh_balances, uid)
         except Exception as error:
             # Never log repr(error) or provider payload; both can contain secrets.
             BACKGROUND_LOGGER.warning("simplefin_scheduled_sync_error class=%s", type(error).__name__)

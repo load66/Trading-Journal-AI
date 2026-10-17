@@ -6,12 +6,11 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
+- Deployed baseline: SimpleFIN backend v3.4.98, merge 26dc4b2076f89157d6fe8356a90eaa244ac59cc3 (Railway SUCCESS)
 - In progress: Finance Categories v2 issue #156 on codex/finance-categories-v2
-- Next step: reconcile the WIP branch with current main, complete regression coverage, and release the backend before the frontend
-
-- Deployed: backend v3.4.95, main commit 3f4e0980c3a758cf00340704ffbdbab5d762537c (Railway SUCCESS)
-- In progress: Finance Categories v2 paused (unmerged) for SimpleFIN missing-bank hotfix
-- Next step: resume Finance Categories v2 after SimpleFIN missing-bank hotfix is deployed and verified
+- Backend PR: https://github.com/load66/Trading-Journal-AI/pull/224
+- Frontend PR: https://github.com/load66/bonus-tracker/pull/157
+- Next step: complete backend regression coverage and release the backend before the frontend
 
 ## Release 1 (v3.4.94)
 
