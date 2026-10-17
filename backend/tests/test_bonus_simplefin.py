@@ -1279,3 +1279,12 @@ def test_auto_discovery_quota_is_bounded_and_reserves_manual_requests(setup,monk
     assert calls==[]
     assert b.FULL_SYNC_INTERVAL==2*3600
     assert b.BALANCE_SYNC_INTERVAL==2*3600
+
+
+def test_auto_retry_uses_an_hourly_backoff_after_failed_probe(setup):
+    state={'autoStartupRetryAt':NOW+3600}
+    assert not b.startup_discovery_due(state,NOW)
+    assert not b.startup_discovery_due(state,NOW+3599)
+    assert b.startup_discovery_due(state,NOW+3600)
+    state['lastAccountDiscoveryAt']=NOW+3600
+    assert not b.startup_discovery_due(state,NOW+7200)
