@@ -198,6 +198,7 @@ def _account(item_id, institution, row, now):
                                balance.get("unofficial_currency_code"), 8),
             "balance": _money(balance.get("current")),
             "availableBalance": _money(balance.get("available")),
+            "creditLimit": _money(balance.get("limit")),
             # /accounts/get balances are potentially cached by Plaid. Do not
             # invent a provider freshness timestamp when one is not supplied.
             "balanceDate": None, "observedAt": now,
