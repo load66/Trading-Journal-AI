@@ -205,7 +205,7 @@ def test_new_bank_discovers_accounts_without_repeating_daily_transaction_sync(mo
     assert storage["items"]["previous-item"]["accounts"] == prior["accounts"]
     assert len(storage["items"]["new-item"]["transactions"]) == 1
     assert storage["items"]["new-item"]["lastTransactionSyncAt"] == NOW
-    assert storage["items"]["new-item"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+    assert storage["items"]["new-item"]["nextTransactionSyncAt"] == NOW + adapter.ITEM_POLL_SECONDS
     assert response["accounts"][1]["transactionSyncStatus"] == "ready"
     assert adapter._account_key("new-item", "new-checking") in storage["monitored"]
     assert "private-new" not in str(response)
@@ -308,7 +308,7 @@ def test_discovered_bank_gets_initial_sync_during_other_bank_cooldown(monkeypatc
     assert calls == ["/transactions/sync", "/accounts/get"] or calls == ["/accounts/get", "/transactions/sync"]
     assert storage["items"]["new-item"]["cursor"] == "initial-cursor"
     assert response["accounts"][0]["transactionSyncStatus"] == "awaiting_provider_data"
-    assert response["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.DAY
+    assert response["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.ITEM_POLL_SECONDS
     assert storage["nextSyncAt"] == NOW + 3600, "Another bank's owner-wide quota must remain intact"
     adapter.sync_owner("alice")
     assert len(calls) == 2, "Refreshing must never duplicate the first Plaid transaction call"
@@ -566,7 +566,7 @@ def test_delayed_initial_history_retries_on_its_own_due_date(monkeypatch):
     response = adapter.sync_owner("alice")
     assert len(response["transactions"][key]) == 1
     assert response["accounts"][0]["transactionSyncStatus"] == "ready"
-    assert storage["items"]["onepay-item"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+    assert storage["items"]["onepay-item"]["nextTransactionSyncAt"] == NOW + adapter.ITEM_POLL_SECONDS
     assert storage["nextSyncAt"] == NOW + 17 * 3600
     calls_before = len(calls)
     adapter.sync_owner("alice")
@@ -586,7 +586,7 @@ def test_plaid_not_ready_and_initial_update_do_not_claim_complete(monkeypatch):
     state = {}
     for index, (status, seconds) in enumerate((
             ("NOT_READY", 3600), ("INITIAL_UPDATE_COMPLETE", 3 * 3600),
-            ("HISTORICAL_UPDATE_COMPLETE", adapter.DAY)), start=1):
+            ("HISTORICAL_UPDATE_COMPLETE", adapter.ITEM_POLL_SECONDS)), start=1):
         delta = adapter._sync_item("synthetic-token", state.get("cursor", ""))
         assert delta.update_status == status
         state = adapter._merge(state, "test-item", "Test Bank",
