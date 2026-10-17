@@ -26,6 +26,21 @@ TRANSFER = re.compile(
     r'\b(?:transfer|xfer|pmt|autopay|epayment|credit card payment|'
     r'payment thank you|payment to card|credit card autopay|x money transfer|crd)\b',re.I
 )
+ISSUER_PAYMENT = re.compile(
+    r'\b(?:capital\s*one|chase|jpmorgan|american\s*express|amex|discover|'
+    r'citi(?:bank)?|citicards|robinhood|fidelity|schwab|vanguard|'
+    r'e\s*\*?\s*trade|barclays|synchrony|wells\s*fargo|'
+    r'bank\s*of\s*america|us\s*bank)\b', re.I)
+PAYMENT_ACTION = re.compile(
+    r'\b(?:pmt|pymt|payment|autopay|auto\s*pay|epay|e\s*pay|'
+    r'crcardpmt|credit\s*card\s*pmt|ccpmt|cardmember\s*payment)\b', re.I)
+BROKER_CONTRIBUTION = re.compile(
+    r'\b(?:robinhood|fidelity|schwab|vanguard|e\s*\*?\s*trade|brokerage|'
+    r'investment|401k|roth\s*ira|traditional\s*ira|ira)\b'
+    r'.*\b(?:deposit|contribut(?:ion|e)|transfer|funding|add\s*cash)\b|'
+    r'\b(?:contribut(?:ion|e)|transfer|funding|deposit)\b.*'
+    r'\b(?:robinhood|fidelity|schwab|vanguard|e\s*\*?\s*trade|brokerage|'
+    r'investment|401k|roth\s*ira|traditional\s*ira|ira)\b', re.I)
 SELF_P2P = re.compile(r'\b(?:zelle|venmo|cash app|cashapp|p2p)\b.*\b(?:self|my own|myself)\b',re.I)
 MERCHANTS = (
     ('groceries', r'\b(?:walmart|aldi|kroger|whole foods|safeway|trader joe|'
@@ -73,6 +88,9 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'income','high',[]
     if number < 0 and re.search(r'\bfee\b|service charge|maintenance charge|overdraft', text, re.I):
         return 'fees','high',['possible_fee']
+    # Financial-account movements take precedence over recurring merchants.
+    if (ISSUER_PAYMENT.search(text) and PAYMENT_ACTION.search(text)) or BROKER_CONTRIBUTION.search(text):
+        return 'transfer','high',['possible_transfer']
     if number < 0 and HOUSING.search(text):
         return 'housing','high',[]
     if number < 0 and LOAN.search(text):
