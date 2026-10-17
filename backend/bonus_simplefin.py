@@ -21,6 +21,7 @@ from botocore.exceptions import ClientError
 from bonus_backups import owner, store
 from finance_category_rules import category_for, micro_deposit_refs
 from finance_ai_categories import classify_unknown, cache_key
+from finance_history_archive import archive_old, read_month, HOT_DAYS
 
 def private_response(response: Response):
     response.headers['Cache-Control'] = 'no-store'
@@ -63,6 +64,7 @@ def migrate_state(value):
     if not isinstance(state.get('audit', []), list):
         raise HTTPException(503, 'Private financial data needs review before it can be used.')
     state.setdefault('audit', [])
+    state.setdefault('historyMonths', [])
     state['version'] = 2
     return state
 
@@ -97,6 +99,11 @@ def read_state(uid):
 
 def write_state(uid, state, etag):
     state = migrate_state(state)
+    # Preserve old activity in verified encrypted monthly shards before pruning.
+    hot, archived = archive_old(store(), cipher(), 'simplefin', uid,
+                                state.get('transactions', {}), int(time.time()))
+    state['transactions'] = hot
+    state['historyMonths'] = sorted(set(state.get('historyMonths', [])) | set(archived))
     raw = cipher().encrypt(json.dumps(state, sort_keys=True).encode())
     if len(raw) > MAX_STATE:
         raise HTTPException(413, 'Bank-sync history exceeded its safe storage limit.')
@@ -210,6 +217,7 @@ def normalize_accounts(data):
         c = conns.get(str(a.get('conn_id')), {})
         result.append({'key': account_key(a), 'id': a['id'], 'connection': str(a.get('conn_id', '')),
                        'name': clean(a.get('name')), 'bank': clean(c.get('name') or a.get('conn_name') or a.get('org', {}).get('name')),
+                       'mask': (str(a.get('mask') or a.get('last4') or '')[-4:] if str(a.get('mask') or a.get('last4') or '').isdigit() and len(str(a.get('mask') or a.get('last4') or '')) == 4 else None),
                        'currency': clean(a.get('currency'), 40), 'balance': clean(a.get('balance'), 40),
                        'availableBalance': clean(a.get('available-balance'), 40) if a.get('available-balance') is not None else None,
                        'balanceDate': a.get('balance-date') if isinstance(a.get('balance-date'), (int, float)) else None})
@@ -244,10 +252,26 @@ def record_balances(state, accounts, observed_at):
             except HTTPException:
                 pass
         rows = history.setdefault(account['key'], [])
-        if rows and all(rows[-1].get(k) == row.get(k) for k in ('at', 'balance', 'availableBalance', 'currency')):
-            continue
-        rows.append(row)
-        history[account['key']] = rows[-400:]
+        # A stable balance still contributes one daily observation. Otherwise
+        # unchanged accounts would never build a useful 24-month trend.
+        if rows and rows[-1].get('observedAt', 0)//DAY == observed_at//DAY:
+            rows[-1] = row
+        else:
+            rows.append(row)
+        # At most one daily point for 90 days, then weekly through 24 months.
+        from datetime import datetime, timezone
+        seen = set()
+        compact = []
+        for point in reversed(rows):
+            at = point.get('observedAt', 0)
+            if not isinstance(at, (int, float)) or at < observed_at - 731 * DAY:
+                continue
+            day = datetime.fromtimestamp(at, timezone.utc).date()
+            bucket = str(day) if at >= observed_at - 90 * DAY else str(day.isocalendar()[:2])
+            if bucket not in seen:
+                seen.add(bucket)
+                compact.append(point)
+        history[account['key']] = list(reversed(compact))
 
 
 def public_ref(account, transaction):
@@ -501,7 +525,7 @@ def merge(state, data, now):
                     and now - 90 * DAY <= row.get('posted', 0) <= now):
                 row['pendingClearedAt'] = now
         # Missing posted rows never imply reversal/deletion; preserve 90 days of observed history.
-        state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
+        state['transactions'][k] = rows  # Archived only after verified conditional R2 write.
         state.setdefault('evidenceReviews', {})[k] = {
             i: v for i, v in state.get('evidenceReviews', {}).get(k, {}).items()
             if i in state['transactions'][k] and isinstance(v, dict)
@@ -523,6 +547,7 @@ def public_state(s):
     out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
                        for a in s.get('accounts', [])]
     out['monitoredAccounts'] = list(s.get('monitoredAccounts', []))
+    out['historyMonths'] = list(s.get('historyMonths', []))
     out['transactions'] = {}
     enrich_transactions(s, out)
     out['evidenceReviews'] = public_evidence_reviews(s)
@@ -676,6 +701,23 @@ class TransactionReviewBody(BaseModel):
         if value not in TRANSACTION_CATEGORIES:
             raise ValueError('Unsupported transaction category')
         return value
+
+
+@router.get('/history/{month}')
+def history_month(month: str, request: Request):
+    uid = owner(request)
+    from finance_history_archive import archive_key
+    try:
+        archive_key('simplefin', uid, month)
+    except ValueError:
+        raise HTTPException(400, 'Choose a valid month.')
+    archived = read_month(store(), cipher(), 'simplefin', uid, month)
+    state, _etag = read_state(uid)
+    # Apply the same public-id hashing and category rules as recent activity.
+    # Never send raw bridge transaction identifiers back to the browser.
+    state['transactions'] = archived
+    public = public_state(state)
+    return {'month': month, 'transactions': public.get('transactions', {})}
 
 
 @router.get('')

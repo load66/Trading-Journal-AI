@@ -745,3 +745,20 @@ def test_user_learned_category_precedence_over_automatic_matching(setup):
 ])
 def test_generic_merchant_title_keeps_original_bank_description(bank_description):
     assert b.merchant_name(bank_description) == bank_description
+
+
+def test_generic_transfer_microcredit_pair_is_verification(setup):
+    """Two small TRANSFER credits can be bank verification, not income or transfers."""
+    account_row=account('one','micro',[txn('m1','0.13','TRANSFER'),
+                                       txn('m2','0.29','TRANSFER')])
+    s=b.empty_state()
+    s['accounts']=b.normalize_accounts(data(account_row))
+    account_id=b.account_key(account_row)
+    s['monitoredAccounts']=[account_id]
+    b.merge(s,data(account_row),NOW)
+    out=b.public_state(s)
+    for raw in ('m1','m2'):
+        row=out['transactions'][account_id][b.public_ref(account_id,raw)]
+        assert row['category']=='verification'
+        assert row['categorySource']=='automatic'
+    assert set(s['transactions'][account_id])=={'m1','m2'}, 'Classification never deletes bank data'
