@@ -6,6 +6,13 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
+- In progress: Plaid fast sync backend PR https://github.com/load66/Trading-Journal-AI/pull/228 (draft, not deployed)
+- Implemented on branch: ES256 webhook JWT/body verifier and short-lived key cache, exact non-billable allowlist, pure 3-hour polling and 5-minute freshness policy, rolling 24-call budget, persistent Trial-ledger call reservations, 3-hour per-Item deadline
+- Regression status: verifier test failed before implementation on CI 39075832179 and passed after on CI 39076021727; policy suite passed CI 39076148049; integrated reservation/deadline suite awaiting final CI
+- Remaining before deploy: authenticated-owner single-Item sync, verified public webhook route, burst coalescing, existing-Item registration, owner sync-now, error flags, concurrency tests, frontend and full browser verification
+- Release gate: Categories v2 frontend PR #157 remains open because Railway has not reported SUCCESS for backend amendment e6d9ce72a130a882ef16e493fa80884b4a6fb4eb
+- Next step: review CI for fast-sync backend reservation/deadline tests, implement scoped sync and public webhook with mocks, reverify Railway before any frontend merge
+
 - Queue: Categories v2 backend amendment PR #227 merged at e6d9ce72a130a882ef16e493fa80884b4a6fb4eb; Railway exact-commit verification pending
 - Queue: frontend Categories v2 PR #157 tested and open, merge withheld pending backend production verification
 - In progress: Plaid fast sync, backend branch codex/plaid-fast-sync; existing-Item-only, nonbillable endpoint verification and isolated regression tests
