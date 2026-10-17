@@ -318,13 +318,23 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
     if len(rows) > 500:
         raise HTTPException(502, "Plaid account count is invalid.")
     accounts = [_account(item_id, name, row, now) for row in rows]
+    if not accounts and old.get("accounts"):
+        raise HTTPException(502, "Plaid returned no accounts. Existing data was preserved.")
     if len(set(a["key"] for a in accounts)) != len(accounts):
         raise HTTPException(502, "Plaid account identities are duplicated.")
     out = copy.deepcopy(old) if isinstance(old, dict) else {}
     previous = {a['key']: a.get('firstSeenAt',now) for a in out.get('accounts',[]) if isinstance(a,dict) and a.get('key')}
     for account in accounts:
         account['firstSeenAt'] = previous.get(account['key'],now)
-    out["accounts"] = accounts
+    newest_keys = {a["key"] for a in accounts}
+    omitted = [copy.deepcopy(a) for a in out.get("accounts", [])
+               if isinstance(a, dict) and a.get("key") not in newest_keys]
+    for stale in omitted:
+        stale["attentionKind"] = "connection"
+        stale["attentionReason"] = "Account missing from the latest bank update."
+        stale["missingFromLatest"] = True
+    out["missingAccountKeys"] = [a["key"] for a in omitted]
+    out["accounts"] = accounts + omitted
     # Plaid only certifies when these values were observed by our adapter,
     # not when the financial institution actually produced them. Persist
     # additive snapshots with the same bounded compaction as SimpleFIN.
@@ -705,6 +715,8 @@ def sync_owner(uid):
                         _sync_failure(state, now, exc.detail)
                         history_failed = True
                 candidate["items"][item_id] = state
+                if state.get("missingAccountKeys"):
+                    history_failed = True
                 candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
             for item_id, item in due_items.items():
                 old = candidate["items"][item_id]
@@ -715,6 +727,8 @@ def sync_owner(uid):
                     raw = _provider("/accounts/get", item["access"])
                     candidate["items"][item_id] = _merge(
                         old, item_id, item["institution"], raw, delta, now)
+                    if candidate["items"][item_id].get("missingAccountKeys"):
+                        history_failed = True
                     candidate["lastSuccess"] = now
                 except HTTPException as exc:
                     _sync_failure(old, now, exc.detail)
@@ -769,6 +783,8 @@ def sync_owner(uid):
                     candidate["items"][item_id] = exposed
                 continue
             discovered = {a["key"] for a in exposed["accounts"]}
+            if exposed.get("missingAccountKeys"):
+                failed = True
             refreshed = True
             new_accounts = discovered - monitored
             monitored.update(discovered)
