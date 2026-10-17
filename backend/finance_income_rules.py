@@ -74,7 +74,7 @@ def annotate_paychecks(records):
                 continue
             explicit=bool(PAY_DESCRIPTOR.search(row.get('description') or ''))
             is_company=bool(COMPANY.search(employer))
-            if id(row) in qualifying or explicit:
+            if (id(row) in qualifying and is_company) or explicit:
                 row.update(category='income',confidence='high',
                            merchant=employer,signals=sorted(set(row.get('signals',[])+['paycheck','possible_direct_deposit'])))
             elif is_company and row.get('category')=='unreviewed':
