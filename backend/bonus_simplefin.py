@@ -351,7 +351,7 @@ def enrich_transactions(state, result):
         r'\bpayment (?:thank you|to|from)\b', re.I)
     eligible = []
     for account, raw_id, row in records:
-        if (row.get('pending') or row.get('categorySource') == 'user'
+        if (row.get('pending') or row.get('categorySource') in ('user', 'user_rule')
                 or Decimal(row['amount']) == 0
                 or row.get('kind') in ('possible_bonus', 'possible_reversal')
                 or not transfer_wording.search(row.get('description', ''))):
@@ -395,7 +395,7 @@ def enrich_transactions(state, result):
         for account, raw_id, row in records
     ])
     for account, raw_id, row in records:
-        if (account, raw_id) in micro and row.get('categorySource') != 'user':
+        if (account, raw_id) in micro and row.get('categorySource') not in ('user', 'user_rule'):
             row.update(category='verification', confidence='high', signals=['verification'])
 
     groups = {}
