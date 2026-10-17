@@ -93,10 +93,16 @@ def test_exact_account_scope_same_id_different_connection(setup):
     assert b.account_key(account('one'))!=b.account_key(account('two'))
     assert [a['key'] for a in s['accounts']] == [b.account_key(account('one'))]
 
-def test_invalid_amount_does_not_commit_partial_merge(setup,monkeypatch):
+def test_invalid_amount_is_skipped_and_valid_rows_are_retained(setup,monkeypatch):
     s=seed();b.write_state('owner',s,None)
-    monkeypatch.setattr(b,'get_data',lambda *a,**kw:data(account(transactions=[txn(amount='NaN')])))
-    result=b.sync('owner');assert result['status']=='attention' and not result['transactions']
+    monkeypatch.setattr(b,'get_data',lambda *a,**kw:data(account(transactions=[
+        txn(ident='bad',amount='NaN'),txn(ident='good',amount='2.00',description='Coffee shop')])))
+    result=b.sync('owner')
+    k=b.account_key(account())
+    assert result['status']=='attention'
+    assert len(result['transactions'][k]) == 1
+    assert 'invalid transaction' in result['warnings'][0]
+    assert b.read_state('owner')[0]['transactions'][k]['good']['amount']=='2.00'
 
 def test_sync_cadence_and_no_unselected_fetch(setup,monkeypatch):
     s=seed();b.write_state('owner',s,None);calls=[]
@@ -666,3 +672,31 @@ def test_product_assignment_preserves_review_decisions_but_resets_requirement_as
     assert changed_cycle.status_code == 200
     assert not changed_cycle.json().get('evidenceReviews', {}).get(key)
     assert b.read_state('owner')[0]['evidenceReviews'] == {}
+
+
+def test_pending_zero_posted_uses_transacted_at_and_preserves_cleared_audit(setup):
+    s=seed(); k=b.account_key(account())
+    pending={**txn('pending','-0.21','ACCTVERIFY trial dep',pending=True),
+             'posted':0,'transacted_at':NOW-100}
+    b.merge(s,data(account(transactions=[pending,txn('posted','-8','Coffee cafe')])),NOW)
+    assert s['transactions'][k]['pending']['posted']==NOW-100
+    before=b.public_state(s)
+    assert len(before['transactions'][k])==2
+    b.merge(s,data(account(transactions=[txn('posted','-8','Coffee cafe')])),NOW+1)
+    assert s['transactions'][k]['pending']['pendingClearedAt']==NOW+1
+    assert len(b.public_state(s)['transactions'][k])==1
+    assert 'pending' in s['transactions'][k], 'Clearing a pending row must never erase saved financial evidence'
+
+
+@pytest.mark.parametrize('description, amount', [
+    ('ACCTVERIFY', '0.15'), ('TRIAL DEP', '-0.11'),
+    ('RTPTSTSTTL', '0.25'), ('RTP TST STTL', '-0.33'),
+    ('MTG PYMT $0.00', '0.00'), ('PRENOTE', '0.00'),
+])
+def test_verification_patterns_are_not_income_or_expenses(description,amount):
+    category, confidence, signals=b.automatic_category({
+        'pending':False,'amount':amount,'description':description,
+        'kind':b.classify(amount,description)})
+    assert category=='verification'
+    assert confidence=='high'
+    assert signals==[]
