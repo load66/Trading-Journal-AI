@@ -36,8 +36,9 @@ router = APIRouter(prefix='/api/bonus-tracker/simplefin', dependencies=[Depends(
 BACKGROUND_LOGGER = logging.getLogger(__name__)
 
 DAY = 86400
-FULL_SYNC_INTERVAL = 6 * 3600
-BALANCE_SYNC_INTERVAL = 3 * 3600
+FULL_SYNC_INTERVAL = 2 * 3600
+BALANCE_SYNC_INTERVAL = 2 * 3600
+AUTOMATIC_REQUEST_RESERVE = 4
 MAX_STATE = 8 * 1024 * 1024
 HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
 ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card', 'brokerage',
@@ -683,7 +684,7 @@ def merge(state, data, now):
 
 def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
-    fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'notices', 'institutionIssues', 'missingAccounts', 'lastSuccess',
+    fields = ('accounts', 'mappings', 'monitoredAccounts', 'lastAccountDiscoveryAt', 'lastNewAccountsAt', 'newAccountsLastSeenCount', 'warnings', 'notices', 'institutionIssues', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'nextGuidedDiscoveryAt',
               'lastBalanceRefreshAt', 'nextBalanceRefreshAt', 'error',
               'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync')
@@ -744,7 +745,7 @@ def claim_request(state, now):
 
 
 def refresh_balances(uid):
-    """Nontransaction balance refresh between full 6-hour pulls.
+    """Hourly alternating account discovery/refresh between full 2-hour pulls.
 
     No background request can bypass the same 24-call rolling account quota.
     History, bonus reviews, user corrections and the next transaction cursor
@@ -752,21 +753,71 @@ def refresh_balances(uid):
     """
     s, tag = reserve(uid, 'balance-refresh')
     now = int(time.time())
-    if (not s.get('access') or not s.get('accounts')
-            or now < s.get('nextBalanceRefreshAt', 0)
-            or now >= s.get('nextSyncAt', 0)):
+    if (not s.get('access') or now < s.get('nextBalanceRefreshAt', 0)
+            or (s.get('accounts') and now >= s.get('nextSyncAt', 0))):
         return finish(uid, s, tag)
     s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
     try:
         claim_request(s, now)
         tag = write_state(uid, s, tag)
         data = get_data(s['access'], balances=True)
-        fresh = {row['key']: {**row, 'firstSeenAt': next((a.get('firstSeenAt',now) for a in s['accounts'] if a['key']==row['key']),now)} for row in normalize_accounts(data)}
-        old = s.get('accounts', [])
-        s['accounts'] = [{**row, **fresh[row['key']]} if row['key'] in fresh else row
-                         for row in old]
-        record_balances(s, [row for row in s['accounts'] if row['key'] in fresh], now)
+        fresh = {row['key']: row for row in normalize_accounts(data)}
+        if not fresh and s.get('accounts'):
+            raise HTTPException(502, 'SimpleFIN returned no accounts. Saved accounts are unchanged.')
+        prior = {row['key']: row for row in s.get('accounts', [])}
+        # Preserve existing identity, profiles, monitoring preferences, reviews
+        # and transaction history; never replace an existing row from an
+        # accounts-only response or lose one because SimpleFIN omitted it.
+        discovered = []
+        for key, row in fresh.items():
+            if key not in prior:
+                row['firstSeenAt'] = now
+                row['discovered'] = True
+                prior[key] = row
+                discovered.append(row)
+            else:
+                existing = prior[key]
+                for field in ('name','bank','currency','balance','availableBalance',
+                              'balanceDate','accountType','accountSubtype','mask'):
+                    if row.get(field) is not None:
+                        existing[field] = row[field]
+        s['accounts'] = list(prior.values())
+        record_balances(s, [prior[key] for key in fresh], now)
         s['lastBalanceRefreshAt'] = now
+        s['lastAccountDiscoveryAt'] = now
+        s['newAccountsLastSeenCount'] = len(discovered)
+        if discovered:
+            s['lastNewAccountsAt'] = now
+            # The owner requested automatic monitoring of new institutions.
+            # Explicitly excluded/disabled accounts remain excluded.
+            monitored = set(s.get('monitoredAccounts', []))
+            monitored.update(a['key'] for a in discovered if syncing(s, a))
+            s['monitoredAccounts'] = sorted(monitored)
+            s['nextSyncAt'] = min(s.get('nextSyncAt', now), now + 3600)
+            # One scoped initial transaction request for all newly discovered
+            # accounts when capacity remains. Existing account rows are intact.
+            remaining, _ = _remaining_discovery_budget(s, now)
+            selected = [a for a in discovered if syncing(s, a)]
+            if selected and remaining > AUTOMATIC_REQUEST_RESERVE:
+                claim_request(s, now)
+                tag = write_state(uid, s, tag)
+                initial = get_data(s['access'], selected)
+                selected_keys = {a['key'] for a in selected}
+                scoped = {**initial, 'accounts': [
+                    a for a in initial.get('accounts', [])
+                    if account_key(a) in selected_keys]}
+                if scoped['accounts']:
+                    before_missing = copy.deepcopy(s.get('missingAccounts', []))
+                    candidate = merge(copy.deepcopy(s), scoped, now)
+                    candidate['missingAccounts'] = before_missing
+                    for account in candidate['accounts']:
+                        if account['key'] in selected_keys and any(
+                            not t.get('pending', False)
+                            for a in scoped['accounts'] if account_key(a)==account['key']
+                            for t in a.get('transactions', [])):
+                            account['firstSyncAt'] = now
+                            account.pop('discovered', None)
+                    s = candidate
     except HTTPException as exc:
         # Retain the saved ledger. A temporary balance refresh failure alone
         # does not claim every institution needs reconnection.
@@ -790,7 +841,7 @@ def sync(uid):
     s['lastAttempt'] = now
     # Reserve the next attempt before network I/O. Restart/timeout cannot exhaust provider quotas.
     s['nextSyncAt'] = now + FULL_SYNC_INTERVAL
-    s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
+    s['nextBalanceRefreshAt'] = now + 3600
     try:
         claim_request(s, now)
         tag = write_state(uid, s, tag)
@@ -1402,11 +1453,15 @@ async def scheduled_simplefin_loop():
             if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
                 uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
                 s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and s.get('accounts'):
-                    if time.time() >= s.get('nextSyncAt', 0):
-                        await run_in_threadpool(sync, uid)
-                    elif time.time() >= s.get('nextBalanceRefreshAt', 0):
-                        await run_in_threadpool(refresh_balances, uid)
+                if s.get('access'):
+                    # Keep several daily calls available for owner-triggered
+                    # recovery and initial history. Never exceed claim_request.
+                    remaining, _ = _remaining_discovery_budget(s, int(time.time()))
+                    if remaining > AUTOMATIC_REQUEST_RESERVE:
+                        if s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
+                            await run_in_threadpool(sync, uid)
+                        elif time.time() >= s.get('nextBalanceRefreshAt', 0):
+                            await run_in_threadpool(refresh_balances, uid)
         except Exception as error:
             # Never log repr(error) or provider payload; both can contain secrets.
             BACKGROUND_LOGGER.warning("simplefin_scheduled_sync_error class=%s", type(error).__name__)
