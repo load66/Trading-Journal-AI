@@ -17,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from bonus_backups import owner, store
@@ -758,6 +758,60 @@ def monitor(body: Monitored, request: Request):
 @router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
 def disconnect_account_item(handle: str, request: Request, delete_history: bool = False):
     return quota.disconnect_item(handle, request, delete_history=delete_history)
+
+
+class SyncNowBody(BaseModel):
+    # Clients select a private opaque connection handle, never a raw Item ID.
+    handle: str | None = Field(default=None, max_length=64)
+
+
+def _owner_sync_batch(uid, item_ids):
+    # Deliberately serial: global encrypted owner lease prevents parallel
+    # multi-Item writes overwriting one another.
+    for item_id in item_ids:
+        try:
+            sync_item_now(uid, item_id)
+        except Exception as error:
+            BACKGROUND_LOGGER.warning("plaid_owner_fast_sync class=%s", type(error).__name__)
+
+
+@router.post("/accounts/sync-now", dependencies=[Depends(_private)])
+def sync_now(body: SyncNowBody, request: Request, background_tasks: BackgroundTasks):
+    """Queue free cursor reads after a five-minute per-Item freshness guard.
+
+    Returns *updating*, never unverified success. Client must re-fetch saved
+    account state before displaying a new Updated timestamp.
+    """
+    uid = owner(request)
+    ledger, _ = quota._ledger()
+    doc, _ = _read(uid)
+    now = int(time.time())
+    candidates = {
+        item_id: state for item_id, state in doc.get("items", {}).items()
+        if (isinstance(state, dict) and state.get("accounts")
+            and isinstance(ledger.get("items", {}).get(item_id), dict)
+            and ledger["items"][item_id].get("owner") == uid
+            and not ledger["items"][item_id].get("disconnectedAt")
+            and not ledger["items"][item_id].get("disconnectingAt")
+            and any(syncing(doc, a) for a in state.get("accounts", [])))
+    }
+    if body.handle is not None:
+        if len(body.handle) != 64 or any(ch not in "0123456789abcdef" for ch in body.handle):
+            raise HTTPException(404, "Existing connection not found.")
+        candidates = {item_id: state for item_id, state in candidates.items()
+                      if connection_handle(uid, item_id) == body.handle}
+        if not candidates:
+            raise HTTPException(404, "Existing connection not found.")
+    if doc.get("leaseUntil", 0) > now:
+        return {"status": "updating", "queued": 0,
+                "data": _public(doc, ledger, uid)}
+    due = [item_id for item_id, state in candidates.items()
+           if (state.get("lastTransactionAttemptAt") or
+               state.get("lastTransactionSyncAt") or 0) <= now - MIN_REFRESH_GAP_SECONDS]
+    if due:
+        background_tasks.add_task(_owner_sync_batch, uid, due)
+    return {"status": "updating" if due else "updated_just_now",
+            "queued": len(due), "data": _public(doc, ledger, uid)}
 
 
 @router.post("/accounts/sync", dependencies=[Depends(_private)])
