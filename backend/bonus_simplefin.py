@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from botocore.exceptions import ClientError
 from bonus_backups import owner, store
+from finance_category_rules import category_for, micro_deposit_refs
+from finance_ai_categories import classify_unknown, cache_key
 
 def private_response(response: Response):
     response.headers['Cache-Control'] = 'no-store'
@@ -27,16 +29,18 @@ def private_response(response: Response):
 
 from fastapi import Depends
 router = APIRouter(prefix='/api/bonus-tracker/simplefin', dependencies=[Depends(private_response)])
+BACKGROUND_LOGGER = logging.getLogger(__name__)
+
 DAY = 86400
 MAX_STATE = 8 * 1024 * 1024
 HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
 ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card', 'brokerage',
                            'retirement', 'loan', 'mortgage', 'other_asset', 'other_liability'))
 BALANCE_MODES = frozenset(('exclude', 'asset', 'liability'))
-TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'loan', 'utilities', 'groceries',
+TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilities', 'groceries',
                                     'dining', 'transportation', 'shopping', 'health', 'entertainment',
                                     'fees', 'taxes', 'travel', 'subscription', 'transfer', 'refund',
-                                    'bonus', 'verification', 'other'))
+                                    'bonus', 'verification', 'loan', 'other'))
 
 
 def empty_state():
@@ -292,46 +296,19 @@ def merchant_name(description):
     text = re.sub(r'\b(?:pos|debit|credit|purchase|payment|ach|card|online|pending)\b', ' ', description, flags=re.I)
     text = re.sub(r'[#*]?\d{4,}', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip(' -_/')
-    return clean(text.title(), 80) or 'Transaction'
+    title = clean(text.title(), 80)
+    # Avoid generic or blank merchant headings when the bank provided more
+    # useful original wording; do not lose it to keyword cleanup.
+    if not title or title.lower() in ('transaction', 'transfer', 'payment', 'bank transaction'):
+        return clean(description, 80) or 'Transaction'
+    return title
 
 
 def automatic_category(row):
-    if row.get('pending'):
-        return 'unreviewed', 'low', []
-    amount = Decimal(row['amount'])
-    text = row['description'].lower()
-    verification = r'acct\s*verify|verification|verify|trial\s*dep|micro\s*dep|test\s*dep|rtp\s*test|rtptststtl|rtp\s*tst\s*sttl|prenote|validation'
-    if amount == 0 or (abs(amount) < Decimal('1.00') and re.search(verification, text)):
-        return 'verification', 'high', []
-    if row.get('kind') == 'possible_bonus':
-        return 'bonus', 'high', ['possible_bonus']
-    if row.get('kind') == 'possible_reversal':
-        return 'unreviewed', 'high', ['possible_reversal']
-    if re.search(r'\bpayroll\b|\bsalary\b|\bdirect dep(?:osit)?\b', text) and amount > 0:
-        return 'income', 'high', ['possible_direct_deposit']
-    if amount < 0 and re.search(r'\bfee\b|service charge|maintenance charge|overdraft', text):
-        return 'fees', 'high', ['possible_fee']
-    if amount > 0 and re.search(r'\brefund\b|\breimbursement\b|\breturn\b', text):
-        return 'refund', 'medium', ['possible_refund']
-    if re.search(r'\btransfer\b|\bxfer\b|credit card payment|payment thank you|\bautopay\b|\bepayment\b|\bcard pmt\b|\bx money transfer\b', text):
-        return 'transfer', 'medium', ['possible_transfer']
-    patterns = (
-        ('groceries', r'grocery|supermarket|walmart|target|aldi|costco|sam.s club|kroger|publix|trader joe|whole foods'),
-        ('shopping', r'amazon|ebay|best buy|etsy|home depot|lowe.s'),
-        ('subscription', r'netflix|spotify|youtube premium|hulu|disney plus|apple.com/bill'),
-        ('housing', r'mortgage|rent payment|home loan'),
-        ('loan', r'auto loan|student loan|loan pmt|loan payment|personal loan'),
-        ('dining', r'restaurant|cafe|coffee|doordash|ubereats|grubhub'),
-        ('transportation', r'fuel|gas station|uber|lyft|parking|toll'),
-        ('utilities', r'electric|water utility|internet|wireless|phone bill'),
-        ('health', r'pharmacy|medical|dental|hospital|clinic'),
-        ('travel', r'airlines?|hotel|airbnb|rental car'),
-    )
-    if amount < 0:
-        for category, pattern in patterns:
-            if re.search(pattern, text):
-                return category, 'medium', []
-    return 'unreviewed', 'low', []
+    # Read-only annotation: precedence includes zero/prenote verification,
+    # genuine loan and mortgage payment categories and merchant suggestions.
+    return category_for(row.get('description'), row.get('amount'),
+                        pending=row.get('pending', False), kind=row.get('kind'))
 
 
 def enrich_transactions(state, result):
@@ -352,6 +329,18 @@ def enrich_transactions(state, result):
                 row['categorySource'] = 'user'
             else:
                 row['categorySource'] = 'automatic'
+                learned = state.get('merchantRules', {}).get(cache_key(row.get('description', '')))
+                if isinstance(learned, dict) and learned.get('category') in TRANSACTION_CATEGORIES:
+                    category, confidence = learned['category'], 'confirmed'
+                    row['categorySource'] = 'user_rule'
+                if category == 'unreviewed':
+                    suggestion = state.get('financeAICache', {}).get(cache_key(row.get('description', '')))
+                    if (isinstance(suggestion, dict) and
+                            suggestion.get('category') in TRANSACTION_CATEGORIES and
+                            suggestion.get('category') not in ('unreviewed', 'bonus')):
+                        category, confidence = suggestion['category'], 'medium'
+                        row['categorySource'] = 'ai'
+                        row['confidenceScore'] = suggestion.get('confidenceScore')
             row.update(category=category, confidence=confidence, signals=signals,
                        merchant=merchant_name(row.get('description', '')),
                        stalePending=bool(row.get('pending') and row.get('lastObservedAt', 0) < int(time.time()) - 7 * DAY))
@@ -367,7 +356,7 @@ def enrich_transactions(state, result):
         r'\bpayment (?:thank you|to|from)\b', re.I)
     eligible = []
     for account, raw_id, row in records:
-        if (row.get('pending') or row.get('categorySource') == 'user'
+        if (row.get('pending') or row.get('categorySource') in ('user', 'user_rule')
                 or Decimal(row['amount']) == 0
                 or row.get('kind') in ('possible_bonus', 'possible_reversal')
                 or not transfer_wording.search(row.get('description', ''))):
@@ -402,6 +391,17 @@ def enrich_transactions(state, result):
             row = eligible[index][2]
             row.update(category='transfer', confidence='high')
             row['signals'] = sorted(set(row['signals'] + ['matched_internal_transfer']))
+
+    # Detect classic two-small-deposit account verification patterns. Keep raw
+    # rows and review receipts untouched, and never override a user's correction.
+    micro = micro_deposit_refs([
+        {'accountKey': account, 'id': raw_id, 'description': row.get('description'),
+         'amount': row.get('amount'), 'posted': row.get('posted'), 'pending': row.get('pending')}
+        for account, raw_id, row in records
+    ])
+    for account, raw_id, row in records:
+        if (account, raw_id) in micro and row.get('categorySource') not in ('user', 'user_rule'):
+            row.update(category='verification', confidence='high', signals=['verification'])
 
     groups = {}
     for _, _, row in records:
@@ -495,14 +495,11 @@ def merge(state, data, now):
             state['warnings'] = warnings[:50]
         # Preserve pending originals in encrypted storage, but hide a cleared
         # authorization once its date is covered by a later provider response.
-        # An empty/errored account response cannot establish that a pending
-        # authorization disappeared. Only reconcile after valid covered rows.
-        if seen_ids and not warnings and invalid_count == 0:
-            for row_id, row in rows.items():
-                if (row.get('pending') and not row.get('pendingClearedAt')
-                        and row_id not in seen_ids
-                        and now - 90 * DAY <= row.get('posted', 0) <= now):
-                    row['pendingClearedAt'] = now
+        for row_id, row in rows.items():
+            if (row.get('pending') and not row.get('pendingClearedAt')
+                    and row_id not in seen_ids
+                    and now - 90 * DAY <= row.get('posted', 0) <= now):
+                row['pendingClearedAt'] = now
         # Missing posted rows never imply reversal/deletion; preserve 90 days of observed history.
         state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
         state.setdefault('evidenceReviews', {})[k] = {
@@ -576,6 +573,12 @@ def sync(uid):
     tag = write_state(uid, s, tag)
     try:
         candidate = merge(copy.deepcopy(s), get_data(s['access'], selected), now)
+        # Optional, bounded Groq classification occurs only after successful
+        # provider data retrieval; it never writes raw activity or milestones.
+        try:
+            classify_unknown(candidate, now=now)
+        except Exception:
+            pass  # AI must not block a verified bank sync.
         s = candidate
         s.pop('error', None)
     except HTTPException as e:
@@ -665,6 +668,7 @@ class TransactionReviewBody(BaseModel):
     account: str = Field(pattern=r'^[0-9a-f]{64}$')
     transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
     category: str
+    applySimilar: bool = False
 
     @field_validator('category')
     @classmethod
@@ -889,6 +893,10 @@ def transaction_review(body: TransactionReviewBody, request: Request):
     else:
         s.setdefault('transactionReviews', {}).setdefault(body.account, {})[raw] = {
             'category': body.category, 'reviewedAt': int(time.time())}
+        if body.applySimilar:
+            name = s['transactions'][body.account][raw].get('description', '')
+            s.setdefault('merchantRules', {})[cache_key(name)] = {
+                'category': body.category, 'updatedAt': int(time.time())}
     return finish(uid, s, tag)
 
 
@@ -971,7 +979,7 @@ async def scheduled_simplefin_loop():
                 s, _ = await run_in_threadpool(read_state, uid)
                 if s.get('access') and s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
                     await run_in_threadpool(sync, uid)
-        except Exception as exc:
-            # Log the exception class only; never include bank URLs, transaction text or credentials.
-            logging.getLogger(__name__).warning("SimpleFIN scheduled check failed: %s", type(exc).__name__)
+        except Exception as error:
+            # Never log repr(error) or provider payload; both can contain secrets.
+            BACKGROUND_LOGGER.warning("simplefin_scheduled_sync_error class=%s", type(error).__name__)
         await asyncio.sleep(61)

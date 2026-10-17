@@ -23,6 +23,9 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
     public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
+from finance_ai_categories import classify_unknown, cache_key
+
+BACKGROUND_LOGGER = logging.getLogger(__name__)
 
 DAY = 86400
 MAX_BYTES = 8 * 1024 * 1024
@@ -36,9 +39,10 @@ HISTORY_RETRY_HOURS = (1, 3, 6)
 
 class SyncDelta(tuple):
     """A four-element cursor delta with optional Plaid historical-readiness metadata."""
-    def __new__(cls, items, update_status=None):
+    def __new__(cls, items, update_status=None, malformed=None):
         instance = super().__new__(cls, items)
         instance.update_status = update_status
+        instance.malformed = malformed or {}
         return instance
 
 
@@ -220,6 +224,7 @@ def _sync_item(token, current_cursor):
     """Apply all pages atomically, never persist a partial cursor."""
     cursor = current_cursor or ""
     added, modified, removed = {}, {}, set()
+    malformed = {}
     update_status = None
     for _ in range(MAX_PAGES):
         response = _provider("/transactions/sync", token, cursor=cursor, count=500)
@@ -236,8 +241,10 @@ def _sync_item(token, current_cursor):
             if not isinstance(rows, list) or len(rows) > 500:
                 raise HTTPException(502, "Plaid transaction page is invalid.")
             for row in rows:
-                if not isinstance(row, dict) or not isinstance(row.get("transaction_id"), str):
-                    raise HTTPException(502, "Plaid transaction identity is invalid.")
+                if not isinstance(row, dict) or not isinstance(row.get("transaction_id"), str) or not row["transaction_id"]:
+                    account = row.get("account_id", "unknown") if isinstance(row, dict) else "unknown"
+                    malformed[str(account)] = malformed.get(str(account), 0) + 1
+                    continue
                 destination[row["transaction_id"]] = row
         removals = response.get("removed")
         if not isinstance(removals, list):
@@ -250,7 +257,7 @@ def _sync_item(token, current_cursor):
             raise HTTPException(502, "Plaid transaction batch is too large.")
         cursor = new_cursor
         if not more:
-            return SyncDelta((added, modified, removed, cursor), update_status)
+            return SyncDelta((added, modified, removed, cursor), update_status, malformed)
     raise HTTPException(502, "Plaid sync exceeds the safe page limit. Existing data is preserved.")
 
 
@@ -270,6 +277,7 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
         out.setdefault("cursor", "")
         return out
     added, modified, removed, cursor = changes
+    malformed = dict(getattr(changes, "malformed", {}) or {})
     transactions = copy.deepcopy(out.get("transactions", {}))
     for ident in removed:
         transactions.pop(ident, None)
@@ -281,7 +289,12 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
             previous = transactions.get(prior_pending)
             if isinstance(previous, dict) and previous.get("pending") and previous.get("account") == row.get("account_id"):
                 transactions.pop(prior_pending, None)
-        converted = _transaction(row, now)
+        try:
+            converted = _transaction(row, now)
+        except HTTPException:
+            account = row.get("account_id", "unknown") if isinstance(row, dict) else "unknown"
+            malformed[str(account)] = malformed.get(str(account), 0) + 1
+            continue
         existing = transactions.get(ident)
         if existing:
             converted["observedAt"] = existing.get("observedAt", now)
@@ -301,6 +314,10 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
     out["transactions"] = {k: v for k, v in transactions.items()
                           if isinstance(v, dict) and v.get("posted", 0) >= cutoff}
     out["cursor"] = cursor
+    out["invalidTransactionsByAccount"] = {
+        _account_key(item_id, raw): count for raw, count in malformed.items() if raw != "unknown"
+    }
+    out["unassignedInvalidTransactions"] = malformed.get("unknown", 0)
     out["lastTransactionAttemptAt"] = now
     out["lastTransactionSyncAt"] = now
     out.pop("transactionSyncError", None)
@@ -327,6 +344,8 @@ def _view(doc, ledger, uid):
     accessible = {item_id for item_id, row in ledger["items"].items()
                   if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt")}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
+            "financeAICache": doc.get("financeAICache", {}),
+            "merchantRules": doc.get("merchantRules", {}),
             "monitoredAccounts": list(doc.get("monitored", [])),
             **{key: copy.deepcopy(doc.get(key, {})) for key in
                ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
@@ -342,6 +361,7 @@ def _view(doc, ledger, uid):
                                      "connectionHandle": connection_handle(uid, item_id),
                                      "transactionSyncStatus": state.get("transactionSyncStatus", "awaiting_first_sync"),
                                      "transactionUpdateStatus": state.get("transactionUpdateStatus"),
+                                     "invalidTransactionRows": state.get("invalidTransactionsByAccount", {}).get(key, 0),
                                      "historyComplete": (state.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE" and any(not tx.get("pending") for tx in state.get("transactions", {}).values())),
                                      "transactionLastSyncAt": state.get("lastTransactionSyncAt"),
                                      "transactionNextSyncAt": state.get("nextTransactionSyncAt", doc.get("nextSyncAt")),
@@ -433,6 +453,9 @@ def transaction_review(body: TransactionReviewBody, request: Request):
     else:
         reviews[raw] = {"category": body.category, "reviewedAt": int(time.time()),
                         "fingerprint": evidence_fingerprint(rows[raw])}
+        if body.applySimilar:
+            doc.setdefault("merchantRules", {})[cache_key(rows[raw].get("description", ""))] = {
+                "category": body.category, "updatedAt": int(time.time())}
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
 
@@ -586,6 +609,10 @@ def sync_owner(uid):
             candidate["error"] = exc.detail
         candidate.pop("lease", None)
         candidate.pop("leaseUntil", None)
+        try:
+            classify_unknown(candidate, now=now)
+        except Exception:
+            pass  # Optional AI must never block or corrupt provider transactions.
         _write(uid, candidate, etag)
         return _public(candidate, ledger, uid)
     doc["lease"] = uuid.uuid4().hex
@@ -652,6 +679,10 @@ def sync_owner(uid):
         candidate["error"] = exc.detail
     candidate.pop("lease", None)
     candidate.pop("leaseUntil", None)
+    try:
+        classify_unknown(candidate, now=now)
+    except Exception:
+        pass  # Category suggestions are optional; never fail transaction sync.
     _write(uid, candidate, etag)
     return _public(candidate, ledger, uid)
 
@@ -680,15 +711,15 @@ def scheduled_sync_once():
                 for item_id, state in doc.get("items", {}).items())
             if now >= doc.get("nextSyncAt", 0) or discover_due or item_due:
                 sync_owner(uid)
-        except Exception as exc:
-            # Exception type only; provider messages and private owner data are excluded.
-            logging.getLogger(__name__).warning("Plaid scheduled owner check failed: %s", type(exc).__name__)
+        except Exception as error:
+            # Only the exception class is logged; no account, token or bank data.
+            BACKGROUND_LOGGER.warning("plaid_owner_sync_error class=%s", type(error).__name__)
 
 
 async def scheduled_plaid_loop():
     while True:
         try:
             await asyncio.to_thread(scheduled_sync_once)
-        except Exception as exc:
-            logging.getLogger(__name__).warning("Plaid scheduler failed: %s", type(exc).__name__)
+        except Exception as error:
+            BACKGROUND_LOGGER.warning("plaid_scheduled_sync_error class=%s", type(error).__name__)
         await asyncio.sleep(300)
