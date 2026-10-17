@@ -74,3 +74,21 @@ def test_user_confirmed_employer_rule_adds_reviewable_dd_signal():
     annotate_paychecks([overridden])
     assert 'possible_direct_deposit' not in overridden['signals']
 
+
+def test_cross_account_same_employer_does_not_infer_a_paycheck_on_target_account():
+    """A company credit in another account cannot complete the pay pattern."""
+    first=row('Schreiber Foods','1061.24',DAY*100)
+    second=row('Schreiber Foods','1061.24',DAY*114)
+    first['accountKey']='linked-savings'
+    second['accountKey']='unlinked-checking'
+    annotate_paychecks([first,second])
+    assert all('possible_direct_deposit' not in x['signals'] for x in (first,second))
+    assert all('possible_paycheck' in x['signals'] for x in (first,second))
+
+def test_two_credits_to_same_linked_account_emit_direct_deposit_candidates():
+    rows=[row('Schreiber Foods','1061.24',DAY*100),
+          row('Schreiber Foods','1061.24',DAY*114)]
+    for candidate in rows:
+        candidate['accountKey']='linked-checking'
+    annotate_paychecks(rows)
+    assert all('possible_direct_deposit' in x['signals'] for x in rows)
