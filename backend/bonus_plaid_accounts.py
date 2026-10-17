@@ -750,6 +750,7 @@ def sync_owner(uid):
         monitored = set(candidate.get("monitored", []))
         refreshed = False
         failed = False
+        failed_account_keys = set()
         for item_id, item in known.items():
             old = candidate["items"].get(item_id, {})
             try:
@@ -763,6 +764,7 @@ def sync_owner(uid):
                 # saved transactions or prevent other Items from updating.
                 if old:
                     exposed = copy.deepcopy(old)
+                    failed_account_keys.update(a.get("key") for a in old.get("accounts", []) if a.get("key"))
                     _sync_failure(exposed, now, exc.detail)
                     candidate["items"][item_id] = exposed
                 continue
@@ -785,6 +787,7 @@ def sync_owner(uid):
                     # A temporarily unavailable Item must not roll back
                     # successfully synced unrelated banks or lose its cursor.
                     _sync_failure(exposed, now, exc.detail)
+                    failed_account_keys.update(a.get("key") for a in exposed.get("accounts", []) if a.get("key"))
             # Plaid returns an Item-wide delta, even when only one account is
             # selected. Discard unselected activity before encrypted persistence.
             exposed["transactions"] = {
@@ -796,10 +799,12 @@ def sync_owner(uid):
         # silently regain approval if the provider later reuses its identifier.
         current = _view(candidate, ledger, uid)["transactions"]
         for field in ("evidenceReviews", "transactionReviews"):
-            candidate[field] = {key: {raw: review for raw, review in rows.items()
-                if raw in current.get(key, {}) and review.get("fingerprint") ==
-                evidence_fingerprint(current[key][raw])}
-                for key, rows in candidate.get(field, {}).items() if key in current}
+            candidate[field] = {key: (copy.deepcopy(rows) if key in failed_account_keys else
+                {raw: review for raw, review in rows.items()
+                 if raw in current.get(key, {}) and review.get("fingerprint") ==
+                 evidence_fingerprint(current[key][raw])})
+                for key, rows in candidate.get(field, {}).items()
+                if key in current or key in failed_account_keys}
         if refreshed:
             candidate["lastSuccess"] = now
         if failed:
