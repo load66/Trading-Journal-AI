@@ -762,7 +762,7 @@ def refresh_balances(uid, *, force=False):
     if force and remaining <= AUTOMATIC_REQUEST_RESERVE:
         s['balanceRefreshErrorKind'] = 429
         return finish(uid, s, tag)
-    s['nextBalanceRefreshAt'] = now + (BALANCE_SYNC_INTERVAL if s.get('accounts') else 3600)
+    s['nextBalanceRefreshAt'] = now + (BALANCE_SYNC_INTERVAL if any(syncing(s,a) for a in s.get('accounts', [])) else 3600)
     if force:
         # Failed startup probes cannot loop every scheduler minute or waste
         # the shared provider budget while waiting for delayed Bridge data.
