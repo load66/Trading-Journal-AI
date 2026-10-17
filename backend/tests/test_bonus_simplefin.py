@@ -99,7 +99,7 @@ def test_invalid_amount_is_skipped_and_valid_rows_are_retained(setup,monkeypatch
         txn(ident='bad',amount='NaN'),txn(ident='good',amount='2.00',description='Coffee shop')])))
     result=b.sync('owner')
     k=b.account_key(account())
-    assert result['status']=='attention'
+    assert result['status']=='connected'
     assert len(result['transactions'][k]) == 1
     assert 'invalid transaction' in result['warnings'][0]
     assert b.read_state('owner')[0]['transactions'][k]['good']['amount']=='2.00'
@@ -221,7 +221,8 @@ def test_network_never_follows_redirects_or_sends_credentials_in_url(setup,monke
     assert called[0][1]['auth']==('synthetic','secret')
     assert ('account','a') in called[0][1]['params']
     assert ('pending','1') in called[0][1]['params']
-    assert int(dict(called[0][1]['params'])['start-date']) == NOW-90*b.DAY
+    assert int(dict(called[0][1]['params'])['start-date']) == NOW-89*b.DAY
+    assert int(dict(called[0][1]['params'])['end-date']) == NOW
 
 
 def test_private_routes_disable_caching(setup,monkeypatch):
@@ -814,3 +815,94 @@ def test_saved_automatic_old_subscription_reclassified_without_mutating_ledger()
     assert row['category']=='transfer'
     assert 'investment_transfer' in row['signals']
     assert s['transactions'][a]['old']==before
+
+
+def test_simplefin_89_day_window_for_balances_and_transactions(setup, monkeypatch):
+    calls=[]
+    def fake_network(*args, **kwargs):
+        calls.append(kwargs['params'])
+        return json.dumps(data(account())).encode()
+    monkeypatch.setattr(b,'network',fake_network)
+    b.get_data(ACCESS,[{'id':'a'}])
+    b.get_data(ACCESS,balances=True)
+    assert len(calls)==2
+    for params in calls:
+        dates=dict(params)
+        assert int(dates['end-date'])==NOW
+        assert int(dates['start-date'])==NOW-89*b.DAY
+        assert 0<int(dates['end-date'])-int(dates['start-date'])<=90*b.DAY
+
+
+def test_date_capped_warning_is_informational_and_clears_on_next_success(setup):
+    a=account(); s=seed()
+    capped={'accounts':[a], 'connections':[{'conn_id':'one','name':'Synthetic CU'}],
+            'errlist':[{'msg':'Requested date range exceeds limit of 90 days and was capped.','conn_id':'one'}]}
+    b.merge(s,capped,NOW)
+    assert s['status']=='connected'
+    assert not s['institutionHealth']
+    assert s['warnings'] and 'capped' in s['warnings'][0]
+    assert b.public_state(s)['accounts'][0]['institutionStatus']=='connected'
+    b.merge(s,data(a),NOW+1)
+    assert s['status']=='connected'
+    assert s['warnings']==[]
+    assert s['institutionHealth']=={}
+
+
+def test_bank_login_warning_is_scoped_and_second_bank_stays_healthy(setup):
+    a,beta=account('one','a'),account('two','b')
+    s=seed()
+    s['accounts']=b.normalize_accounts({
+        'accounts':[a,beta],
+        'connections':[{'conn_id':'one','name':'Chase'},{'conn_id':'two','name':'Robinhood'}]})
+    s['monitoredAccounts']=[x['key'] for x in s['accounts']]
+    response={'accounts':[a,beta],
+              'connections':[{'conn_id':'one','name':'Chase'},{'conn_id':'two','name':'Robinhood'}],
+              'errlist':[{'msg':'Bank login required; sign in again','conn_id':'one'}]}
+    b.merge(s,response,NOW)
+    public=b.public_state(s)
+    by_bank={a['bank']:a for a in public['accounts']}
+    assert s['status']=='attention'
+    assert by_bank['Chase']['institutionStatus']=='needs_attention'
+    assert by_bank['Chase']['institutionReasonCode']=='bank_login'
+    assert by_bank['Chase']['institutionAction']=='fix_on_simplefin'
+    assert by_bank['Robinhood']['institutionStatus']=='connected'
+    b.merge(s,{'accounts':[a,beta],'connections':response['connections'],'errlist':[]},NOW+1)
+    assert s['status']=='connected'
+    assert not s['institutionHealth']
+
+
+def test_rejected_simplefin_access_is_only_reconnect_action(setup):
+    a=account(); s=seed()
+    flagged={'accounts':[a], 'connections':[{'conn_id':'one','name':'Synthetic CU'}],
+             'errlist':[{'conn_id':'one','msg':'Authorization access rejected'}]}
+    b.merge(s,flagged,NOW)
+    public=b.public_state(s)
+    assert public['accounts'][0]['institutionReasonCode']=='access_rejected'
+    assert public['accounts'][0]['institutionAction']=='reconnect'
+
+
+def test_general_warning_does_not_flag_all_simplefin_banks(setup):
+    a,beta=account('one','a'),account('two','b')
+    s=seed()
+    s['accounts']=b.normalize_accounts({'accounts':[a,beta],'connections':[
+        {'conn_id':'one','name':'Bank One'},{'conn_id':'two','name':'Bank Two'}]})
+    s['monitoredAccounts']=[x['key'] for x in s['accounts']]
+    payload={'accounts':[a,beta],'connections':[
+        {'conn_id':'one','name':'Bank One'},{'conn_id':'two','name':'Bank Two'}],
+        'errlist':[{'msg':'Bank connection failed without institution ID'}]}
+    b.merge(s,payload,NOW)
+    assert s['status']=='attention'
+    assert s['providerHealth']['reasonCode']=='connection_error'
+    assert all(x['institutionStatus']=='connected' for x in b.public_state(s)['accounts'])
+
+
+def test_missing_account_alert_only_affects_missing_bank(setup):
+    a,beta=account('one','a'),account('two','b')
+    s=seed()
+    s['accounts']=b.normalize_accounts({'accounts':[a,beta],'connections':[
+        {'conn_id':'one','name':'Bank One'},{'conn_id':'two','name':'Bank Two'}]})
+    s['monitoredAccounts']=[x['key'] for x in s['accounts']]
+    b.merge(s,{'accounts':[a],'connections':[{'conn_id':'one','name':'Bank One'}],'errlist':[]},NOW)
+    by_bank={x['bank']:x for x in b.public_state(s)['accounts']}
+    assert by_bank['Bank One']['institutionStatus']=='connected'
+    assert by_bank['Bank Two']['institutionReasonCode']=='missing_account'
