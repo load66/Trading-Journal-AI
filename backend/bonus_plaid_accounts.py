@@ -7,6 +7,7 @@ import copy
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -679,15 +680,15 @@ def scheduled_sync_once():
                 for item_id, state in doc.get("items", {}).items())
             if now >= doc.get("nextSyncAt", 0) or discover_due or item_due:
                 sync_owner(uid)
-        except Exception:
-            # Private per-owner status reports failures; never log bank data.
-            pass
+        except Exception as exc:
+            # Exception type only; provider messages and private owner data are excluded.
+            logging.getLogger(__name__).warning("Plaid scheduled owner check failed: %s", type(exc).__name__)
 
 
 async def scheduled_plaid_loop():
     while True:
         try:
             await asyncio.to_thread(scheduled_sync_once)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Plaid scheduler failed: %s", type(exc).__name__)
         await asyncio.sleep(300)
