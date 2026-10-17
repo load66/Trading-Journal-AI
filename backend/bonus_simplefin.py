@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from botocore.exceptions import ClientError
 from bonus_backups import owner, store
-from finance_category_rules import category_for, micro_deposit_refs
+from finance_category_rules import category_for, micro_deposit_refs, annotate_recurring_rent
 from finance_income_rules import annotate_paychecks
 from finance_ai_categories import classify_unknown, cache_key
 from finance_history_archive import archive_old, read_month, HOT_DAYS, purge_account
@@ -555,6 +555,7 @@ def enrich_transactions(state, result):
     for account, _raw, row in records:
         row['accountKey'] = account
     annotate_paychecks([row for _account, _raw, row in records])
+    annotate_recurring_rent([row for _account, _raw, row in records])
 
     # Detect classic two-small-deposit account verification patterns. Keep raw
     # rows and review receipts untouched, and never override a user's correction.
