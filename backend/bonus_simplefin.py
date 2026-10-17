@@ -4,6 +4,7 @@ import base64
 import copy
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -28,6 +29,8 @@ def private_response(response: Response):
 
 from fastapi import Depends
 router = APIRouter(prefix='/api/bonus-tracker/simplefin', dependencies=[Depends(private_response)])
+BACKGROUND_LOGGER = logging.getLogger(__name__)
+
 DAY = 86400
 MAX_STATE = 8 * 1024 * 1024
 HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
@@ -971,7 +974,7 @@ async def scheduled_simplefin_loop():
                 s, _ = await run_in_threadpool(read_state, uid)
                 if s.get('access') and s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
                     await run_in_threadpool(sync, uid)
-        except Exception:
-            # No financial data, credentials or provider URLs in logs; per-owner status shows errors.
-            pass
+        except Exception as error:
+            # Never log repr(error) or provider payload; both can contain secrets.
+            BACKGROUND_LOGGER.warning("simplefin_scheduled_sync_error class=%s", type(error).__name__)
         await asyncio.sleep(61)
