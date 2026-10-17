@@ -6,6 +6,9 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
+- In progress: Categories v2 P2P case regression follow-up on codex/finance-categories-v2-p2p-fix; backend v3.5.0 deployed, frontend PR #157 awaiting browser CI
+- Next step: verify failing regression, apply conservative matcher fix, green CI, backend Railway exact-commit check, frontend PR #157 release
+
 - Deployed baseline: SimpleFIN backend v3.4.98, merge 26dc4b2076f89157d6fe8356a90eaa244ac59cc3 (Railway SUCCESS)
 - Release candidate: Finance Categories v2 backend v3.5.0 for issue #156 on codex/finance-categories-v2
 - Backend PR: https://github.com/load66/Trading-Journal-AI/pull/224
