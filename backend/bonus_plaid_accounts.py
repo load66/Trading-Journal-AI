@@ -682,6 +682,7 @@ def sync_owner(uid):
         candidate = copy.deepcopy(doc)
         try:
             discovery_failed = False
+            history_failed = False
             for item_id, item in eligible_missing.items():
                 try:
                     raw = _provider("/accounts/get", item["access"])
@@ -702,6 +703,7 @@ def sync_owner(uid):
                         # Retain successful account discovery and clearly mark
                         # incomplete first-history coverage, never invent zero.
                         _sync_failure(state, now, exc.detail)
+                        history_failed = True
                 candidate["items"][item_id] = state
                 candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
             for item_id, item in due_items.items():
@@ -716,10 +718,11 @@ def sync_owner(uid):
                     candidate["lastSuccess"] = now
                 except HTTPException as exc:
                     _sync_failure(old, now, exc.detail)
+                    history_failed = True
             if eligible_missing:
                 candidate["lastAccountDiscovery"] = now
-            if discovery_failed:
-                candidate["error"] = "One or more linked banks need account discovery. Retry after the next provider window."
+            if discovery_failed or history_failed:
+                candidate["error"] = "One or more linked banks need an update. Retry after the next provider window."
             else:
                 candidate.pop("error", None)
         except HTTPException as exc:
@@ -745,6 +748,8 @@ def sync_owner(uid):
     candidate = copy.deepcopy(doc)
     try:
         monitored = set(candidate.get("monitored", []))
+        refreshed = False
+        failed = False
         for item_id, item in known.items():
             old = candidate["items"].get(item_id, {})
             try:
@@ -753,6 +758,7 @@ def sync_owner(uid):
                     raise HTTPException(502, "This bank did not return its previously linked accounts.")
                 exposed = _merge(old, item_id, item["institution"], raw, None, now)
             except HTTPException as exc:
+                failed = True
                 # A single bank's account-discovery outage must not destroy
                 # saved transactions or prevent other Items from updating.
                 if old:
@@ -761,6 +767,7 @@ def sync_owner(uid):
                     candidate["items"][item_id] = exposed
                 continue
             discovered = {a["key"] for a in exposed["accounts"]}
+            refreshed = True
             new_accounts = discovered - monitored
             monitored.update(discovered)
             candidate["monitored"] = sorted(monitored)
@@ -774,6 +781,7 @@ def sync_owner(uid):
                     changes = _sync_item(item["access"], old.get("cursor"))
                     exposed = _merge(old, item_id, item["institution"], raw, changes, now)
                 except HTTPException as exc:
+                    failed = True
                     # A temporarily unavailable Item must not roll back
                     # successfully synced unrelated banks or lose its cursor.
                     _sync_failure(exposed, now, exc.detail)
@@ -792,8 +800,12 @@ def sync_owner(uid):
                 if raw in current.get(key, {}) and review.get("fingerprint") ==
                 evidence_fingerprint(current[key][raw])}
                 for key, rows in candidate.get(field, {}).items() if key in current}
-        candidate["lastSuccess"] = now
-        candidate.pop("error", None)
+        if refreshed:
+            candidate["lastSuccess"] = now
+        if failed:
+            candidate["error"] = "Some linked banks need an update. Existing activity is preserved."
+        else:
+            candidate.pop("error", None)
     except HTTPException as exc:
         # Fail closed: no partial cursor or transaction import is acknowledged.
         candidate = doc
