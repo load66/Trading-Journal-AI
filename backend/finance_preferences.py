@@ -102,6 +102,8 @@ def _validate(section,key,value):
         if value is None:
             return None
         pair=key.split("|")
+        if value=={"separate":True}:
+            return {"separate":True}
         if set(value)!={"primary"} or value["primary"] not in pair:
             raise HTTPException(422,"Select the preferred account.")
         return {"primary":value["primary"]}
