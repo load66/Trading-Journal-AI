@@ -543,6 +543,7 @@ def public_state(s):
     out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
                        for a in s.get('accounts', [])]
     out['monitoredAccounts'] = list(s.get('monitoredAccounts', []))
+    out['historyMonths'] = list(s.get('historyMonths', []))
     out['transactions'] = {}
     enrich_transactions(s, out)
     out['evidenceReviews'] = public_evidence_reviews(s)
