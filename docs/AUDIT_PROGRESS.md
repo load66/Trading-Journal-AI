@@ -1,10 +1,19 @@
 # Audit progress
 
-Active agent: codex (Finance removal inventory; codex/remove-finance)
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- Release checkpoint (2026-10-17): Finance backend retired via PR #229, merge `c491332a7e4f51def3cd4486b7d204b9ab2c13e5`; Railway production `api` deployment SUCCESS on exact commit (deployment `aae2f683-7d78-4765-b2b2-aac9f4a08a6a`).
+- Backend main CI https://github.com/load66/Trading-Journal-AI/actions/runs/39078861129 PASS: full pytest 377 passed; trading-journal frontend build/tests PASS.
+- Frontend companion PR https://github.com/load66/bonus-tracker/pull/162 merged; its main-branch CI and GitHub Pages build/deploy passed on merge `28d110b3330da4d0d3e6a8b00c3984ba0f248e6e`.
+- Owner separately authorized retirement of the optional provider-backed Tracker activity review. Canonical bank-bonus tracker, cloud recovery, vehicle recovery, journal and permanent Plaid quota ledger preserved.
+- Remaining owner-only task: execute authenticated Finance R2 dry-run/typed-confirmation cleanup per `docs/FINANCE_RETIREMENT_RUNBOOK.md`. The agent DID NOT execute it; no Railway variables were modified or provider API calls made.
+- Verification gap: live Pages `sw.js` fetch could not be completed from this runtime; main-branch Pages deployment is green. No production storage deletion has been asserted.
+- Status: implementation/release complete; no further agent-owned tasks. Historical handoff entries below are superseded.
+
 
 - Owner superseding decision (2026-10-17): abandon Finance/Plaid enhancement queue; Finance-removal inventory and guarded owner-action sequence on `codex/remove-finance`.
 - Phase: owner confirmed manual Plaid/SimpleFIN revocations and separately authorized retiring Tracker bank-activity review in chat (2026-10-17). Backend removal plus owner-only purge API implemented on branch; **R2 purge was not executed**.
