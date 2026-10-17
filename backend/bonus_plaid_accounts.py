@@ -22,6 +22,7 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
     public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
+from finance_ai_categories import classify_unknown
 
 DAY = 86400
 MAX_BYTES = 8 * 1024 * 1024
@@ -326,6 +327,7 @@ def _view(doc, ledger, uid):
     accessible = {item_id for item_id, row in ledger["items"].items()
                   if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt")}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
+            "financeAICache": doc.get("financeAICache", {}),
             "monitoredAccounts": list(doc.get("monitored", [])),
             **{key: copy.deepcopy(doc.get(key, {})) for key in
                ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
@@ -585,6 +587,10 @@ def sync_owner(uid):
             candidate["error"] = exc.detail
         candidate.pop("lease", None)
         candidate.pop("leaseUntil", None)
+        try:
+            classify_unknown(candidate, now=now)
+        except Exception:
+            pass  # Optional AI must never block or corrupt provider transactions.
         _write(uid, candidate, etag)
         return _public(candidate, ledger, uid)
     doc["lease"] = uuid.uuid4().hex
@@ -651,6 +657,10 @@ def sync_owner(uid):
         candidate["error"] = exc.detail
     candidate.pop("lease", None)
     candidate.pop("leaseUntil", None)
+    try:
+        classify_unknown(candidate, now=now)
+    except Exception:
+        pass  # Category suggestions are optional; never fail transaction sync.
     _write(uid, candidate, etag)
     return _public(candidate, ledger, uid)
 
