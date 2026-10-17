@@ -639,3 +639,40 @@ def test_plaid_historical_update_complete_without_rows_is_empty_not_loading():
     shown=adapter._public({"items":{"onepay-item":state},"monitored":[key],"lastSuccess":NOW},ledger,"alice")
     assert shown["accounts"][0]["historyComplete"] is True
     assert shown["transactions"][key]=={}
+
+
+def test_plaid_balance_snapshots_additive_compacted_and_public_owner_scoped():
+    """Exact-cent snapshots survive transactions, account absence and privacy filtering."""
+    from copy import deepcopy
+    import json
+
+    first = adapter._merge({}, "synthetic-item", "Synthetic Bank",
+                           {"accounts": [account()]}, None, NOW - 2*adapter.DAY)
+    key = adapter._account_key("synthetic-item", "example")
+    assert first["balanceHistory"][key][-1]["balance"] == "120.00"
+    assert first["balanceHistory"][key][-1]["observedAt"] == NOW - 2*adapter.DAY
+    newer = {**account(), "balances": {**account()["balances"], "current": 850.12}}
+    second = adapter._merge(first, "synthetic-item", "Synthetic Bank",
+                            {"accounts": [newer]}, None, NOW)
+    assert [x["balance"] for x in second["balanceHistory"][key]] == ["120.00", "850.12"]
+    assert second["balanceHistory"][key][-1]["observedAt"] == NOW
+    # Same-day replays do not accumulate false extra observations.
+    duplicate = adapter._merge(second, "synthetic-item", "Synthetic Bank",
+                               {"accounts": [newer]}, None, NOW)
+    assert duplicate["balanceHistory"] == second["balanceHistory"]
+    assert json.dumps(duplicate, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert first["balanceHistory"][key] == [{"at": NOW-2*adapter.DAY,
+                                             "observedAt": NOW-2*adapter.DAY,
+                                             "balance":"120.00","currency":"USD",
+                                             "availableBalance":"90.00"}]
+    # A failed/empty provider response is never allowed to erase the prior snapshots.
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        adapter._merge(second, "synthetic-item", "Synthetic Bank", {}, None, NOW+1)
+    assert len(second["balanceHistory"][key]) == 2
+    ledger = {"items": {"synthetic-item": {"owner":"alice","institution":"Synthetic Bank"}}}
+    doc = {**adapter._default(), "items":{"synthetic-item": second}, "monitored":[key]}
+    public = adapter._public(doc, ledger, "alice")
+    assert public["balanceHistory"][key] == second["balanceHistory"][key]
+    assert adapter._public(doc, ledger, "another-owner")["balanceHistory"] == {}
+    assert "synthetic-item" not in json.dumps(public)
