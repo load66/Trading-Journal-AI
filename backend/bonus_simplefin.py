@@ -4,6 +4,7 @@ import base64
 import copy
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -966,7 +967,7 @@ async def scheduled_simplefin_loop():
                 s, _ = await run_in_threadpool(read_state, uid)
                 if s.get('access') and s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
                     await run_in_threadpool(sync, uid)
-        except Exception:
-            # No financial data, credentials or provider URLs in logs; per-owner status shows errors.
-            pass
+        except Exception as exc:
+            # Log the exception class only; never include bank URLs, transaction text or credentials.
+            logging.getLogger(__name__).warning("SimpleFIN scheduled check failed: %s", type(exc).__name__)
         await asyncio.sleep(61)
