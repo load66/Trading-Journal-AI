@@ -50,7 +50,7 @@ def annotate_paychecks(records):
         employer=employer_name(description)
         if (not employer or value is None or row.get('pending') or
                 not isinstance(row.get('posted'), (int,float)) or
-                row.get('category') in ('transfer','refund','verification','bonus') or
+                row.get('category') in ('transfer','refund','verification','bonus','loan_proceeds') or
                 any(s in row.get('signals',[]) for s in
                     ('matched_internal_transfer','investment_transfer','possible_transfer','card_payment'))):
             continue

@@ -9,8 +9,8 @@ from decimal import Decimal, InvalidOperation
 
 CATEGORIES = frozenset((
     'unreviewed','verification','income','housing','loan','utilities','groceries',
-    'dining','transportation','shopping','health','entertainment','fees','taxes',
-    'travel','subscription','transfer','refund','bonus','other'
+    'dining','transportation','shopping','insurance','health','entertainment','fees','taxes',
+    'travel','subscription','transfer','loan_proceeds','refund','bonus','other'
 ))
 VERIFICATION = re.compile(
     r'(?<![a-z])(?:acct\s*verify|acctverify|verification|verify|trial\s*dep|'
@@ -26,6 +26,35 @@ HOUSING = re.compile(
     r'freedom\s+mortgage|dovenmuehle|cenlar|nationstar|lakeview\s+loan|'
     r'carrington\s+mortgage|roundpoint|sps\s+servicing)\b', re.I)
 LOAN = re.compile(r'\b(?:student loan|auto loan|vehicle loan|personal loan|loan payment)\b', re.I)
+LOAN_PROCEEDS = re.compile(
+    r'\b(?:loan\s+proceeds?|loan\s+disbursement|personal\s+loan|cash\s+advance|'
+    r'loan\s+advance|loan|advance|disbursement|sofi\s+lending|one\s+finance|'
+    r'upstart|avant|lendingclub|oportun|earnest)\b',re.I
+)
+OWNER_TRANSFER_ACTION = re.compile(r'\b(?:transfr|transfer|ach\s*transfer|ach\s*xfer|xfer|zelle\s+from|from)\b',re.I)
+P2P_PREFIX = re.compile(r'^\s*(?:(?:zelle|venmo|cash\s*app|p2p)\s+(?:from\s+)?|from\s+)(.+?)\s*$',re.I)
+P2P_PERSON = re.compile(r'^[A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+){1,2}$')
+P2P_BUSINESS = re.compile(r'\b(?:llc|inc|ltd|corp|company|payroll|salary|wages|deposit|loan|lending|bank|fcu)\b',re.I)
+
+def owner_transfer_description(description, owner_names):
+    """Only a private owner-supplied name together with an explicit transfer action."""
+    text=re.sub(r'\s+',' ',str(description or '').strip())
+    if not OWNER_TRANSFER_ACTION.search(text):
+        return False
+    for name in owner_names or ():
+        normalized=re.sub(r'\s+',' ',str(name or '').strip()).casefold()
+        if 3<=len(normalized)<=100 and re.fullmatch(r'[a-z]+(?: [a-z]+){1,3}',normalized):
+            if re.search(r'(?<![a-z])'+re.escape(normalized)+r'(?![a-z])',text.casefold()):
+                return True
+    return False
+
+def possible_person_to_person(description):
+    text=re.sub(r'\s+',' ',str(description or '').strip())
+    match=P2P_PREFIX.fullmatch(text)
+    return bool(match and not P2P_BUSINESS.search(text) and
+                not PAYROLL.search(text) and not LOAN_PROCEEDS.search(text) and
+                P2P_PERSON.fullmatch(match.group(1)))
+
 TRANSFER = re.compile(
     r'\b(?:transfer|xfer|pmt|autopay|epayment|credit card payment|'
     r'payment thank you|payment to card|credit card autopay|x money transfer|crd)\b',re.I
@@ -110,6 +139,9 @@ MERCHANTS = (
     ('utilities', r'\b(?:liberty utilities|electric company|water utility|'
                   r'internet provider|utility bill|cellular bill|at&t wireless|at&t|t[-\s]?mobile|verizon)\b'),
     ('shopping', r'\b(?:amazon|best buy|target|ebay|etsy|apple|walmart|costco)\b'),
+    ('insurance', r'\b(?:progressive|prog\s+advanced|geico|state\s+farm|allstate|'
+                  r'liberty\s+mutual|usaa\s+insurance|nationwide|farmers|aaa\s+insurance|'
+                  r'ins\s+prem|insurance\s+prem(?:ium)?|auto\s+ins|home\s+ins)\b'),
     ('travel', r'\b(?:airline|delta air|united air|southwest air|hotel|airbnb|rental car)\b'),
     ('health', r'\b(?:pharmacy|walgreens|cvs|hospital|doctor|dental|clinic|medical)\b'),
     ('entertainment',r'\b(?:movie theater|cinema|amc theatre|concert|ticketmaster)\b'),
@@ -119,7 +151,7 @@ MERCHANTS = (
 _COMPILED_MERCHANTS = tuple((cat,re.compile(pattern,re.I)) for cat,pattern in MERCHANTS)
 
 
-def category_for(description, amount, *, pending=False, kind=None):
+def category_for(description, amount, *, pending=False, kind=None, owner_names=()):
     """Return (category, confidence, signals); never conflate unknown with zero."""
     try:
         number = Decimal(str(amount))
@@ -128,6 +160,12 @@ def category_for(description, amount, *, pending=False, kind=None):
     if not number.is_finite():
         return 'unreviewed','low',[]
     text = str(description or '')
+    # A credit from a lender is borrowed money, never automatic earnings.
+    # Explicit owner reviews and scoped rules are applied by the ledger later.
+    if number > 0 and not pending and LOAN_PROCEEDS.search(text):
+        return 'loan_proceeds','high',['possible_loan_proceeds']
+    if not pending and owner_transfer_description(text,owner_names):
+        return 'transfer','medium',['owner_transfer_unpaired']
     movement = financial_movement(text, number)
     if movement and not pending:
         category, signals = movement
@@ -147,6 +185,10 @@ def category_for(description, amount, *, pending=False, kind=None):
     # or the owner confirms a transfer. Manual reviews still take precedence.
     if number > 0 and re.fullmatch(r'\s*payment(?:\s+received)?\s*', text, re.I):
         return 'unreviewed','low',['possible_transfer']
+    if number > 0 and possible_person_to_person(text):
+        if number != number.to_integral_value():
+            return 'transfer','medium',['possible_p2p']
+        return 'unreviewed','low',['possible_transfer']
     if number > 0 and PAYROLL.search(text) and not FINANCIAL_SOURCE_BARRIER.search(text):
         return 'income','high',['possible_direct_deposit','paycheck']
     if number > 0 and INTEREST.search(text):
@@ -165,6 +207,49 @@ def category_for(description, amount, *, pending=False, kind=None):
             if pattern.search(text):
                 return category,'medium',[]
     return 'unreviewed','low',[]
+
+
+
+RENT_ADDRESS = re.compile(
+    r'^\s*\d{1,6}\s+(?:(?:n|s|e|w)\s+)?'
+    r'[A-Za-z]+(?:\s+[A-Za-z]+){0,4}\s+'
+    r'(?:st|street|rd|road|ave|avenue|ln|lane|dr|drive|blvd|boulevard)\.?\s*$',re.I
+)
+
+
+def annotate_recurring_rent(records):
+    """Suggest housing only after two comparable posted monthly address debits."""
+    grouped=defaultdict(list)
+    for row in records:
+        if (not isinstance(row,dict) or row.get('pending') or
+                row.get('categorySource') in ('user','user_rule') or
+                row.get('category') not in ('unreviewed','housing') or
+                not isinstance(row.get('posted'),(int,float))):
+            continue
+        address=re.sub(r'\s+',' ',str(row.get('description') or '').strip()).casefold()
+        if not RENT_ADDRESS.fullmatch(address):
+            continue
+        try:
+            amount=Decimal(str(row['amount']))
+        except (ValueError,InvalidOperation,KeyError):
+            continue
+        if amount.is_finite() and amount<0:
+            grouped[(str(row.get('accountKey') or ''),address)].append((row,amount))
+    for matches in grouped.values():
+        ordered=sorted(matches,key=lambda item:item[0]['posted'])
+        qualifying=set()
+        for i,(left,a) in enumerate(ordered):
+            for right,b in ordered[i+1:]:
+                days=(right['posted']-left['posted'])/86400
+                if days>35:
+                    break
+                if 26<=days<=35 and a*Decimal('1.25')<=b<=a*Decimal('.75'):
+                    qualifying.update((id(left),id(right)))
+        for row,_ in matches:
+            if id(row) in qualifying:
+                row['category']='housing'
+                row['confidence']='medium'
+                row['signals']=sorted(set((row.get('signals') or [])+['possible_rent']))
 
 
 def micro_deposit_refs(records):

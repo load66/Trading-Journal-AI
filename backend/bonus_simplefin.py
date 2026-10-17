@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from botocore.exceptions import ClientError
 from bonus_backups import owner, store
-from finance_category_rules import category_for, micro_deposit_refs
+from finance_category_rules import category_for, micro_deposit_refs, annotate_recurring_rent
 from finance_income_rules import annotate_paychecks
 from finance_ai_categories import classify_unknown, cache_key
 from finance_history_archive import archive_old, read_month, HOT_DAYS, purge_account
@@ -45,8 +45,8 @@ ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card',
                            'retirement', 'loan', 'mortgage', 'other_asset', 'other_liability'))
 BALANCE_MODES = frozenset(('exclude', 'asset', 'liability'))
 TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilities', 'groceries',
-                                    'dining', 'transportation', 'shopping', 'health', 'entertainment',
-                                    'fees', 'taxes', 'travel', 'subscription', 'transfer', 'refund',
+                                    'dining', 'transportation', 'shopping', 'insurance', 'health', 'entertainment',
+                                    'fees', 'taxes', 'travel', 'subscription', 'transfer', 'loan_proceeds', 'refund',
                                     'bonus', 'verification', 'loan', 'other'))
 
 
@@ -469,7 +469,7 @@ def enrich_transactions(state, result):
             category, confidence, signals = automatic_category(row)
             plaidCategory = row.get('plaidSuggestedCategory')
             if (plaidCategory in TRANSACTION_CATEGORIES and row.get('kind') not in ('possible_bonus','possible_reversal')
-                    and category not in ('transfer','verification','bonus','refund') and not row.get('pending')
+                    and category not in ('transfer','verification','bonus','refund','loan_proceeds') and not row.get('pending')
                     and not ('possible_transfer' in signals)):
                 category, confidence = plaidCategory, ('high' if row.get('plaidConfidence') in ('VERY_HIGH','HIGH') else 'medium')
                 signals = sorted(set(signals + (row.get('plaidCategorySignals') or [])))
@@ -515,8 +515,8 @@ def enrich_transactions(state, result):
                 or Decimal(row['amount']) == 0
                 or row.get('kind') in ('possible_bonus', 'possible_reversal')
                 or (row.get('category') == 'income' and 'paycheck' in row.get('signals', []))
-                or row.get('category') in ('bonus','refund','verification','groceries',
-                    'dining','shopping','housing','utilities','transportation',
+                or row.get('category') in ('bonus','refund','verification','loan_proceeds','groceries',
+                    'dining','shopping','housing','insurance','utilities','transportation',
                     'health','entertainment','fees','taxes','travel','subscription','loan')
                 or not isinstance(row.get('posted'), (int, float))):
             continue
@@ -556,6 +556,7 @@ def enrich_transactions(state, result):
     for account, _raw, row in records:
         row['accountKey'] = account
     annotate_paychecks([row for _account, _raw, row in records])
+    annotate_recurring_rent([row for _account, _raw, row in records])
 
     # Detect classic two-small-deposit account verification patterns. Keep raw
     # rows and review receipts untouched, and never override a user's correction.
@@ -708,7 +709,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.98')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.5.0')
     return out
 
 
