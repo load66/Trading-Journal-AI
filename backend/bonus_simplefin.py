@@ -175,7 +175,7 @@ def get_data(access, selected=None, balances=False):
     p = safe_url(access)
     endpoint = urlunsplit(('https', p.hostname, p.path.rstrip('/') + '/accounts', '', ''))
     now = int(time.time())
-    params = [('version', '2'), ('start-date', str(now - 90 * DAY)), ('end-date', str(now + 1))]
+    params = [('version', '2'), ('start-date', str(now - 89 * DAY)), ('end-date', str(now))]
     if balances:
         params.append(('balances-only', '1'))
     else:
@@ -455,6 +455,76 @@ def classify(amount, description):
     return 'deposit'
 
 
+# Provider warnings should never be confused with authentication failures.
+PROVIDER_NOTICE = re.compile(
+    r'(?:requested\s+date\s+range.*(?:exceed|capp|limit)|'
+    r'(?:partial|some)\s+(?:historical\s+)?(?:data|transactions|history)\s+(?:is\s+)?(?:available|returned|omitted|limited)|'
+    r'partial\s+data|data\s+is\s+partial|history\s+(?:capped|truncated))', re.I)
+PROVIDER_ACCESS = re.compile(
+    r'(?:access\s+(?:was\s+)?rejected|invalid\s+(?:access|credentials|token)|'
+    r'auth(?:entication|orization)\s+(?:failed|rejected)|'
+    r'forbidden|401\b|403\b)', re.I)
+PROVIDER_LOGIN = re.compile(
+    r'(?:sign\s*in|log\s*in|login|re-?auth|bank\s+credentials|'
+    r'bank\s+connection\s+(?:failed|error)|mfa|consent\s+expired|'
+    r'needs\s+attention|connection\s+error|password\s+(?:changed|expired))',re.I)
+
+
+def provider_messages(data, accounts):
+    """Return nonfatal notices and *account-scoped* issues; no cross-bank flags."""
+    by_key={a['key']: a for a in accounts}
+    by_connection={str(a.get('connection')): a['key'] for a in accounts if a.get('connection')}
+    by_bank={}
+    for a in accounts:
+        by_bank.setdefault(str(a.get('bank') or '').lower(), []).append(a['key'])
+    notices, issues = [], {}
+    for raw in list(data.get('errlist') or [])+list(data.get('errors') or []):
+        message=clean(raw.get('msg') or raw.get('message') or raw.get('error'),250) if isinstance(raw,dict) else clean(raw,250)
+        if not message:continue
+        if PROVIDER_NOTICE.search(message):
+            notices.append(message)
+            continue
+        # An unknown/diagnostic provider message does not prove a failed connection.
+        error_type='access_rejected' if PROVIDER_ACCESS.search(message) else (
+            'bank_login' if PROVIDER_LOGIN.search(message) else None)
+        if not error_type:
+            notices.append(message)
+            continue
+        scope=[]
+        if isinstance(raw,dict):
+            for field in ('conn_id','connection_id','connection','account_id','id'):
+                value=raw.get(field)
+                if value is None:continue
+                value=str(value)
+                if value in by_connection: scope=[by_connection[value]];break
+                if value in by_key:scope=[value];break
+                scope=[a['key'] for a in accounts if str(a.get('id'))==value]
+                if scope:break
+        if not scope:
+            mentions=[keys for bank,keys in by_bank.items() if bank and bank in message.lower()]
+            if len(mentions)==1:scope=mentions[0]
+        # Never set all institutions unhealthy based on one unscoped provider notice.
+        if not scope:
+            notices.append(message)
+            continue
+        for key in scope:
+            issues[key]={'code':error_type,'message':message}
+    if notices:
+        BACKGROUND_LOGGER.info('simplefin_provider_informational_notices count=%d',len(notices))
+    return notices[:50],issues
+
+
+def apply_provider_health(state,data,accounts,missing=()):
+    notices,issues=provider_messages(data,accounts)
+    for key in missing:
+        issues[key]={'code':'missing_account','message':'This account was missing from the latest SimpleFIN response.'}
+    state['warnings']=notices
+    state['institutionIssues']=issues
+    state['status']='attention' if issues else 'connected'
+    # After a valid response, discard outdated provider errors and access flags.
+    state.pop('error',None)
+    state.pop('connectionProblem',None)
+
 def merge(state, data, now):
     old_by_key = {a['key']: a for a in state['accounts']}
     # Account IDs can collide across provider connections. A transaction sync may update only
@@ -465,9 +535,8 @@ def merge(state, data, now):
     record_balances(state, fresh, now)
     watched = {a['key'] for a in state['accounts'] if syncing(state, a)} & (set(state['mappings']) | set(state.get('monitoredAccounts', [])))
     state['missingAccounts'] = sorted(k for k in watched if k not in fresh_by_key)
-    warnings = [clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)]
-    warnings += [clean(e) for e in data.get('errors', []) if isinstance(e, str)]
-    state['warnings'] = warnings[:50]
+    apply_provider_health(state,data,state['accounts'],state['missingAccounts'])
+    warnings = state['warnings']
     for a in data['accounts']:
         k = account_key(a)
         if k not in watched:
@@ -535,9 +604,9 @@ def merge(state, data, now):
     state['syncFailureAttempts'] = 0
     state['health'] = {'lastSuccess': now, 'lastError': None, 'nextRetry': None}
     state['lastSuccess'] = now
-    state['windowStart'] = now - 30 * DAY
+    state['windowStart'] = now - 89 * DAY
     state['windowEnd'] = now
-    state['status'] = 'attention' if warnings or state['missingAccounts'] else 'connected'
+    # Success keeps only current, account-scoped issues; no stale cap warnings.
     return state
 
 
@@ -545,20 +614,26 @@ def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error',
-              'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync')
+              'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync',
+              'connectionProblem')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
     out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
                        for a in public_accounts(s, s.get('accounts', []))]
     for a in out['accounts']:
         a['invalidTransactionRows'] = s.get('invalidTransactionsByAccount', {}).get(a['key'], a.get('invalidTransactionRows', 0))
+        issue=s.get('institutionIssues',{}).get(a['key'])
+        if issue:
+            a['syncIssue']=issue.get('message','Bank needs attention.')
+            a['syncIssueType']=issue.get('code','bank_login')
+            a['transactionSyncStatus']='needs_attention'
     out['monitoredAccounts'] = sorted(set(s.get('monitoredAccounts', [])) | (set(s.get('transactions', {})) & {a['key'] for a in s.get('accounts', [])}))
     out['historyMonths'] = list(s.get('historyMonths', []))
     out['transactions'] = {}
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.81')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.82')
     return out
 
 
@@ -625,6 +700,7 @@ def sync(uid):
     except HTTPException as e:
         s['status'] = 'attention'
         s['error'] = e.detail
+        s['connectionProblem']='access_rejected' if e.status_code in (401,403) else 'temporary_error'
         attempts = min(s.get('syncFailureAttempts', 0) + 1, 4)
         s['syncFailureAttempts'] = attempts
         s['nextSyncAt'] = now + ((1, 3, 6)[attempts-1] * 3600 if attempts <= 3 else DAY)
@@ -789,10 +865,7 @@ def connect(body: ConnectBody, request: Request):
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        if s['warnings']:
-            s['status'] = 'attention'
+        apply_provider_health(s,data,s['accounts'],s.get('missingAccounts',[]))
     except (HTTPException, UnicodeError) as e:
         s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
         s['status'] = 'attention'
@@ -862,9 +935,7 @@ def discover(request: Request):
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        s['status'] = 'attention' if s.get('error') or s['warnings'] or s.get('missingAccounts') else 'connected'
+        apply_provider_health(s,data,s['accounts'],s.get('missingAccounts',[]))
     except HTTPException as e:
         s['error'] = e.detail
         s['status'] = 'attention'
