@@ -152,9 +152,10 @@ async def authentication_middleware(request, call_next):
     path = request.url.path
     protected = path == "/api" or path.startswith("/api/") or path.startswith("/uploads/")
     is_cors_preflight = request.method == "OPTIONS"
+    verified_plaid_webhook = (path == "/api/bonus-tracker/plaid/webhook" and request.method == "POST")
     private_simplefin = (path == "/api/bonus-tracker/simplefin" or path.startswith("/api/bonus-tracker/simplefin/")
                          or path == "/api/bonus-tracker/plaid" or path.startswith("/api/bonus-tracker/plaid/"))
-    if protected and auth_required() and not is_cors_preflight:
+    if protected and auth_required() and not is_cors_preflight and not verified_plaid_webhook:
         try:
             authorize_header(request.headers.get("Authorization"))
         except AuthError as exc:
