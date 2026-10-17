@@ -9,8 +9,8 @@ from decimal import Decimal, InvalidOperation
 
 CATEGORIES = frozenset((
     'unreviewed','verification','income','housing','loan','utilities','groceries',
-    'dining','transportation','shopping','health','entertainment','fees','taxes',
-    'travel','subscription','transfer','refund','bonus','other'
+    'dining','transportation','shopping','insurance','health','entertainment','fees','taxes',
+    'travel','subscription','transfer','loan_proceeds','refund','bonus','other'
 ))
 VERIFICATION = re.compile(
     r'(?<![a-z])(?:acct\s*verify|acctverify|verification|verify|trial\s*dep|'
@@ -26,6 +26,11 @@ HOUSING = re.compile(
     r'freedom\s+mortgage|dovenmuehle|cenlar|nationstar|lakeview\s+loan|'
     r'carrington\s+mortgage|roundpoint|sps\s+servicing)\b', re.I)
 LOAN = re.compile(r'\b(?:student loan|auto loan|vehicle loan|personal loan|loan payment)\b', re.I)
+LOAN_PROCEEDS = re.compile(
+    r'\b(?:loan\s+proceeds?|loan\s+disbursement|personal\s+loan|cash\s+advance|'
+    r'loan\s+advance|loan|advance|disbursement|sofi\s+lending|one\s+finance|'
+    r'upstart|avant|lendingclub|oportun|earnest)\b',re.I
+)
 TRANSFER = re.compile(
     r'\b(?:transfer|xfer|pmt|autopay|epayment|credit card payment|'
     r'payment thank you|payment to card|credit card autopay|x money transfer|crd)\b',re.I
@@ -110,6 +115,9 @@ MERCHANTS = (
     ('utilities', r'\b(?:liberty utilities|electric company|water utility|'
                   r'internet provider|utility bill|cellular bill|at&t wireless|at&t|t[-\s]?mobile|verizon)\b'),
     ('shopping', r'\b(?:amazon|best buy|target|ebay|etsy|apple|walmart|costco)\b'),
+    ('insurance', r'\b(?:progressive|prog\s+advanced|geico|state\s+farm|allstate|'
+                  r'liberty\s+mutual|usaa\s+insurance|nationwide|farmers|aaa\s+insurance|'
+                  r'ins\s+prem|insurance\s+prem(?:ium)?|auto\s+ins|home\s+ins)\b'),
     ('travel', r'\b(?:airline|delta air|united air|southwest air|hotel|airbnb|rental car)\b'),
     ('health', r'\b(?:pharmacy|walgreens|cvs|hospital|doctor|dental|clinic|medical)\b'),
     ('entertainment',r'\b(?:movie theater|cinema|amc theatre|concert|ticketmaster)\b'),
@@ -128,6 +136,10 @@ def category_for(description, amount, *, pending=False, kind=None):
     if not number.is_finite():
         return 'unreviewed','low',[]
     text = str(description or '')
+    # A credit from a lender is borrowed money, never automatic earnings.
+    # Explicit owner reviews and scoped rules are applied by the ledger later.
+    if number > 0 and not pending and LOAN_PROCEEDS.search(text):
+        return 'loan_proceeds','high',['possible_loan_proceeds']
     movement = financial_movement(text, number)
     if movement and not pending:
         category, signals = movement
