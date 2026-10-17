@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: none
+Active agent: codex — SimpleFIN discovery recovery — branch codex/simplefin-discovery-recovery
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
