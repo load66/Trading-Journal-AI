@@ -76,3 +76,18 @@ def test_forbidden_provider_endpoints_are_blocked_without_network(monkeypatch):
     for endpoint in ("/transactions/refresh", "/link/token/create", "/item/remove", "/accounts/balance/get"):
         with pytest.raises(HTTPException):
             adapter._provider(endpoint, "synthetic")
+
+
+def test_provider_never_calls_network_when_item_budget_exhausted(monkeypatch):
+    monkeypatch.setattr(adapter.quota, "_ready", lambda: True)
+    monkeypatch.setattr(adapter, "_catalog", lambda _: {
+        "products": ["transactions"], "billed_products": [], "available_products": []
+    })
+    monkeypatch.setattr(adapter, "_reserve_transaction_call",
+                        lambda _: (_ for _ in ()).throw(HTTPException(429, "Daily sync limit reached")))
+    def reject_network(*args, **kwargs):
+        raise AssertionError("Cap must be checked before any remote provider request")
+    monkeypatch.setattr(adapter.httpx, "post", reject_network)
+    with pytest.raises(HTTPException) as blocked:
+        adapter._provider("/transactions/sync", "synthetic-access", cursor="", count=500)
+    assert blocked.value.status_code == 429
