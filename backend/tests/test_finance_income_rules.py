@@ -63,3 +63,14 @@ def test_repeated_unknown_person_is_not_promoted_to_paycheck():
     entries=[row('John Doe','1061.24',DAY*100),row('John Doe','1061.24',DAY*114)]
     annotate_paychecks(entries)
     assert all(x['category']=='unreviewed' and 'paycheck' not in x['signals'] for x in entries)
+
+def test_user_confirmed_employer_rule_adds_reviewable_dd_signal():
+    """A user-confirmed income rule gives a candidate, never bonus qualification."""
+    company=row('Schreiber Foods','1061.24',DAY*140,'income','user_rule')
+    annotate_paychecks([company])
+    assert company['category']=='income'
+    assert 'possible_direct_deposit' in company['signals']
+    overridden=row('Schreiber Foods','1061.24',DAY*140,'other','user')
+    annotate_paychecks([overridden])
+    assert 'possible_direct_deposit' not in overridden['signals']
+

@@ -70,7 +70,7 @@ def annotate_paychecks(records):
             employer=row.pop('_paycheckEmployer')
             if row.get('categorySource') in ('user','user_rule'):
                 if row.get('category')=='income':
-                    row['signals']=sorted(set(row.get('signals',[])+['paycheck']))
+                    row['signals']=sorted(set(row.get('signals',[])+['paycheck','possible_direct_deposit']))
                 continue
             explicit=bool(PAY_DESCRIPTOR.search(row.get('description') or ''))
             is_company=bool(COMPANY.search(employer))

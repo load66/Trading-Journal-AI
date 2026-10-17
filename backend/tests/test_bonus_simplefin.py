@@ -944,3 +944,19 @@ def test_six_hour_full_sync_three_hour_balance_refresh_and_shared_budget(setup, 
     assert b.read_state('owner')[0]['transactions']==before,'Saved activity must be immutable'
     b.refresh_balances('owner')
     assert requests==[True],'Cannot reissue a balance check before the three-hour budget'
+
+def test_linked_schreiber_paychecks_emit_possible_dd_without_milestones(setup):
+    s=seed()
+    k=b.account_key(account())
+    one=txn('schreiber-first','1061.24','Schreiber Foods')
+    two=txn('schreiber-second','1061.24','Schreiber Foods')
+    one['posted']=NOW-15*86400
+    two['posted']=NOW-86400
+    b.merge(s,data(account(transactions=[one,two])),NOW)
+    view=b.public_state(s)
+    records=list(view['transactions'][k].values())
+    assert len(records)==2
+    assert all('possible_direct_deposit' in x['signals'] and 'paycheck' in x['signals'] for x in records)
+    assert all(x['category']=='income' for x in records)
+    assert 'reqMet' not in s and 'bonusRecd' not in s
+
