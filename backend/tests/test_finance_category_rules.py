@@ -118,3 +118,28 @@ def test_diverse_200_transaction_month_offline_coverage():
     assert len(fixture)==200
     unknown=sum(category_for(r['description'],r['amount'])[0]=='unreviewed' for r in fixture)
     assert unknown==10  # 5%, fixture-specific; never presented as a production guarantee.
+
+
+
+@pytest.mark.parametrize("description,amount,expected,signal", [
+    ("To Brokerage","-2000","transfer","investment_transfer"),
+    ("To Citibank","-251","transfer","possible_transfer"),
+    ("From Lafayette Fcu","500","transfer","possible_transfer"),
+    ("To Personal Checking","-7379.04","transfer","possible_transfer"),
+    ("From Personal Savings","7379.04","transfer","possible_transfer"),
+    ("To Paypal","-428.17","transfer","possible_transfer"),
+    ("U.S. Bank","-820.77","transfer","card_payment"),
+    ("Capital One","-200","transfer","card_payment"),
+    ("T-Mobile","-157.62","utilities",None),
+    ("Apple","-249.52","shopping",None),
+    ("Apple.com/Bill","-12.99","subscription",None),
+    ("iCloud","-2.99","subscription",None),
+    ("Unidentified fintech 2000","-2000","unreviewed",None),
+    ("To an unknown account","-2000","unreviewed","possible_transfer"),
+    ("Local bakery","-13.51","unreviewed",None)
+])
+def test_real_wording_financial_movements_and_purchase_merchants(description,amount,expected,signal):
+    category,_,signals=category_for(description,amount)
+    assert category==expected
+    if signal is not None: assert signal in signals
+    else: assert 'possible_transfer' not in signals
