@@ -35,7 +35,7 @@ BALANCE_MODES = frozenset(('exclude', 'asset', 'liability'))
 TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilities', 'groceries',
                                     'dining', 'transportation', 'shopping', 'health', 'entertainment',
                                     'fees', 'taxes', 'travel', 'subscription', 'transfer', 'refund',
-                                    'bonus', 'other'))
+                                    'bonus', 'verification', 'other'))
 
 
 def empty_state():
@@ -299,6 +299,9 @@ def automatic_category(row):
         return 'unreviewed', 'low', []
     amount = Decimal(row['amount'])
     text = row['description'].lower()
+    verification = r'acct\s*verify|verification|verify|trial\s*dep|micro\s*dep|test\s*dep|rtp\s*test|rtptststtl|rtp\s*tst\s*sttl|prenote|validation'
+    if amount == 0 or (abs(amount) < Decimal('1.00') and re.search(verification, text)):
+        return 'verification', 'high', []
     if row.get('kind') == 'possible_bonus':
         return 'bonus', 'high', ['possible_bonus']
     if row.get('kind') == 'possible_reversal':
@@ -309,10 +312,13 @@ def automatic_category(row):
         return 'fees', 'high', ['possible_fee']
     if amount > 0 and re.search(r'\brefund\b|\breimbursement\b|\breturn\b', text):
         return 'refund', 'medium', ['possible_refund']
-    if re.search(r'\btransfer\b|\bxfer\b|credit card payment|payment thank you', text):
+    if re.search(r'\btransfer\b|\bxfer\b|credit card payment|payment thank you|\bautopay\b|\bepayment\b|\bcard pmt\b|\bx money transfer\b', text):
         return 'transfer', 'medium', ['possible_transfer']
     patterns = (
-        ('groceries', r'grocery|supermarket|walmart|target|aldi|costco|sam.s club'),
+        ('groceries', r'grocery|supermarket|walmart|target|aldi|costco|sam.s club|kroger|publix|trader joe|whole foods'),
+        ('shopping', r'amazon|ebay|best buy|etsy|home depot|lowe.s'),
+        ('subscription', r'netflix|spotify|youtube premium|hulu|disney plus|apple.com/bill'),
+        ('housing', r'mortgage|rent payment|home loan'),
         ('dining', r'restaurant|cafe|coffee|doordash|ubereats|grubhub'),
         ('transportation', r'fuel|gas station|uber|lyft|parking|toll'),
         ('utilities', r'electric|water utility|internet|wireless|phone bill'),
@@ -332,6 +338,8 @@ def enrich_transactions(state, result):
     for account, rows in state.get('transactions', {}).items():
         public_rows = {}
         for raw_id, source in rows.items():
+            if source.get('pendingClearedAt'):
+                continue
             row = copy.deepcopy(source)
             ref = public_ref(account, raw_id)
             row['id'] = ref
@@ -440,14 +448,29 @@ def merge(state, data, now):
         if k not in watched:
             continue
         rows = copy.deepcopy(state['transactions'].get(k, {}))
+        seen_ids, invalid_count = set(), 0
         for t in a.get('transactions', []):
-            if not isinstance(t, dict) or not isinstance(t.get('posted'), (int, float)) or not 0 < t['posted'] <= now + 300:
+            if not isinstance(t, dict):
+                invalid_count += 1
+                continue
+            timestamp = t.get('posted')
+            if t.get('pending') is True and timestamp == 0:
+                timestamp = t.get('transacted_at')
+            if (not isinstance(timestamp, (int, float)) or isinstance(timestamp, bool)
+                    or not 0 < timestamp <= now + 300):
+                invalid_count += 1
                 continue
             if not isinstance(t.get('id'), str) or not t['id']:
-                raise HTTPException(502, 'SimpleFIN returned a transaction without a stable identity.')
-            amount = money(t.get('amount'))
+                invalid_count += 1
+                continue
+            try:
+                amount = money(t.get('amount'))
+            except HTTPException:
+                invalid_count += 1
+                continue
+            seen_ids.add(t['id'])
             desc = clean(t.get('description'), 500)
-            row = {'id': t['id'], 'posted': t['posted'], 'amount': amount, 'description': desc,
+            row = {'id': t['id'], 'posted': timestamp, 'amount': amount, 'description': desc,
                    'kind': classify(amount, desc), 'pending': t.get('pending') is True,
                    'observedAt': now, 'lastObservedAt': now}
             prior = rows.get(t['id'])
@@ -465,7 +488,17 @@ def merge(state, data, now):
                     if prior.get('revisions'):
                         row['revisions'] = prior['revisions']
             rows[t['id']] = row
-        # Missing rows never imply reversal/deletion; preserve 90 days of observed history.
+        if invalid_count:
+            warnings.append('One account contained '+str(invalid_count)+' invalid transaction row(s); skipped for safety.')
+            state['warnings'] = warnings[:50]
+        # Preserve pending originals in encrypted storage, but hide a cleared
+        # authorization once its date is covered by a later provider response.
+        for row_id, row in rows.items():
+            if (row.get('pending') and not row.get('pendingClearedAt')
+                    and row_id not in seen_ids
+                    and now - 90 * DAY <= row.get('posted', 0) <= now):
+                row['pendingClearedAt'] = now
+        # Missing posted rows never imply reversal/deletion; preserve 90 days of observed history.
         state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
         state.setdefault('evidenceReviews', {})[k] = {
             i: v for i, v in state.get('evidenceReviews', {}).get(k, {}).items()
