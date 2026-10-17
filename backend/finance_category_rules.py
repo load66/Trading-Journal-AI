@@ -41,6 +41,51 @@ BROKER_CONTRIBUTION = re.compile(
     r'\b(?:contribut(?:ion|e)|transfer|funding|deposit)\b.*'
     r'\b(?:robinhood|fidelity|schwab|vanguard|e\s*\*?\s*trade|brokerage|'
     r'investment|401k|roth\s*ira|traditional\s*ira|ira)\b', re.I)
+
+FINANCIAL_DESTINATION = re.compile(
+    r'\b(?:bank|fcu|credit\s*union|savings|checking|brokerage|investing|investment|'
+    r'ira|citibank|citi|u\.?\s*s\.?\s*bank|capital\s*one|chase|wells\s*fargo|'
+    r'bofa|bank\s*of\s*america|amex|american\s*express|discover|synchrony|'
+    r'lafayette|navy\s*federal|paypal|venmo|cash\s*app|zelle|x\s*money|'
+    r'one\s*pay|onepay|robinhood|fidelity|schwab|vanguard)\b', re.I)
+INVESTMENT_DESTINATION = re.compile(
+    r'\b(?:brokerage|investing|investment|ira|robinhood|fidelity|schwab|vanguard)\b',re.I)
+FINANCIAL_DIRECTION = re.compile(r'^\s*(?:to|from)\s+(.+?)\s*$',re.I)
+BARE_CARD_ISSUER = re.compile(
+    r'^\s*(?:capital\s*one|u\.?\s*s\.?\s*bank|us\s*bank|citibank|citi|'
+    r'amex|american\s*express|discover|chase|synchrony|wells\s*fargo|'
+    r'bank\s*of\s*america|bofa)\s*$',re.I)
+FINANCIAL_NAME = re.compile(
+    r'\b(?:bank|fcu|credit\s*union|citibank|citi|capital\s*one|'
+    r'u\.?\s*s\.?\s*bank|chase|amex|discover|paypal|venmo|cash\s*app|'
+    r'robinhood|fidelity|schwab|vanguard|brokerage|onepay|x\s*money)\b',re.I)
+
+def financial_movement(description, amount):
+    """Classify explicit financial account movements before merchant spending."""
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError):
+        return None
+    if not value.is_finite() or value == 0:
+        return None
+    label = str(description or '').strip()
+    direction = FINANCIAL_DIRECTION.fullmatch(label)
+    if direction and FINANCIAL_DESTINATION.search(direction.group(1)):
+        code = 'investment_transfer' if INVESTMENT_DESTINATION.search(direction.group(1)) else 'transfer'
+        return 'transfer', [code]
+    if value < 0 and BARE_CARD_ISSUER.fullmatch(label):
+        return 'transfer', ['card_payment']
+    if ISSUER_PAYMENT.search(label) and PAYMENT_ACTION.search(label):
+        return 'transfer', ['card_payment']
+    if BROKER_CONTRIBUTION.search(label):
+        return 'transfer', ['investment_transfer']
+    if re.search(r'\b(?:x\s*money\s*transfer|payment\s*thank\s*you)\b',label,re.I):
+        return 'transfer', ['transfer']
+    if value < 0 and (value == value.to_integral_value() or abs(value) >= 1000) and (
+            direction or FINANCIAL_NAME.search(label)):
+        return 'unreviewed', ['possible_transfer']
+    return None
+
 SELF_P2P = re.compile(r'\b(?:zelle|venmo|cash app|cashapp|p2p)\b.*\b(?:self|my own|myself)\b',re.I)
 MERCHANTS = (
     ('groceries', r'\b(?:walmart|aldi|kroger|whole foods|safeway|trader joe|'
@@ -49,11 +94,11 @@ MERCHANTS = (
                r'restaurant|coffee shop|panera|dunkin|taco bell)\b'),
     ('transportation', r'\b(?:shell oil|exxon|chevron|quiktrip|casey.?s|'
                        r'gas station|fuel|parking|toll|lyft|uber trip)\b'),
-    ('subscription', r'\b(?:netflix|spotify|youtube premium|hulu|apple subscription|'
+    ('subscription', r'\b(?:netflix|spotify|youtube premium|hulu|apple\s*(?:subscription|bill|\.com/bill)|icloud|'
                      r'disney plus|amazon prime membership)\b'),
     ('utilities', r'\b(?:liberty utilities|electric company|water utility|'
-                  r'internet provider|utility bill|cellular bill|at&t wireless)\b'),
-    ('shopping', r'\b(?:amazon marketplace|amazon retail|best buy|target|ebay|etsy)\b'),
+                  r'internet provider|utility bill|cellular bill|at&t wireless|at&t|t[-\s]?mobile|verizon)\b'),
+    ('shopping', r'\b(?:amazon|best buy|target|ebay|etsy|apple|walmart|costco)\b'),
     ('travel', r'\b(?:airline|delta air|united air|southwest air|hotel|airbnb|rental car)\b'),
     ('health', r'\b(?:pharmacy|walgreens|cvs|hospital|doctor|dental|clinic|medical)\b'),
     ('entertainment',r'\b(?:movie theater|cinema|amc theatre|concert|ticketmaster)\b'),
@@ -72,6 +117,10 @@ def category_for(description, amount, *, pending=False, kind=None):
     if not number.is_finite():
         return 'unreviewed','low',[]
     text = str(description or '')
+    movement = financial_movement(text, number)
+    if movement and not pending:
+        category, signals = movement
+        return category, 'high' if category == 'transfer' else 'low', signals
     if number == 0 or (abs(number) < 1 and VERIFICATION.search(text)):
         return 'verification','high',[]
     if pending:
@@ -89,8 +138,6 @@ def category_for(description, amount, *, pending=False, kind=None):
     if number < 0 and re.search(r'\bfee\b|service charge|maintenance charge|overdraft', text, re.I):
         return 'fees','high',['possible_fee']
     # Financial-account movements take precedence over recurring merchants.
-    if (ISSUER_PAYMENT.search(text) and PAYMENT_ACTION.search(text)) or BROKER_CONTRIBUTION.search(text):
-        return 'transfer','high',['possible_transfer']
     if number < 0 and HOUSING.search(text):
         return 'housing','high',[]
     if number < 0 and LOAN.search(text):

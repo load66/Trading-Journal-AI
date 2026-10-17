@@ -374,18 +374,16 @@ def enrich_transactions(state, result):
             records.append((account, raw_id, row))
         result.setdefault('transactions', {})[account] = public_rows
 
-    # Only an *unambiguous, reciprocal* posted pair earns high-confidence transfer status.
-    # Generic "payment" wording can describe payroll, purchases and refunds, so it must
-    # not establish a transfer by itself. User-confirmed categories are never overridden.
-    transfer_wording = re.compile(
-        r'\b(?:transfer|xfer)\b|\b(?:credit card|card) payment\b|'
-        r'\bpayment (?:thank you|to|from)\b', re.I)
+    # Only unique reciprocal posted pairs within three days are matched, regardless
+    # of description or exact cents. Accounts at the same institution may also match.
+    # User-confirmed categories are never overridden.
     eligible = []
     for account, raw_id, row in records:
         if (row.get('pending') or row.get('categorySource') in ('user', 'user_rule')
                 or Decimal(row['amount']) == 0
                 or row.get('kind') in ('possible_bonus', 'possible_reversal')
-                or not transfer_wording.search(row.get('description', ''))):
+                or row.get('category') in ('income','bonus','refund','verification')
+                or not isinstance(row.get('posted'), (int, float))):
             continue
         eligible.append((account, raw_id, row))
     counterpart = {i: [] for i in range(len(eligible))}
@@ -560,7 +558,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.80')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.81')
     return out
 
 

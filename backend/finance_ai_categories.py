@@ -82,7 +82,7 @@ def classify_unknown(state, *, post=httpx.post, now=None):
     state["financeAILastSync"] = {**stats,"at":now}
     key = os.getenv("GROQ_API_KEY", "").strip()
     if not key:
-        LOGGER.info("finance_ai attempted=0 categorized=0 failed=0")
+        LOGGER.warning("finance_ai attempted=0 categorized=0 failed=0")
         return 0
     today = time.strftime("%Y-%m-%d", time.gmtime(now))
     usage = state.setdefault("financeAIUsage", {})
@@ -99,8 +99,9 @@ def classify_unknown(state, *, post=httpx.post, now=None):
     for row in candidates(state):
         if not isinstance(row, dict) or row.get("pending") or row.get("kind") == "possible_reversal":
             continue
-        if category_for(row.get("description"), row.get("amount"), pending=False,
-                        kind=row.get("kind"))[0] != "unreviewed":
+        suggestion_category, _, signals = category_for(row.get("description"), row.get("amount"), pending=False,
+                                                        kind=row.get("kind"))
+        if suggestion_category != "unreviewed" or 'possible_transfer' in signals:
             continue
         desc = sanitized_description(row.get("description"))
         bucket = amount_bucket(row.get("amount"))
@@ -131,7 +132,7 @@ def classify_unknown(state, *, post=httpx.post, now=None):
         try:
             response = post(URI, timeout=20, headers={"Authorization": "Bearer " + key},
                             json={
-                                "model": model, "temperature": 0, "max_completion_tokens": 2400,
+                                "model": model, "temperature": 0, "max_completion_tokens": 8192,
                                 "response_format": {"type": "json_object"},
                                 "messages": [
                                     {"role": "system", "content": SYSTEM},
@@ -183,6 +184,6 @@ def classify_unknown(state, *, post=httpx.post, now=None):
             stats["failed"] += len(batch)
             continue
     state["financeAILastSync"] = {**stats,"at":now}
-    LOGGER.info("finance_ai attempted=%d categorized=%d failed=%d",
+    LOGGER.warning("finance_ai attempted=%d categorized=%d failed=%d",
                 stats["attempted"],stats["categorized"],stats["failed"])
     return total
