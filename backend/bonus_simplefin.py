@@ -1471,10 +1471,16 @@ def auto_refresh(uid):
             a['key'] for a in s['accounts'] if syncing(s,a))
         # Partial provider responses never remove saved accounts or evidence.
         candidate=merge(copy.deepcopy(s),response,now)
+        posted_or_pending={account_key(a) for a in response['accounts']
+            if a.get('transactions') and isinstance(a['transactions'],list)}
         for account in candidate['accounts']:
             if account['key'] in added:
                 account['autoDiscoveredAt']=now
-                account['firstSyncAt']=now
+                if account['key'] in posted_or_pending:
+                    account['firstSyncAt']=now
+                    account['firstSyncStatus']='activity_received'
+                else:
+                    account['firstSyncStatus']='awaiting_provider_data'
                 account.pop('discovered',None)
         candidate['lastAutoRefreshAt']=now
         candidate['nextAutoRefreshAt']=now+AUTO_REFRESH_INTERVAL
