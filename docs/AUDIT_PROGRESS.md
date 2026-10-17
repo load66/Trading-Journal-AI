@@ -1,10 +1,15 @@
 # Audit progress
 
-Active agent: codex — Finance Categories v2 — codex/finance-categories-v2
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- Categories v2 backend v3.5.0: PR #224 merged; Railway SUCCESS on ed0d5314e7e5adfb367466b361995728c2ea3d7d
+- Case-insensitive P2P regression: PR #227, failing-before CI 39072698485, passing backend/build CI 39072838689
+- Handoff: P2P backend release candidate ready for merge/Railway exact-commit verification; frontend PR #157 CI 39072801255 PASS with browser matrix
+- Next step: verify PR #227 Railway deployment, then merge and audit frontend PR #157 on Pages; follow with codex/plaid-fast-sync
 
 - In progress: Categories v2 P2P case regression follow-up on codex/finance-categories-v2-p2p-fix; backend v3.5.0 deployed, frontend PR #157 awaiting browser CI
 - Next step: verify failing regression, apply conservative matcher fix, green CI, backend Railway exact-commit check, frontend PR #157 release
