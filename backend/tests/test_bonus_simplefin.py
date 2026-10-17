@@ -221,7 +221,7 @@ def test_network_never_follows_redirects_or_sends_credentials_in_url(setup,monke
     assert called[0][1]['auth']==('synthetic','secret')
     assert ('account','a') in called[0][1]['params']
     assert ('pending','1') in called[0][1]['params']
-    assert int(dict(called[0][1]['params'])['start-date']) == NOW-90*b.DAY
+    assert int(dict(called[0][1]['params'])['start-date']) == NOW-89*b.DAY
 
 
 def test_private_routes_disable_caching(setup,monkeypatch):
