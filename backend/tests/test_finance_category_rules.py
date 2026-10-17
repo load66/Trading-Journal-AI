@@ -142,7 +142,7 @@ def test_provisional_large_money_moves_do_not_become_expenses_or_groq_candidates
 
 
 def test_exact_financial_labels_are_not_false_positive_shopping():
-    assert category_for('To Starbucks', '-12.37')[0] == 'unreviewed'
+    assert category_for('To Starbucks', '-12.37')[0] == 'dining'  # Purchase, never transfer
     assert category_for('Capital One Cafe purchase', '-22.00')[0] == 'unreviewed'
     assert category_for('Apple', '-249.52')[0] == 'shopping'
     assert 'investment_transfer' in category_for('To Brokerage', '-2000')[2]
