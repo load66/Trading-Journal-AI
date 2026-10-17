@@ -366,6 +366,7 @@ def _view(doc, ledger, uid):
                   ((not row.get("disconnectedAt") and not row.get("disconnectingAt")) or row.get("retainHistory"))}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
             "financeAICache": doc.get("financeAICache", {}),
+            "financeAILastSync": doc.get("financeAILastSync", {}),
             "merchantRules": doc.get("merchantRules", {}),
             "accountExclusions": doc.get("accountExclusions", {}),
             "health": doc.get("health", {}),
