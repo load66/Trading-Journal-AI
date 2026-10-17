@@ -442,6 +442,11 @@ def merchant_name(description):
     return title
 
 
+def merchant_rule_key(account, description):
+    """Scope new learned category rules to their original linked account."""
+    return str(account) + ':' + cache_key(description)
+
+
 def automatic_category(row):
     # Read-only annotation: precedence includes zero/prenote verification,
     # genuine loan and mortgage payment categories and merchant suggestions.
@@ -474,7 +479,13 @@ def enrich_transactions(state, result):
                 row['categorySource'] = 'user'
             else:
                 row.setdefault('categorySource','automatic')
-                learned = state.get('merchantRules', {}).get(cache_key(row.get('description', '')))
+                description = row.get('description', '')
+                rules = state.get('merchantRules', {})
+                learned = rules.get(merchant_rule_key(account, description))
+                # Legacy global rules remain valid for distinctive descriptions,
+                # but generic labels must not classify an unrelated bank account.
+                if learned is None and not re.fullmatch(r'\s*(?:payment(?: received)?|transfer|transaction|deposit)\s*', str(description), re.I):
+                    learned = rules.get(cache_key(description))
                 if isinstance(learned, dict) and learned.get('category') in TRANSACTION_CATEGORIES:
                     category, confidence = learned['category'], 'confirmed'
                     row['categorySource'] = 'user_rule'
@@ -503,7 +514,9 @@ def enrich_transactions(state, result):
                 or Decimal(row['amount']) == 0
                 or row.get('kind') in ('possible_bonus', 'possible_reversal')
                 or (row.get('category') == 'income' and 'paycheck' in row.get('signals', []))
-                or row.get('category') in ('bonus','refund','verification')
+                or row.get('category') in ('bonus','refund','verification','groceries',
+                    'dining','shopping','housing','utilities','transportation',
+                    'health','entertainment','fees','taxes','travel','subscription','loan')
                 or not isinstance(row.get('posted'), (int, float))):
             continue
         eligible.append((account, raw_id, row))
@@ -694,7 +707,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.93')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.94')
     return out
 
 
@@ -1164,7 +1177,7 @@ def transaction_review(body: TransactionReviewBody, request: Request):
             'category': body.category, 'reviewedAt': int(time.time())}
         if body.applySimilar:
             name = s['transactions'][body.account][raw].get('description', '')
-            s.setdefault('merchantRules', {})[cache_key(name)] = {
+            s.setdefault('merchantRules', {})[merchant_rule_key(body.account, name)] = {
                 'category': body.category, 'updatedAt': int(time.time())}
     return finish(uid, s, tag)
 

@@ -783,7 +783,7 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.93'
+    assert public['financeVersion']=='3.4.94'
 
 
 def test_exact_nonround_reciprocal_move_matches_between_accounts_same_bank():
@@ -1035,3 +1035,42 @@ def test_generic_inbound_payment_is_neutral_until_counterpart_is_observed():
     assert category_for('Schreiber Foods Payroll', '1000.00')[0] == 'income'
     assert category_for('Payment', '-1000.00')[0] != 'income'
     assert category_for('Payment', '1000.00', pending=True)[2] == []
+
+
+def test_generic_payment_rule_is_account_scoped_and_preserves_review_precedence(setup):
+    """A saved Payment rule must not silently classify another bank's deposits."""
+    left = account('wallet-one', 'first', [txn('credit1', '125.00', 'Payment')])
+    right = account('wallet-two', 'second', [txn('credit2', '200.00', 'Payment')])
+    state = b.empty_state()
+    state['accounts'] = b.normalize_accounts(data(left, right))
+    state['monitoredAccounts'] = [a['key'] for a in state['accounts']]
+    b.merge(state, data(left, right), NOW)
+    first, second = b.account_key(left), b.account_key(right)
+    state['merchantRules'] = {b.merchant_rule_key(first, 'Payment'):
+                             {'category': 'transfer', 'updatedAt': NOW}}
+    output = b.public_state(state)['transactions']
+    assert output[first][b.public_ref(first, 'credit1')]['category'] == 'transfer'
+    assert output[first][b.public_ref(first, 'credit1')]['categorySource'] == 'user_rule'
+    assert output[second][b.public_ref(second, 'credit2')]['category'] == 'unreviewed'
+    assert output[second][b.public_ref(second, 'credit2')]['categorySource'] != 'user_rule'
+    state['transactionReviews'] = {first: {'credit1': {'category': 'income', 'reviewedAt': NOW}}}
+    reviewed = b.public_state(state)['transactions'][first][b.public_ref(first, 'credit1')]
+    assert reviewed['category'] == 'income' and reviewed['categorySource'] == 'user'
+    assert b.merchant_rule_key(first, 'Payment') != b.merchant_rule_key(second, 'Payment')
+
+
+def test_equal_value_purchase_and_wallet_payment_are_not_a_self_transfer(setup):
+    """Identical amounts on two accounts cannot erase known merchant spending."""
+    outgoing = account('shop-card', 'expense', [txn('grocery', '-200.00', 'Walmart Grocery')])
+    incoming = account('wallet-card', 'income', [txn('wallet', '200.00', 'Payment')])
+    state = b.empty_state()
+    state['accounts'] = b.normalize_accounts(data(outgoing, incoming))
+    state['monitoredAccounts'] = [a['key'] for a in state['accounts']]
+    b.merge(state, data(outgoing, incoming), NOW)
+    result = b.public_state(state)['transactions']
+    debit = result[b.account_key(outgoing)][b.public_ref(b.account_key(outgoing), 'grocery')]
+    credit = result[b.account_key(incoming)][b.public_ref(b.account_key(incoming), 'wallet')]
+    assert debit['category'] == 'groceries'
+    assert credit['category'] == 'unreviewed'
+    assert 'matched_internal_transfer' not in debit['signals']
+    assert 'matched_internal_transfer' not in credit['signals']

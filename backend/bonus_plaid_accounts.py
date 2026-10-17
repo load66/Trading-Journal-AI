@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from bonus_backups import owner, store
 from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, public_ref,
-    public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
+    public_state, apply_mapping_selection, apply_evidence_decision, merchant_rule_key, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
 from finance_history_archive import archive_old, read_month, archive_key, purge_account
@@ -515,7 +515,7 @@ def transaction_review(body: TransactionReviewBody, request: Request):
         reviews[raw] = {"category": body.category, "reviewedAt": int(time.time()),
                         "fingerprint": evidence_fingerprint(rows[raw])}
         if body.applySimilar:
-            doc.setdefault("merchantRules", {})[cache_key(rows[raw].get("description", ""))] = {
+            doc.setdefault("merchantRules", {})[merchant_rule_key(body.account, rows[raw].get("description", ""))] = {
                 "category": body.category, "updatedAt": int(time.time())}
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
