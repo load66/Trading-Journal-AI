@@ -6,9 +6,13 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
-- Deployed: backend v3.4.95, main commit 3f4e0980c3a758cf00340704ffbdbab5d762537c (Railway SUCCESS)
-- In progress: SimpleFIN add-bank backend v3.4.97 release candidate, PR #223
-- Next step: after full CI merge PR #223, verify Railway SUCCESS on exact merge commit, then frontend PR #155
+- Deployed baseline: SimpleFIN backend v3.4.97, merge 827cc014330e0fa612256855a8f0c8d5fc83df85 (Railway SUCCESS)
+- Release candidate: v3.4.98 zero-click provider discovery and automatic account-history sync
+- Issue: https://github.com/load66/bonus-tracker/issues/153
+- Backend PR: https://github.com/load66/Trading-Journal-AI/pull/226
+- Frontend PR: https://github.com/load66/bonus-tracker/pull/159
+- Test status: backend CI 39062726309, 638 tests and Frontend Build PASS
+- Next step: merge verified backend PR, confirm Railway SUCCESS on its exact merge commit; then release frontend and verify Pages
 
 ## Release 1 (v3.4.94)
 
