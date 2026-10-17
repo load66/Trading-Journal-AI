@@ -150,7 +150,9 @@ def catalog_rows(storage,uid):
         continuation=result.get('NextContinuationToken')
         if not continuation:raise ValueError('Incomplete cloud backup listing')
     # Checkpoints retain their source data time; an older concurrent checkpoint cannot outrank a new upload.
-    rows.sort(key=lambda x:(x['backup']['dataAt'] or '',x['lastModified']),reverse=True)
+    rows.sort(key=lambda x:(x['backup']['dataAt'] or '',
+                            x['backup']['reason'] != 'scheduled',
+                            x['lastModified']),reverse=True)
     return rows
 
 
@@ -158,14 +160,22 @@ def prune_verified_versions(storage,uid,new_ident,now=None):
     rows=catalog_rows(storage,uid)
     by_id={x['backup']['id']:x for x in rows}
     ordered=rows
-    keep=set();hashes=set()
+    keep=set();hashes=set();checkpoint_hashes=set()
     protected_slot=checkpoint_id(uid,now)
     if protected_slot in by_id:
-        read_verified(storage,uid,protected_slot)
+        protected=read_verified(storage,uid,protected_slot)['backup']
         keep.add(protected_slot)
+        checkpoint_hashes.add(protected['sha256'])
+    # A just-verified upload must win clock-resolution ties with older objects.
+    # Object stores and test doubles can report identical modification times for
+    # rapid writes, so catalog order alone is not a safe freshness guarantee.
+    if new_ident in by_id and new_ident not in keep:
+        newest=read_verified(storage,uid,new_ident)['backup']
+        keep.add(new_ident)
+        hashes.add(newest['sha256'])
     for row in ordered:
         item=row['backup']
-        if item['sha256'] in hashes or len(hashes)>=3:continue
+        if item['sha256'] in checkpoint_hashes or item['sha256'] in hashes or len(hashes)>=3:continue
         verified=read_verified(storage,uid,item['id'])
         keep.add(item['id']);hashes.add(verified['backup']['sha256'])
     # Every retained recovery state was read back before any superseded object is removed.

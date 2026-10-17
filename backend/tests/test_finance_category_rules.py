@@ -216,8 +216,12 @@ def test_private_owner_transfer_and_p2p_are_neutral_not_payroll():
     assert not owner_transfer_description("ACH TRANSFR EXAMPLE OTHER", ["OWNER NAME"])
     assert category_for("ACH TRANSFR OWNER NAME", "700.00", owner_names=["OWNER NAME"]) == (
         "transfer", "medium", ["owner_transfer_unpaired"])
+    assert category_for("FROM OWNER NAME", "700.00", owner_names=["OWNER NAME"]) == (
+        "transfer", "medium", ["owner_transfer_unpaired"])
     assert category_for("Zelle from Example Person", "250.37") == (
         "transfer", "medium", ["possible_p2p"])
+    assert category_for("Zelle from Example Person", "250.00") == (
+        "unreviewed", "low", ["possible_transfer"])
     assert category_for("Example Employer Payroll", "547.00")[0] == "income"
     assert not possible_person_to_person("Zelle from Example Employer LLC")
     assert category_for("Example Lender Loan Disbursement", "700.00", owner_names=["OWNER NAME"])[0] == "loan_proceeds"

@@ -31,7 +31,7 @@ LOAN_PROCEEDS = re.compile(
     r'loan\s+advance|loan|advance|disbursement|sofi\s+lending|one\s+finance|'
     r'upstart|avant|lendingclub|oportun|earnest)\b',re.I
 )
-OWNER_TRANSFER_ACTION = re.compile(r'\b(?:transfr|transfer|ach\s*transfer|ach\s*xfer|xfer|zelle\s+from)\b',re.I)
+OWNER_TRANSFER_ACTION = re.compile(r'\b(?:transfr|transfer|ach\s*transfer|ach\s*xfer|xfer|zelle\s+from|from)\b',re.I)
 P2P_PREFIX = re.compile(r'^\s*(?:(?:zelle|venmo|cash\s*app|p2p)\s+(?:from\s+)?|from\s+)(.+?)\s*$',re.I)
 P2P_PERSON = re.compile(r'^[A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+){1,2}$')
 P2P_BUSINESS = re.compile(r'\b(?:llc|inc|ltd|corp|company|payroll|salary|wages|deposit|loan|lending|bank|fcu)\b',re.I)
@@ -186,7 +186,9 @@ def category_for(description, amount, *, pending=False, kind=None, owner_names=(
     if number > 0 and re.fullmatch(r'\s*payment(?:\s+received)?\s*', text, re.I):
         return 'unreviewed','low',['possible_transfer']
     if number > 0 and possible_person_to_person(text):
-        return 'transfer','medium',['possible_p2p']
+        if number != number.to_integral_value():
+            return 'transfer','medium',['possible_p2p']
+        return 'unreviewed','low',['possible_transfer']
     if number > 0 and PAYROLL.search(text) and not FINANCIAL_SOURCE_BARRIER.search(text):
         return 'income','high',['possible_direct_deposit','paycheck']
     if number > 0 and INTEREST.search(text):

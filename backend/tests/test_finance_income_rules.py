@@ -25,9 +25,10 @@ def test_single_company_candidate_requires_user_confirmation():
     assert 'possible_paycheck' in row_one['signals']
 
 def test_unknown_person_is_not_paycheck():
-    stranger=row('From John Doe','1061.24',DAY*100)
+    stranger=row('From Example Person','1061.24',DAY*100)
     annotate_paychecks([stranger])
-    assert stranger['category']=='unreviewed'
+    assert stranger['category']=='transfer'
+    assert 'possible_p2p' in stranger['signals']
     assert 'paycheck' not in stranger['signals']
     assert 'possible_paycheck' not in stranger['signals']
 
@@ -60,7 +61,7 @@ def test_ach_ppd_employer_credit_and_user_override():
     assert forced['category']=='other'
 
 def test_repeated_unknown_person_is_not_promoted_to_paycheck():
-    entries=[row('John Doe','1061.24',DAY*100),row('John Doe','1061.24',DAY*114)]
+    entries=[row('Example Person','1061.24',DAY*100),row('Example Person','1061.24',DAY*114)]
     annotate_paychecks(entries)
     assert all(x['category']=='unreviewed' and 'paycheck' not in x['signals'] for x in entries)
 

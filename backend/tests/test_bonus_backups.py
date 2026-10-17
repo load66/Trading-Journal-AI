@@ -14,11 +14,13 @@ import bonus_backups as b
 from auth import AuthError
 
 class MemoryR2:
-    def __init__(self):self.objects={};self.bucket='synthetic';self.client=self;self.corrupt=False
+    def __init__(self):self.objects={};self.bucket='synthetic';self.client=self;self.corrupt=False;self.tick=0
     def put_object(self,Bucket,Key,Body,Metadata,**kw):
         assert kw['IfNoneMatch']=='*'
         if Key in self.objects:raise ClientError({'Error':{'Code':'PreconditionFailed'},'ResponseMetadata':{'HTTPStatusCode':412}},'PutObject')
-        self.objects[Key]={'body':Body,'Metadata':Metadata,'LastModified':datetime.now(timezone.utc)}
+        self.tick+=1
+        self.objects[Key]={'body':Body,'Metadata':Metadata,
+                           'LastModified':datetime(2026,1,1,tzinfo=timezone.utc)+timedelta(microseconds=self.tick)}
     def head_object(self,Bucket,Key):
         if Key not in self.objects:raise ClientError({'Error':{'Code':'404'},'ResponseMetadata':{'HTTPStatusCode':404}},'HeadObject')
         x=self.objects[Key];return {'Metadata':x['Metadata'],'ContentLength':len(x['body'])}

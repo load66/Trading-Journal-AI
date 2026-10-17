@@ -7,10 +7,12 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 ## Handoff
 
 - Deployed baseline: SimpleFIN backend v3.4.98, merge 26dc4b2076f89157d6fe8356a90eaa244ac59cc3 (Railway SUCCESS)
-- In progress: Finance Categories v2 issue #156 on codex/finance-categories-v2
+- Release candidate: Finance Categories v2 backend v3.5.0 for issue #156 on codex/finance-categories-v2
 - Backend PR: https://github.com/load66/Trading-Journal-AI/pull/224
 - Frontend PR: https://github.com/load66/bonus-tracker/pull/157
-- Next step: complete backend regression coverage and release the backend before the frontend
+- Test status: focused Finance and recovery suites 210 PASS; broad local suite 653 PASS with three unchanged platform checks pending Linux CI
+- Safety status: newly verified recovery data wins timestamp ties and retained copies remain bounded
+- Next step: push the backend candidate, verify full CI, merge, and confirm Railway SUCCESS on the exact merge commit
 
 ## Release 1 (v3.4.94)
 

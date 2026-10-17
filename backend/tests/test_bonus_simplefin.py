@@ -783,7 +783,7 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.98'
+    assert public['financeVersion']=='3.5.0'
 
 
 def test_exact_nonround_reciprocal_move_matches_between_accounts_same_bank():
@@ -1057,6 +1057,31 @@ def test_generic_payment_rule_is_account_scoped_and_preserves_review_precedence(
     reviewed = b.public_state(state)['transactions'][first][b.public_ref(first, 'credit1')]
     assert reviewed['category'] == 'income' and reviewed['categorySource'] == 'user'
     assert b.merchant_rule_key(first, 'Payment') != b.merchant_rule_key(second, 'Payment')
+
+
+def test_manual_income_review_overrides_loan_and_p2p_without_mutating_history():
+    linked = account('one', 'reviewed', [
+        txn('loan-credit', '700.00', 'Example Lender Loan Disbursement'),
+        txn('person-credit', '250.37', 'Zelle from Example Person'),
+    ])
+    state = b.empty_state()
+    state['accounts'] = b.normalize_accounts(data(linked))
+    state['monitoredAccounts'] = [b.account_key(linked)]
+    b.merge(state, data(linked), NOW)
+    account_key = b.account_key(linked)
+    before = copy.deepcopy(state['transactions'])
+    state['transactionReviews'] = {account_key: {
+        'loan-credit': {'category': 'income', 'reviewedAt': NOW},
+        'person-credit': {'category': 'income', 'reviewedAt': NOW},
+    }}
+
+    rows = b.public_state(state)['transactions'][account_key]
+    for ident, expected in [('loan-credit', '700.00'), ('person-credit', '250.37')]:
+        row = rows[b.public_ref(account_key, ident)]
+        assert row['category'] == 'income'
+        assert row['categorySource'] == 'user'
+        assert b.Decimal(row['amount']) == b.Decimal(expected)
+    assert state['transactions'] == before
 
 
 def test_equal_value_purchase_and_wallet_payment_are_not_a_self_transfer(setup):
