@@ -92,7 +92,7 @@ def test_provider_redacts_ids_from_public_snapshot():
     serialized=__import__("json").dumps(shown)
     assert "private" not in serialized and "item1" not in serialized
     assert '"example"' not in serialized and '"tx1"' not in serialized
-    assert next(iter(shown["transactions"][key].values()))["signals"]==["possible_direct_deposit"]
+    assert set(next(iter(shown["transactions"][key].values()))["signals"])=={"possible_direct_deposit","paycheck"}
     assert shown["authoritativeMilestones"] is False
     assert adapter._public(saved,ledger,"bob")["accounts"]==[]
 
