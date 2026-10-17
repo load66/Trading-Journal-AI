@@ -340,7 +340,7 @@ def test_transaction_enrichment_review_and_provider_revision_invalidates_review(
     c = client(monkeypatch); h = {'Authorization':'Bearer synthetic'}; p = '/api/bonus-tracker/simplefin'
     public = c.get(p, headers=h).json(); ref = b.public_ref(k,'coffee')
     assert public['transactions'][k][ref]['merchant'] == 'Coffee'
-    assert public['transactions'][k][b.public_ref(k,'salary')]['signals'] == ['possible_direct_deposit']
+    assert set(public['transactions'][k][b.public_ref(k,'salary')]['signals']) == {'possible_direct_deposit','paycheck'}
     reviewed = c.put(p + '/transaction-review', headers=h,
                      json={'account':k,'transaction':ref,'category':'dining'})
     assert reviewed.status_code == 200
