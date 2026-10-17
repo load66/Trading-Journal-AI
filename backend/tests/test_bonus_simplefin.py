@@ -921,3 +921,26 @@ def test_guided_discovery_budget_cannot_exceed_24_requests_in_rolling_day(setup,
     result = b.discover_guided(None)
     assert result['connected']
     assert len(b.read_state('owner')[0]['requestAttempts']) == 24
+
+def test_six_hour_full_sync_three_hour_balance_refresh_and_shared_budget(setup, monkeypatch):
+    state=seed()
+    state['nextSyncAt']=NOW+6*3600
+    state['nextBalanceRefreshAt']=NOW
+    state['transactions']={b.account_key(account()):{'saved':{
+        'id':'saved','amount':'42.00','posted':NOW-100,'description':'Schreiber Foods','pending':False
+    }}}
+    b.write_state('owner',state,None)
+    requests=[]
+    def provider(_access,selected=None,balances=False):
+        requests.append(balances)
+        return data(account())
+    monkeypatch.setattr(b,'get_data',provider)
+    before=copy.deepcopy(b.read_state('owner')[0]['transactions'])
+    out=b.refresh_balances('owner')
+    assert requests==[True],'A balance-only refresh must not request transactions'
+    assert out['nextSyncAt']==NOW+6*3600
+    assert out['nextBalanceRefreshAt']==NOW+3*3600
+    assert out['lastBalanceRefreshAt']==NOW
+    assert b.read_state('owner')[0]['transactions']==before,'Saved activity must be immutable'
+    b.refresh_balances('owner')
+    assert requests==[True],'Cannot reissue a balance check before the three-hour budget'
