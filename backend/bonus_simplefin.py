@@ -514,7 +514,9 @@ def enrich_transactions(state, result):
                 or Decimal(row['amount']) == 0
                 or row.get('kind') in ('possible_bonus', 'possible_reversal')
                 or (row.get('category') == 'income' and 'paycheck' in row.get('signals', []))
-                or row.get('category') in ('bonus','refund','verification')
+                or row.get('category') in ('bonus','refund','verification','groceries',
+                    'dining','shopping','housing','utilities','transportation',
+                    'health','entertainment','fees','taxes','travel','subscription','loan')
                 or not isinstance(row.get('posted'), (int, float))):
             continue
         eligible.append((account, raw_id, row))
