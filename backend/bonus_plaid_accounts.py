@@ -27,6 +27,7 @@ from finance_history_archive import archive_old, read_month, archive_key, purge_
 from finance_account_management import (AccountAction, syncing, public_accounts, merge_profiles,
     action as account_action, purge_history, filter_after_removal)
 from finance_ai_categories import classify_unknown, cache_key
+from finance_plaid_enrichment import enrich as plaid_enrich
 
 BACKGROUND_LOGGER = logging.getLogger(__name__)
 
@@ -67,7 +68,30 @@ def connection_handle(uid, item_id):
     return hashlib.sha256((uid + "\0" + item_id).encode()).hexdigest()
 
 
-ROUTES = frozenset(("/accounts/get", "/transactions/sync"))
+ROUTES = frozenset(("/item/get", "/accounts/get", "/transactions/sync"))
+_ITEM_PRODUCTS = {}  # Process-local verified item capabilities; never persist tokens.
+
+def _catalog(token):
+    """No product activation: /item/get is metadata-only."""
+    hashed = hashlib.sha256(token.encode()).hexdigest()
+    old = _ITEM_PRODUCTS.get(hashed)
+    if old and old["expires"] > time.time():
+        return old["catalog"]
+    raw = _provider("/item/get", token)
+    item = raw.get("item", {})
+    if not isinstance(item, dict):
+        raise HTTPException(502, "Plaid Item product availability could not be verified.")
+    result = {}
+    for field in ("products", "billed_products", "available_products"):
+        values = item.get(field)
+        if not isinstance(values, list) or any(not isinstance(value,str) for value in values):
+            raise HTTPException(502, "Plaid Item product availability could not be verified.")
+        result[field] = sorted(set(values))
+    _ITEM_PRODUCTS[hashed] = {"expires": time.time()+300, "catalog":result}
+    if len(_ITEM_PRODUCTS) > 100:
+        _ITEM_PRODUCTS.clear()
+    return result
+
 
 
 def _private(response: Response):
@@ -150,6 +174,11 @@ def _provider(endpoint, token, **kwargs):
         raise HTTPException(500, "Unsupported read-only Plaid operation.")
     if not quota._ready():
         raise HTTPException(503, "Plaid fallback is not activated.")
+    if endpoint != "/item/get":
+        catalog = _catalog(token)
+        if endpoint == "/transactions/sync" and "transactions" not in (
+                set(catalog["products"]) | set(catalog["billed_products"])):
+            raise HTTPException(403, "This Item does not have an existing Transactions product. No paid activation attempted.")
     try:
         response = httpx.post(quota.BASE + endpoint,
             json={"client_id": quota.os.environ["PLAID_CLIENT_ID"],
@@ -238,7 +267,7 @@ def _transaction(row, now):
             "pending": pending, "kind": classify(amount, description),
             "currency": clean(row.get("iso_currency_code") or
                               row.get("unofficial_currency_code"), 8),
-            "observedAt": now, "lastObservedAt": now}
+            "observedAt": now, "lastObservedAt": now, **plaid_enrich(row)}
 
 
 def _sync_item(token, current_cursor):
@@ -487,6 +516,32 @@ def transaction_review(body: TransactionReviewBody, request: Request):
                 "category": body.category, "updatedAt": int(time.time())}
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
+
+
+@router.get("/accounts/capabilities", dependencies=[Depends(_private)])
+def capabilities(request: Request):
+    """Authenticated Item product inventory. Never triggers optional product calls."""
+    uid = owner(request)
+    ledger, _tag = quota._ledger()
+    active = {item_id:item for item_id,item in ledger.get("items",{}).items()
+              if isinstance(item,dict) and item.get("owner")==uid and
+              not item.get("disconnectedAt") and not item.get("disconnectingAt")}
+    result = []
+    for item_id,item in active.items():
+        try:
+            catalog = _catalog(item["access"])
+            result.append({"handle":connection_handle(uid,item_id),
+                           "institution":clean(item.get("institution"),100),
+                           **catalog,
+                           "enabledData":["balances","transactions"] if "transactions" in catalog["products"] else ["balances"],
+                           "optionalProductsEnabled":[],
+                           "extraCostProductsCalled":False})
+        except (KeyError,HTTPException):
+            result.append({"handle":connection_handle(uid,item_id),
+                           "institution":clean(item.get("institution"),100),
+                           "error":"Product inventory unavailable. Optional products remain disabled.",
+                           "optionalProductsEnabled":[],"extraCostProductsCalled":False})
+    return {"items":result,"noNewItems":True,"paidAddonsEnabled":False}
 
 
 @router.get("/accounts/history/{month}", dependencies=[Depends(_private)])

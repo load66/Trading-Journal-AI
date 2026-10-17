@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from botocore.exceptions import ClientError
 from bonus_backups import owner, store
 from finance_category_rules import category_for, micro_deposit_refs
+from finance_income_rules import annotate_paychecks
 from finance_ai_categories import classify_unknown, cache_key
 from finance_history_archive import archive_old, read_month, HOT_DAYS, purge_account
 from finance_account_management import (AccountAction, institution_handle, syncing, public_accounts,
@@ -413,12 +414,19 @@ def enrich_transactions(state, result):
             ref = public_ref(account, raw_id)
             row['id'] = ref
             category, confidence, signals = automatic_category(row)
+            plaidCategory = row.get('plaidSuggestedCategory')
+            if (plaidCategory in TRANSACTION_CATEGORIES and row.get('kind') not in ('possible_bonus','possible_reversal')
+                    and category not in ('transfer','verification','bonus','refund') and not row.get('pending')
+                    and not ('possible_transfer' in signals)):
+                category, confidence = plaidCategory, ('high' if row.get('plaidConfidence') in ('VERY_HIGH','HIGH') else 'medium')
+                signals = sorted(set(signals + (row.get('plaidCategorySignals') or [])))
+                row['categorySource'] = 'plaid'
             review = reviews.get(account, {}).get(raw_id)
             if isinstance(review, dict) and review.get('category') in TRANSACTION_CATEGORIES:
                 category, confidence = review['category'], 'confirmed'
                 row['categorySource'] = 'user'
             else:
-                row['categorySource'] = 'automatic'
+                row.setdefault('categorySource','automatic')
                 learned = state.get('merchantRules', {}).get(cache_key(row.get('description', '')))
                 if isinstance(learned, dict) and learned.get('category') in TRANSACTION_CATEGORIES:
                     category, confidence = learned['category'], 'confirmed'
@@ -433,7 +441,7 @@ def enrich_transactions(state, result):
                             row['categorySource'] = 'ai'
                             row['confidenceScore'] = suggestion.get('confidenceScore')
             row.update(category=category, confidence=confidence, signals=signals,
-                       merchant=merchant_name(row.get('description', '')),
+                       merchant=clean(row.get('merchantName'),100) or merchant_name(row.get('description', '')),
                        stalePending=bool(row.get('pending') and row.get('lastObservedAt', 0) < int(time.time()) - 7 * DAY))
             public_rows[ref] = row
             records.append((account, raw_id, row))
@@ -480,6 +488,10 @@ def enrich_transactions(state, result):
             row = eligible[index][2]
             row.update(category='transfer', confidence='high')
             row['signals'] = sorted(set(row['signals'] + ['matched_internal_transfer']))
+
+    # Employer recurrence is inferred from presentation rows only. Money movements
+    # are paired first and are never counted as paychecks.
+    annotate_paychecks([row for _account, _raw, row in records])
 
     # Detect classic two-small-deposit account verification patterns. Keep raw
     # rows and review receipts untouched, and never override a user's correction.
@@ -607,7 +619,7 @@ def merge(state, data, now):
 def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'notices', 'institutionIssues', 'missingAccounts', 'lastSuccess',
-              'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error',
+              'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'nextGuidedDiscoveryAt', 'error',
               'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
@@ -629,7 +641,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.82')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.83')
     return out
 
 
@@ -895,15 +907,33 @@ def reconnect(body: ConnectBody, request: Request):
     return finish(uid, s, tag)
 
 
+@router.post('/discover-guided')
+def discover_guided(request: Request):
+    """One-time return-to-app check, bounded by a real rolling request budget."""
+    return discover(request, guided=True)
+
+
 @router.post('/discover')
-def discover(request: Request):
+def discover(request: Request, guided: bool = False):
     uid = owner(request)
     s, tag = reserve(uid, 'discover')
     now = int(time.time())
     if not s.get('access'):
         finish(uid, s, tag)
         raise HTTPException(409, 'Connect SimpleFIN first.')
-    if now < s.get('nextDiscoveryAt', 0):
+    if guided:
+        recent = [at for at in s.get('guidedDiscoveryAttempts', [])
+                  if isinstance(at, int) and at > now - DAY]
+        hour = [at for at in recent if at > now - 3600]
+        if (now < s.get('nextGuidedDiscoveryAt', 0) or len(hour) >= 3
+                or len(recent) >= 6 or len(s.get('requestAttempts', [])) >= 24):
+            s['nextGuidedDiscoveryAt'] = max(s.get('nextGuidedDiscoveryAt',0),
+                hour[0] + 3600 if len(hour)>=3 else 0,
+                recent[0] + DAY if len(recent)>=6 else 0)
+            return finish(uid, s, tag)
+        s['guidedDiscoveryAttempts'] = recent + [now]
+        s['nextGuidedDiscoveryAt'] = now + 180
+    elif now < s.get('nextDiscoveryAt', 0):
         return finish(uid, s, tag)
     s['nextDiscoveryAt'] = now + DAY
     tag = write_state(uid, s, tag)

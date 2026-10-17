@@ -17,7 +17,7 @@ VERIFICATION = re.compile(
     r'micro\s*dep|test\s*dep|rtp\s*test|rtptststtl|rtp\s*tst\s*sttl|'
     r'prenote|validation)(?![a-z])', re.I
 )
-PAYROLL = re.compile(r'\b(?:payroll|salary|wages|direct\s*dep(?:osit)?|paycheck)\b', re.I)
+PAYROLL = re.compile(r'\b(?:payroll|salary|wages|direct\s*dep(?:osit)?|dir\s*dep|ppd|paycheck)\b', re.I)
 REFUND = re.compile(r'\b(?:refund|return(?:ed)?\s+(?:purchase|item|payment)|reimbursement|merchant credit)\b', re.I)
 INTEREST = re.compile(r'\b(?:interest (?:paid|earned|credit)|dividends?|apy interest)\b', re.I)
 HOUSING = re.compile(r'\b(?:mortgage|home loan|rent|landlord|apartment lease)\b', re.I)
@@ -51,6 +51,7 @@ FINANCIAL_DESTINATION = re.compile(
 INVESTMENT_DESTINATION = re.compile(
     r'\b(?:brokerage|investing|investment|ira|robinhood|fidelity|schwab|vanguard)\b',re.I)
 FINANCIAL_DIRECTION = re.compile(r'^\s*(?:to|from)\s+(.+?)\s*$',re.I)
+ACCOUNT_ARROW = re.compile(r'^\s*(?:savings|checking|brokerage|investment|retirement|cash\s*account)\s*(?:\(\d{4}\)|[·*x]+\d{4})?\s*(?:→|->| to )\s*(?:savings|checking|brokerage|investment|retirement|cash\s*account)\s*(?:\(\d{4}\)|[·*x]+\d{4})?\s*$',re.I)
 BARE_CARD_ISSUER = re.compile(
     r'^\s*(?:capital\s*one|u\.?\s*s\.?\s*bank|us\s*bank|citibank|citi|'
     r'amex|american\s*express|discover|chase|synchrony|wells\s*fargo|'
@@ -69,10 +70,12 @@ def financial_movement(description, amount):
     if not value.is_finite() or value == 0:
         return None
     label = str(description or '').strip()
+    if ACCOUNT_ARROW.fullmatch(label):
+        return 'transfer', ['matched_internal_transfer' if not INVESTMENT_DESTINATION.search(label) else 'investment_transfer']
     direction = FINANCIAL_DIRECTION.fullmatch(label)
     if direction and FINANCIAL_DESTINATION.search(direction.group(1)):
         code = 'investment_transfer' if INVESTMENT_DESTINATION.search(direction.group(1)) else 'transfer'
-        return 'transfer', [code]
+        return 'transfer', [code] if code == 'investment_transfer' else [code, 'ownership_unconfirmed']
     if value < 0 and BARE_CARD_ISSUER.fullmatch(label):
         return 'transfer', ['card_payment']
     if ISSUER_PAYMENT.search(label) and PAYMENT_ACTION.search(label):
@@ -86,6 +89,7 @@ def financial_movement(description, amount):
         return 'unreviewed', ['possible_transfer']
     return None
 
+FINANCIAL_SOURCE_BARRIER = re.compile(r'\b(?:schwab|brokerage|robinhood|fidelity|vanguard|bank|credit\s*union|fcu|savings|checking|paypal|venmo|zelle|cash\s*app)\b',re.I)
 SELF_P2P = re.compile(r'\b(?:zelle|venmo|cash app|cashapp|p2p)\b.*\b(?:self|my own|myself)\b',re.I)
 MERCHANTS = (
     ('groceries', r'\b(?:walmart|aldi|kroger|whole foods|safeway|trader joe|'
@@ -131,8 +135,8 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'unreviewed','high',['possible_reversal']
     if number > 0 and REFUND.search(text):
         return 'refund','high',['possible_refund']
-    if number > 0 and PAYROLL.search(text):
-        return 'income','high',['possible_direct_deposit']
+    if number > 0 and PAYROLL.search(text) and not FINANCIAL_SOURCE_BARRIER.search(text):
+        return 'income','high',['possible_direct_deposit','paycheck']
     if number > 0 and INTEREST.search(text):
         return 'income','high',[]
     if number < 0 and re.search(r'\bfee\b|service charge|maintenance charge|overdraft', text, re.I):
