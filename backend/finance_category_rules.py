@@ -41,6 +41,27 @@ BROKER_CONTRIBUTION = re.compile(
     r'\b(?:contribut(?:ion|e)|transfer|funding|deposit)\b.*'
     r'\b(?:robinhood|fidelity|schwab|vanguard|e\s*\*?\s*trade|brokerage|'
     r'investment|401k|roth\s*ira|traditional\s*ira|ira)\b', re.I)
+# Financial destination rules precede merchant heuristics and recurrence.
+FINANCIAL_DESTINATION = re.compile(
+    r'\b(?:bank|fcu|credit\s*union|savings?|checking|brokerage|investing|'
+    r'investment|ira|citibank|citi|u\.?\s*s\.?\s*bank|capital\s*one|'
+    r'chase|wells\s*fargo|bofa|bank\s*of\s*america|amex|'
+    r'american\s*express|discover|synchrony|lafayette\s*fcu|'
+    r'navy\s*federal|paypal|venmo|cash\s*app|zelle|x\s*money|'
+    r'one\s*pay|onepay|robinhood|fidelity|schwab|vanguard)\b',re.I)
+DIRECTIONAL_DESTINATION = re.compile(r'^\s*(?:to|from)\s+(.+?)\s*$',re.I)
+INVESTING_DESTINATION = re.compile(
+    r'\b(?:brokerage|investing|investment|ira|roth|401k|'
+    r'robinhood|fidelity|schwab|vanguard)\b',re.I)
+BARE_ISSUER = re.compile(
+    r'^\s*(?:capital\s*one|u\.?\s*s\.?\s*bank|citibank|citi|'
+    r'amex|american\s*express|discover)\s*$',re.I)
+ROUND_FINANCIAL_MOVE = re.compile(
+    r'\b(?:bank|fcu|credit\s*union|savings?|checking|brokerage|'
+    r'investing|investment|ira|citibank|citi|u\.?\s*s\.?\s*bank|'
+    r'capital\s*one|chase|wells\s*fargo|bofa|amex|discover|'
+    r'synchrony|lafayette|navy\s*federal|paypal|venmo|cash\s*app|'
+    r'zelle|x\s*money|one\s*pay|onepay|robinhood|fidelity|schwab|vanguard)\b',re.I)
 SELF_P2P = re.compile(r'\b(?:zelle|venmo|cash app|cashapp|p2p)\b.*\b(?:self|my own|myself)\b',re.I)
 MERCHANTS = (
     ('groceries', r'\b(?:walmart|aldi|kroger|whole foods|safeway|trader joe|'
@@ -49,11 +70,11 @@ MERCHANTS = (
                r'restaurant|coffee shop|panera|dunkin|taco bell)\b'),
     ('transportation', r'\b(?:shell oil|exxon|chevron|quiktrip|casey.?s|'
                        r'gas station|fuel|parking|toll|lyft|uber trip)\b'),
-    ('subscription', r'\b(?:netflix|spotify|youtube premium|hulu|apple subscription|'
+    ('subscription', r'\b(?:netflix|spotify|youtube premium|hulu|apple subscription|apple\s*(?:com|\.com|bill|icloud)|icloud|'
                      r'disney plus|amazon prime membership)\b'),
-    ('utilities', r'\b(?:liberty utilities|electric company|water utility|'
+    ('utilities', r'\b(?:t\s*[- ]?mobile|verizon|at\s*&\s*t|att wireless|liberty utilities|electric company|water utility|'
                   r'internet provider|utility bill|cellular bill|at&t wireless)\b'),
-    ('shopping', r'\b(?:amazon marketplace|amazon retail|best buy|target|ebay|etsy)\b'),
+    ('shopping', r'\b(?:amazon|walmart|target|apple|costco|best buy|ebay|etsy)\b'),
     ('travel', r'\b(?:airline|delta air|united air|southwest air|hotel|airbnb|rental car)\b'),
     ('health', r'\b(?:pharmacy|walgreens|cvs|hospital|doctor|dental|clinic|medical)\b'),
     ('entertainment',r'\b(?:movie theater|cinema|amc theatre|concert|ticketmaster)\b'),
@@ -80,6 +101,20 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'bonus','high',['possible_bonus']
     if kind == 'possible_reversal':
         return 'unreviewed','high',['possible_reversal']
+    # Directed transfers come first, ahead of even payroll, refunds or merchants.
+    directed = DIRECTIONAL_DESTINATION.fullmatch(text)
+    if directed and FINANCIAL_DESTINATION.search(directed.group(1)):
+        if number < 0 and INVESTING_DESTINATION.search(directed.group(1)):
+            return 'transfer','high',['investment_transfer']
+        return 'transfer','high',['possible_transfer']
+    if number < 0 and BARE_ISSUER.fullmatch(text):
+        return 'transfer','high',['card_payment']
+    if (ISSUER_PAYMENT.search(text) and PAYMENT_ACTION.search(text)) or BROKER_CONTRIBUTION.search(text):
+        if number < 0 and BROKER_CONTRIBUTION.search(text):
+            return 'transfer','high',['investment_transfer']
+        return 'transfer','high',['card_payment' if number < 0 else 'possible_transfer']
+    if number > 0 and re.match(r'^\s*(?:bank|credit\s*union|fcu)\s+',text,re.I) and FINANCIAL_DESTINATION.search(text):
+        return 'transfer','medium',['possible_transfer']
     if number > 0 and REFUND.search(text):
         return 'refund','high',['possible_refund']
     if number > 0 and PAYROLL.search(text):
@@ -88,9 +123,6 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'income','high',[]
     if number < 0 and re.search(r'\bfee\b|service charge|maintenance charge|overdraft', text, re.I):
         return 'fees','high',['possible_fee']
-    # Financial-account movements take precedence over recurring merchants.
-    if (ISSUER_PAYMENT.search(text) and PAYMENT_ACTION.search(text)) or BROKER_CONTRIBUTION.search(text):
-        return 'transfer','high',['possible_transfer']
     if number < 0 and HOUSING.search(text):
         return 'housing','high',[]
     if number < 0 and LOAN.search(text):
@@ -101,6 +133,9 @@ def category_for(description, amount, *, pending=False, kind=None):
         for category, pattern in _COMPILED_MERCHANTS:
             if pattern.search(text):
                 return category,'medium',[]
+    if number < 0 and (number == number.to_integral_value() or abs(number) >= 1000):
+        if re.match(r'^\s*(?:to|from)\s+', text, re.I) or ROUND_FINANCIAL_MOVE.search(text):
+            return 'unreviewed','low',['possible_transfer']
     return 'unreviewed','low',[]
 
 
