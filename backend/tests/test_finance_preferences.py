@@ -74,13 +74,38 @@ def test_uncategorized_budget_is_allowed_without_changing_transaction_classifica
         f._validate('budgets', 'transfer', {'amount':'125.50'})
 
 def test_saved_finance_rules_are_validated_and_do_not_change_account_records():
-    assert f._validate("rules","schreiber foods",{"category":"income","employer":True}) == {
+    assert f._validate("rules","example employer",{"category":"income","employer":True}) == {
         "category":"income","employer":True,"ownAccount":False}
     assert f._validate("rules","to citibank",{"category":"transfer","ownAccount":True})["ownAccount"]
-    assert f._validate("rules","schreiber foods",None) is None
+    assert f._validate("rules","example employer",None) is None
     with pytest.raises(HTTPException):
         f._validate("rules","to citibank",{"category":"income","ownAccount":True})
     with pytest.raises(HTTPException):
-        f._validate("rules","schreiber foods",{"category":"transfer","employer":True})
+        f._validate("rules","example employer",{"category":"transfer","employer":True})
     with pytest.raises(HTTPException):
         f._validate("rules","x",{"category":"transfer"})
+
+
+def test_private_owner_name_preferences_are_scoped_and_not_logged(monkeypatch):
+    expected={"names":["OWNER NAME","SECOND ALIAS"]}
+    assert f._validate("ownerNames","primary",expected)==expected
+    assert f._validate("ownerNames","primary",None) is None
+    assert f._validate("budgets","insurance",{"amount":"89.14"}) == {"amount":"89.14"}
+    with pytest.raises(HTTPException):
+        f._validate("budgets","loan_proceeds",{"amount":"89.14"})
+    with pytest.raises(HTTPException):
+        f._validate("ownerNames","primary",{"names":["EXAMPLE OWNER 12345"]})
+    with pytest.raises(HTTPException):
+        f._validate("ownerNames","invalid-key",expected)
+    m=Memory()
+    monkeypatch.setattr(f,"store",lambda:m)
+    key=Fernet.generate_key()
+    monkeypatch.setattr(f,"cipher",lambda:Fernet(key))
+    state=f._default()
+    state["ownerNames"]["primary"]=expected
+    state["revision"]=1
+    f._write("owner-a",state,None)
+    assert f._read("owner-a")[0]["ownerNames"]["primary"]==expected
+    assert f._read("owner-b")[0]["ownerNames"]=={}
+    stored=next(iter(m.data.values()))[0]
+    assert b"OWNER NAME" not in stored
