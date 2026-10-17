@@ -781,4 +781,36 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.80'
+    assert public['financeVersion']=='3.4.81'
+
+
+def test_exact_nonround_reciprocal_move_matches_between_accounts_same_bank():
+    primary,secondary='a'*64,'b'*64
+    s=b.empty_state()
+    s['transactions']={primary:{'out':{'description':'To Personal Checking','amount':'-7379.04',
+      'posted':NOW-80000,'pending':False,'kind':'withdrawal'}},
+      secondary:{'in':{'description':'From Personal Savings','amount':'7379.04',
+      'posted':NOW-78000,'pending':False,'kind':'deposit'}}}
+    output={}
+    b.enrich_transactions(s,output)
+    for account in (primary,secondary):
+        row=next(iter(output['transactions'][account].values()))
+        assert row['category']=='transfer'
+        assert 'matched_internal_transfer' in row['signals']
+    s['transactionReviews']={primary:{'out':{'category':'shopping'}}}
+    b.enrich_transactions(s,output:={})
+    assert next(iter(output['transactions'][primary].values()))['category']=='shopping'
+    assert next(iter(output['transactions'][primary].values()))['categorySource']=='user'
+
+
+def test_saved_automatic_old_subscription_reclassified_without_mutating_ledger():
+    a='a'*64;s=b.empty_state()
+    s['transactions']={a:{'old':{'description':'To Brokerage','amount':'-2000',
+       'posted':NOW-100,'pending':False,'kind':'withdrawal',
+       'category':'subscription','categorySource':'automatic'}}}
+    before=s['transactions'][a]['old'].copy()
+    b.enrich_transactions(s,out:={})
+    row=next(iter(out['transactions'][a].values()))
+    assert row['category']=='transfer'
+    assert 'investment_transfer' in row['signals']
+    assert s['transactions'][a]['old']==before
