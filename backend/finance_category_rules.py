@@ -71,6 +71,8 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'income','high',['possible_direct_deposit']
     if number > 0 and INTEREST.search(text):
         return 'income','high',[]
+    if number < 0 and re.search(r'\\bfee\\b|service charge|maintenance charge|overdraft', text, re.I):
+        return 'fees','high',['possible_fee']
     if number < 0 and HOUSING.search(text):
         return 'housing','high',[]
     if number < 0 and LOAN.search(text):
