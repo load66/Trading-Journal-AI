@@ -623,10 +623,7 @@ def sync_owner(uid):
                 except HTTPException as exc:
                     # A temporarily unavailable Item must not roll back
                     # successfully synced unrelated banks or lose its cursor.
-                    exposed["lastTransactionAttemptAt"] = now
-                    exposed["nextTransactionSyncAt"] = now + DAY
-                    exposed["transactionSyncStatus"] = "needs_attention"
-                    exposed["transactionSyncError"] = exc.detail
+                    _sync_failure(exposed, now, exc.detail)
             # Plaid returns an Item-wide delta, even when only one account is
             # selected. Discard unselected activity before encrypted persistence.
             exposed["transactions"] = {
