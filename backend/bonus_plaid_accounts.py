@@ -22,7 +22,7 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
     public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
-from finance_ai_categories import classify_unknown
+from finance_ai_categories import classify_unknown, cache_key
 
 DAY = 86400
 MAX_BYTES = 8 * 1024 * 1024
@@ -342,6 +342,7 @@ def _view(doc, ledger, uid):
                   if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt")}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
             "financeAICache": doc.get("financeAICache", {}),
+            "merchantRules": doc.get("merchantRules", {}),
             "monitoredAccounts": list(doc.get("monitored", [])),
             **{key: copy.deepcopy(doc.get(key, {})) for key in
                ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
@@ -449,6 +450,9 @@ def transaction_review(body: TransactionReviewBody, request: Request):
     else:
         reviews[raw] = {"category": body.category, "reviewedAt": int(time.time()),
                         "fingerprint": evidence_fingerprint(rows[raw])}
+        if body.applySimilar:
+            doc.setdefault("merchantRules", {})[cache_key(rows[raw].get("description", ""))] = {
+                "category": body.category, "updatedAt": int(time.time())}
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
 
