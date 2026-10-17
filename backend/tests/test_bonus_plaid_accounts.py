@@ -58,6 +58,12 @@ def test_readonly_provider_route_allowlist():
     assert adapter.MAX_PAGES<=25
 
 
+def test_successful_item_uses_three_hour_next_poll():
+    current = _fixture_item = adapter._merge({}, "synthetic-item", "Synthetic",
+        {"accounts": [account()]}, ({}, {}, set(), "next"), NOW)
+    assert current["nextTransactionSyncAt"] == NOW + 10800
+
+
 def test_paginated_delta_cursor_and_removal(monkeypatch):
     seen=[]
     def provider(endpoint, access, **kwargs):
