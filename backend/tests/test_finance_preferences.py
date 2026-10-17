@@ -46,6 +46,7 @@ def test_preferences_encrypted_per_owner_and_verified(monkeypatch):
 
 @pytest.mark.parametrize("section,key,value",[
     ("budgets","groceries",{"amount":"350.17"}),
+    ("budgets","unreviewed",{"amount":"125.50"}),
     ("duplicates","simplefin:"+("a"*64)+"|plaid:"+("b"*64),{"primary":"plaid:"+("b"*64)}),
     ("recurring","synthetic stream|debit",{"name":"Streaming","dismissed":True}),
     ("transactionMeta","simplefin:"+("a"*64)+":fake-1",{"name":"Store","note":"Personal","exclude":True})
