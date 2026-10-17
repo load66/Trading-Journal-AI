@@ -719,3 +719,16 @@ def test_hidden_account_profile_is_additive_and_legacy_safe(setup, monkeypatch):
     restored=c.put(endpoint,headers=headers,json={'profiles':{k:{**model,'hidden':False}}})
     assert restored.status_code==200
     assert b.read_state('owner')[0]['accountProfiles'][k]['hidden'] is False
+
+
+def test_simplefin_empty_or_malformed_response_does_not_hide_pending(setup):
+    s=seed();k=b.account_key(account())
+    p={**txn('pending','-0.13','TRIAL DEP',pending=True),
+       'posted':0,'transacted_at':NOW-100}
+    b.merge(s,data(account(transactions=[p])),NOW)
+    b.merge(s,data(account(transactions=[])),NOW+1)
+    assert len(b.public_state(s)['transactions'][k])==1
+    bad=txn(ident='invalid',amount='NaN')
+    b.merge(s,data(account(transactions=[bad])),NOW+2)
+    assert len(b.public_state(s)['transactions'][k])==1
+    assert 'pendingClearedAt' not in s['transactions'][k]['pending']
