@@ -50,7 +50,8 @@ FINANCIAL_DESTINATION = re.compile(
     r'one\s*pay|onepay|robinhood|fidelity|schwab|vanguard)\b', re.I)
 INVESTMENT_DESTINATION = re.compile(
     r'\b(?:brokerage|investing|investment|ira|robinhood|fidelity|schwab|vanguard)\b',re.I)
-FINANCIAL_DIRECTION = re.compile(r'^\s*(?:to|from)\s+(.+?)\s*
+FINANCIAL_DIRECTION = re.compile(r'^\s*(?:to|from)\s+(.+?)\s*$', re.I)
+ACCOUNT_ARROW = re.compile(r'^\s*(?:savings|checking|brokerage|investment|retirement|cash\s*account)\s*(?:\(\d{4}\)|[·*x]+\d{4})?\s*(?:→|->| to )\s*(?:savings|checking|brokerage|investment|retirement|cash\s*account)\s*(?:\(\d{4}\)|[·*x]+\d{4})?\s*$',re.I)
 BARE_CARD_ISSUER = re.compile(
     r'^\s*(?:capital\s*one|u\.?\s*s\.?\s*bank|us\s*bank|citibank|citi|'
     r'amex|american\s*express|discover|chase|synchrony|wells\s*fargo|'
