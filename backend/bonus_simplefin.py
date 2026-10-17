@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from botocore.exceptions import ClientError
 from bonus_backups import owner, store
+from finance_category_rules import category_for, micro_deposit_refs
 
 def private_response(response: Response):
     response.headers['Cache-Control'] = 'no-store'
@@ -295,41 +296,10 @@ def merchant_name(description):
 
 
 def automatic_category(row):
-    if row.get('pending'):
-        return 'unreviewed', 'low', []
-    amount = Decimal(row['amount'])
-    text = row['description'].lower()
-    verification = r'acct\s*verify|verification|verify|trial\s*dep|micro\s*dep|test\s*dep|rtp\s*test|rtptststtl|rtp\s*tst\s*sttl|prenote|validation'
-    if amount == 0 or (abs(amount) < Decimal('1.00') and re.search(verification, text)):
-        return 'verification', 'high', []
-    if row.get('kind') == 'possible_bonus':
-        return 'bonus', 'high', ['possible_bonus']
-    if row.get('kind') == 'possible_reversal':
-        return 'unreviewed', 'high', ['possible_reversal']
-    if re.search(r'\bpayroll\b|\bsalary\b|\bdirect dep(?:osit)?\b', text) and amount > 0:
-        return 'income', 'high', ['possible_direct_deposit']
-    if amount < 0 and re.search(r'\bfee\b|service charge|maintenance charge|overdraft', text):
-        return 'fees', 'high', ['possible_fee']
-    if amount > 0 and re.search(r'\brefund\b|\breimbursement\b|\breturn\b', text):
-        return 'refund', 'medium', ['possible_refund']
-    if re.search(r'\btransfer\b|\bxfer\b|credit card payment|payment thank you|\bautopay\b|\bepayment\b|\bcard pmt\b|\bx money transfer\b', text):
-        return 'transfer', 'medium', ['possible_transfer']
-    patterns = (
-        ('groceries', r'grocery|supermarket|walmart|target|aldi|costco|sam.s club|kroger|publix|trader joe|whole foods'),
-        ('shopping', r'amazon|ebay|best buy|etsy|home depot|lowe.s'),
-        ('subscription', r'netflix|spotify|youtube premium|hulu|disney plus|apple.com/bill'),
-        ('housing', r'mortgage|rent payment|home loan'),
-        ('dining', r'restaurant|cafe|coffee|doordash|ubereats|grubhub'),
-        ('transportation', r'fuel|gas station|uber|lyft|parking|toll'),
-        ('utilities', r'electric|water utility|internet|wireless|phone bill'),
-        ('health', r'pharmacy|medical|dental|hospital|clinic'),
-        ('travel', r'airlines?|hotel|airbnb|rental car'),
-    )
-    if amount < 0:
-        for category, pattern in patterns:
-            if re.search(pattern, text):
-                return category, 'medium', []
-    return 'unreviewed', 'low', []
+    # Read-only annotation: precedence includes zero/prenote verification,
+    # genuine loan and mortgage payment categories and merchant suggestions.
+    return category_for(row.get('description'), row.get('amount'),
+                        pending=row.get('pending', False), kind=row.get('kind'))
 
 
 def enrich_transactions(state, result):
@@ -400,6 +370,17 @@ def enrich_transactions(state, result):
             row = eligible[index][2]
             row.update(category='transfer', confidence='high')
             row['signals'] = sorted(set(row['signals'] + ['matched_internal_transfer']))
+
+    # Detect classic two-small-deposit account verification patterns. Keep raw
+    # rows and review receipts untouched, and never override a user's correction.
+    micro = micro_deposit_refs([
+        {'accountKey': account, 'id': raw_id, 'description': row.get('description'),
+         'amount': row.get('amount'), 'posted': row.get('posted'), 'pending': row.get('pending')}
+        for account, raw_id, row in records
+    ])
+    for account, raw_id, row in records:
+        if (account, raw_id) in micro and row.get('categorySource') != 'user':
+            row.update(category='verification', confidence='high', signals=['verification'])
 
     groups = {}
     for _, _, row in records:
