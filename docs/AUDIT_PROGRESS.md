@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: none
+Active agent: codex — Finance Categories v2 — branch codex/finance-categories-v2
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
