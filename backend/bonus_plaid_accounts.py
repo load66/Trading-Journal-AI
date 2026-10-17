@@ -962,6 +962,74 @@ def sync_owner(uid):
     return _public(candidate, ledger, uid)
 
 
+def sync_item_now(uid, item_id):
+    """Sync exactly one previously discovered, owner-authorized Item.
+
+    A conditional encrypted R2 lease is acquired before any network activity.
+    Never modifies a sibling Item's cursor or next-transaction deadline.
+    This is intentionally not a way to create/discover/relink an Item.
+    """
+    ledger, _ = quota._ledger()
+    linked = ledger.get("items", {}).get(item_id)
+    if (not isinstance(linked, dict) or linked.get("owner") != uid or
+            linked.get("disconnectedAt") or linked.get("disconnectingAt") or
+            not isinstance(linked.get("access"), str)):
+        raise HTTPException(404, "Existing connection not found.")
+    doc, etag = _read(uid)
+    now = int(time.time())
+    original = doc.get("items", {}).get(item_id)
+    if not isinstance(original, dict) or not original.get("accounts"):
+        return {"status": "waiting_for_bank"}
+    if doc.get("leaseUntil", 0) > now:
+        return {"status": "busy"}
+    last = original.get("lastTransactionAttemptAt") or original.get("lastTransactionSyncAt")
+    if last is not None and now - last < MIN_REFRESH_GAP_SECONDS:
+        return {"status": "updated_just_now",
+                "lastUpdatedAt": original.get("lastTransactionSyncAt")}
+    doc["lease"] = uuid.uuid4().hex
+    # A 25-page request can exceed five minutes. This longer bounded lease
+    # fails closed across concurrent webhooks, timers and owner refreshes.
+    doc["leaseUntil"] = now + 900
+    try:
+        etag = _write(uid, doc, etag)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return {"status": "busy"}
+        raise
+    candidate = copy.deepcopy(doc)
+    old_state = copy.deepcopy(original)
+    try:
+        changes = _sync_item(linked["access"], old_state.get("cursor"))
+        accounts = _provider("/accounts/get", linked["access"])
+        if old_state.get("accounts") and not accounts.get("accounts"):
+            raise HTTPException(502, "Bank account data is temporarily unavailable.")
+        updated = _merge(old_state, item_id, linked.get("institution", ""), accounts, changes, now)
+        candidate["lastSuccess"] = now
+    except HTTPException as exc:
+        updated = old_state
+        if exc.status_code == 429:
+            updated["transactionSyncStatus"] = "daily_cap_reached"
+            updated["transactionSyncError"] = "Daily transaction sync limit reached."
+            updated["nextTransactionSyncAt"] = now + 3600
+        else:
+            _sync_failure(updated, now, "Bank update temporarily unavailable.")
+    # Account exclusion and history preservation are deliberately scoped.
+    scoped = {"items": {item_id: updated},
+              "accountExclusions": candidate.get("accountExclusions", {})}
+    previous = {"items": {item_id: original},
+                "accountExclusions": doc.get("accountExclusions", {})}
+    _preserve_excluded(scoped, previous)
+    candidate["items"][item_id] = scoped["items"][item_id]
+    candidate.pop("lease", None)
+    candidate.pop("leaseUntil", None)
+    # Any overlapping owner change fails the conditional write; do not
+    # overwrite manual reviews, other Item cursors or newly modified budgets.
+    _write(uid, candidate, etag)
+    return {"status": "updated" if candidate["items"][item_id].get("lastTransactionSyncAt") == now
+            else candidate["items"][item_id].get("transactionSyncStatus", "needs_attention"),
+            "lastUpdatedAt": candidate["items"][item_id].get("lastTransactionSyncAt")}
+
+
 def scheduled_sync_once():
     if not quota._ready():
         return
