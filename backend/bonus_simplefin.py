@@ -21,6 +21,9 @@ from botocore.exceptions import ClientError
 from bonus_backups import owner, store
 from finance_category_rules import category_for, micro_deposit_refs
 from finance_ai_categories import classify_unknown, cache_key
+from finance_history_archive import archive_old, read_month, HOT_DAYS, purge_account
+from finance_account_management import (AccountAction, institution_handle, syncing, public_accounts,
+    merge_profiles, action as account_action, purge_history, filter_after_removal)
 
 def private_response(response: Response):
     response.headers['Cache-Control'] = 'no-store'
@@ -63,6 +66,7 @@ def migrate_state(value):
     if not isinstance(state.get('audit', []), list):
         raise HTTPException(503, 'Private financial data needs review before it can be used.')
     state.setdefault('audit', [])
+    state.setdefault('historyMonths', [])
     state['version'] = 2
     return state
 
@@ -97,6 +101,11 @@ def read_state(uid):
 
 def write_state(uid, state, etag):
     state = migrate_state(state)
+    # Preserve old activity in verified encrypted monthly shards before pruning.
+    hot, archived = archive_old(store(), cipher(), 'simplefin', uid,
+                                state.get('transactions', {}), int(time.time()))
+    state['transactions'] = hot
+    state['historyMonths'] = sorted(set(state.get('historyMonths', [])) | set(archived))
     raw = cipher().encrypt(json.dumps(state, sort_keys=True).encode())
     if len(raw) > MAX_STATE:
         raise HTTPException(413, 'Bank-sync history exceeded its safe storage limit.')
@@ -210,6 +219,7 @@ def normalize_accounts(data):
         c = conns.get(str(a.get('conn_id')), {})
         result.append({'key': account_key(a), 'id': a['id'], 'connection': str(a.get('conn_id', '')),
                        'name': clean(a.get('name')), 'bank': clean(c.get('name') or a.get('conn_name') or a.get('org', {}).get('name')),
+                       'mask': (str(a.get('mask') or a.get('last4') or '')[-4:] if str(a.get('mask') or a.get('last4') or '').isdigit() and len(str(a.get('mask') or a.get('last4') or '')) == 4 else None),
                        'currency': clean(a.get('currency'), 40), 'balance': clean(a.get('balance'), 40),
                        'availableBalance': clean(a.get('available-balance'), 40) if a.get('available-balance') is not None else None,
                        'balanceDate': a.get('balance-date') if isinstance(a.get('balance-date'), (int, float)) else None})
@@ -247,7 +257,20 @@ def record_balances(state, accounts, observed_at):
         if rows and all(rows[-1].get(k) == row.get(k) for k in ('at', 'balance', 'availableBalance', 'currency')):
             continue
         rows.append(row)
-        history[account['key']] = rows[-400:]
+        # At most one daily point for 90 days, then weekly through 24 months.
+        from datetime import datetime, timezone
+        seen = set()
+        compact = []
+        for point in reversed(rows):
+            at = point.get('observedAt', 0)
+            if not isinstance(at, (int, float)) or at < observed_at - 731 * DAY:
+                continue
+            day = datetime.fromtimestamp(at, timezone.utc).date()
+            bucket = str(day) if at >= observed_at - 90 * DAY else str(day.isocalendar()[:2])
+            if bucket not in seen:
+                seen.add(bucket)
+                compact.append(point)
+        history[account['key']] = list(reversed(compact))
 
 
 def public_ref(account, transaction):
@@ -436,11 +459,11 @@ def merge(state, data, now):
     old_by_key = {a['key']: a for a in state['accounts']}
     # Account IDs can collide across provider connections. A transaction sync may update only
     # accounts already discovered for this owner; discovery is the only operation that adds accounts.
-    fresh = [a for a in normalize_accounts(data) if a['key'] in old_by_key]
+    fresh = [a for a in normalize_accounts(data) if a['key'] in old_by_key and syncing(state, a)]
     fresh_by_key = {a['key']: a for a in fresh}
     state['accounts'] = list(fresh) + [a for k, a in old_by_key.items() if k not in fresh_by_key]
     record_balances(state, fresh, now)
-    watched = set(state['mappings']) | set(state.get('monitoredAccounts', []))
+    watched = {a['key'] for a in state['accounts'] if syncing(state, a)} & (set(state['mappings']) | set(state.get('monitoredAccounts', [])))
     state['missingAccounts'] = sorted(k for k in watched if k not in fresh_by_key)
     warnings = [clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)]
     warnings += [clean(e) for e in data.get('errors', []) if isinstance(e, str)]
@@ -470,6 +493,8 @@ def merge(state, data, now):
             except HTTPException:
                 invalid_count += 1
                 continue
+            if timestamp <= state.get('accountExclusions', {}).get(k, {}).get('deletedBefore', 0):
+                continue
             seen_ids.add(t['id'])
             desc = clean(t.get('description'), 500)
             row = {'id': t['id'], 'posted': timestamp, 'amount': amount, 'description': desc,
@@ -490,6 +515,7 @@ def merge(state, data, now):
                     if prior.get('revisions'):
                         row['revisions'] = prior['revisions']
             rows[t['id']] = row
+        state.setdefault('invalidTransactionsByAccount', {})[k] = invalid_count
         if invalid_count:
             warnings.append('One account contained '+str(invalid_count)+' invalid transaction row(s); skipped for safety.')
             state['warnings'] = warnings[:50]
@@ -497,15 +523,17 @@ def merge(state, data, now):
         # authorization once its date is covered by a later provider response.
         for row_id, row in rows.items():
             if (row.get('pending') and not row.get('pendingClearedAt')
-                    and row_id not in seen_ids
+                    and not invalid_count and not warnings and row_id not in seen_ids
                     and now - 90 * DAY <= row.get('posted', 0) <= now):
                 row['pendingClearedAt'] = now
         # Missing posted rows never imply reversal/deletion; preserve 90 days of observed history.
-        state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
+        state['transactions'][k] = rows  # Archived only after verified conditional R2 write.
         state.setdefault('evidenceReviews', {})[k] = {
             i: v for i, v in state.get('evidenceReviews', {}).get(k, {}).items()
             if i in state['transactions'][k] and isinstance(v, dict)
             and v.get('fingerprint') == evidence_fingerprint(state['transactions'][k][i])}
+    state['syncFailureAttempts'] = 0
+    state['health'] = {'lastSuccess': now, 'lastError': None, 'nextRetry': None}
     state['lastSuccess'] = now
     state['windowStart'] = now - 30 * DAY
     state['windowEnd'] = now
@@ -517,16 +545,20 @@ def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error',
-              'accountProfiles', 'balanceHistory')
+              'accountProfiles', 'balanceHistory', 'health', 'accountExclusions')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
     out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
-                       for a in s.get('accounts', [])]
-    out['monitoredAccounts'] = list(s.get('monitoredAccounts', []))
+                       for a in public_accounts(s, s.get('accounts', []))]
+    for a in out['accounts']:
+        a['invalidTransactionRows'] = s.get('invalidTransactionsByAccount', {}).get(a['key'], a.get('invalidTransactionRows', 0))
+    out['monitoredAccounts'] = sorted(set(s.get('monitoredAccounts', [])) | (set(s.get('transactions', {})) & {a['key'] for a in s.get('accounts', [])}))
+    out['historyMonths'] = list(s.get('historyMonths', []))
     out['transactions'] = {}
     enrich_transactions(s, out)
+    filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True)
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.78')
     return out
 
 
@@ -553,6 +585,14 @@ def finish(uid, s, tag):
     return public_state(s)
 
 
+def claim_request(state, now):
+    attempts = [at for at in state.get('requestAttempts', []) if at > now - DAY]
+    if len(attempts) >= 24:
+        state['nextSyncAt'] = min(attempts) + DAY
+        raise HTTPException(429, 'Daily bank refresh limit reached. Updates resume automatically.')
+    state['requestAttempts'] = attempts + [now]
+
+
 def sync(uid):
     s, tag = reserve(uid, 'sync')
     if not s.get('access'):
@@ -562,28 +602,33 @@ def sync(uid):
     if now < s.get('nextSyncAt', 0):
         return finish(uid, s, tag)
     # Linking authorizes read-only activity for every returned account. No separate toggle.
-    s['monitoredAccounts'] = sorted({a['key'] for a in s['accounts']})
+    s['monitoredAccounts'] = sorted({a['key'] for a in s['accounts'] if syncing(s, a)})
     watched = set(s['mappings']) | set(s['monitoredAccounts'])
-    selected = [a for a in s['accounts'] if a['key'] in watched]
+    selected = [a for a in s['accounts'] if a['key'] in watched and syncing(s, a)]
     if not selected:
         return finish(uid, s, tag)
     s['lastAttempt'] = now
     # Reserve the next attempt before network I/O. Restart/timeout cannot exhaust provider quotas.
     s['nextSyncAt'] = now + DAY
-    tag = write_state(uid, s, tag)
     try:
+        claim_request(s, now)
+        tag = write_state(uid, s, tag)
         candidate = merge(copy.deepcopy(s), get_data(s['access'], selected), now)
         # Optional, bounded Groq classification occurs only after successful
         # provider data retrieval; it never writes raw activity or milestones.
         try:
             classify_unknown(candidate, now=now)
-        except Exception:
-            pass  # AI must not block a verified bank sync.
+        except Exception as error:
+            BACKGROUND_LOGGER.warning('finance_category_error class=%s', type(error).__name__)
         s = candidate
         s.pop('error', None)
     except HTTPException as e:
         s['status'] = 'attention'
         s['error'] = e.detail
+        attempts = min(s.get('syncFailureAttempts', 0) + 1, 4)
+        s['syncFailureAttempts'] = attempts
+        s['nextSyncAt'] = now + ((1, 3, 6)[attempts-1] * 3600 if attempts <= 3 else DAY)
+        s['health'] = {**s.get('health', {}), 'lastError': type(e).__name__, 'nextRetry': s['nextSyncAt']}
     return finish(uid, s, tag)
 
 
@@ -620,6 +665,9 @@ class AccountProfile(BaseModel):
     order: int = Field(ge=0, le=499)
     balanceMode: str = 'exclude'
     hidden: bool | None = None
+    displayName: str | None = Field(default=None, max_length=90)
+    includeSpending: bool | None = None
+    syncEnabled: bool | None = None
 
     @field_validator('kind')
     @classmethod
@@ -678,6 +726,23 @@ class TransactionReviewBody(BaseModel):
         return value
 
 
+@router.get('/history/{month}')
+def history_month(month: str, request: Request):
+    uid = owner(request)
+    from finance_history_archive import archive_key
+    try:
+        archive_key('simplefin', uid, month)
+    except ValueError:
+        raise HTTPException(400, 'Choose a valid month.')
+    archived = read_month(store(), cipher(), 'simplefin', uid, month)
+    state, _etag = read_state(uid)
+    # Apply the same public-id hashing and category rules as recent activity.
+    # Never send raw bridge transaction identifiers back to the browser.
+    state['transactions'] = archived
+    public = public_state(state)
+    return {'month': month, 'transactions': public.get('transactions', {})}
+
+
 @router.get('')
 def status(request: Request):
     uid = owner(request)
@@ -705,6 +770,8 @@ def connect(body: ConnectBody, request: Request):
         # Persist a consumed token's credential before attempting account discovery.
         tag = write_state(uid, s, tag)
         s['nextDiscoveryAt'] = int(time.time()) + DAY
+        claim_request(s, int(time.time()))
+        tag = write_state(uid, s, tag)
         data = get_data(access, balances=True)
         s['accounts'] = normalize_accounts(data)
         s['monitoredAccounts'] = sorted(a['key'] for a in s['accounts'])
@@ -715,6 +782,8 @@ def connect(body: ConnectBody, request: Request):
             s['lastAttempt'], s['nextSyncAt'] = observed, observed + DAY
             tag = write_state(uid, s, tag)
             try:
+                claim_request(s, observed)
+                tag = write_state(uid, s, tag)
                 s = merge(copy.deepcopy(s), get_data(access, s['accounts']), observed)
                 s.pop('error', None)
             except HTTPException as activity_error:
@@ -767,6 +836,8 @@ def discover(request: Request):
     s['nextDiscoveryAt'] = now + DAY
     tag = write_state(uid, s, tag)
     try:
+        claim_request(s, now)
+        tag = write_state(uid, s, tag)
         data = get_data(s['access'], balances=True)
         fresh = normalize_accounts(data)
         watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
@@ -774,17 +845,19 @@ def discover(request: Request):
         current = {a['key']: a for a in fresh}
         # Preserve missing matched accounts so an omitted response cannot silently delete a match.
         for a in s['accounts']:
-            if a['key'] in watched and a['key'] not in current:
+            if (a['key'] in watched or a['key'] in s.get('accountExclusions', {})) and a['key'] not in current:
                 fresh.append(a)
         s['accounts'] = fresh
-        s['monitoredAccounts'] = sorted({a['key'] for a in fresh})
+        s['monitoredAccounts'] = sorted({a['key'] for a in fresh if syncing(s, a)})
         s.pop('error', None)
-        record_balances(s, [a for a in fresh if a['key'] in current], now)
-        if fresh and now >= s.get('nextSyncAt', 0):
+        record_balances(s, [a for a in fresh if a['key'] in current and syncing(s, a)], now)
+        if any(syncing(s, a) for a in fresh) and now >= s.get('nextSyncAt', 0):
             s['lastAttempt'], s['nextSyncAt'] = now, now + DAY
             tag = write_state(uid, s, tag)
             try:
-                s = merge(copy.deepcopy(s), get_data(s['access'], fresh), now)
+                claim_request(s, now)
+                tag = write_state(uid, s, tag)
+                s = merge(copy.deepcopy(s), get_data(s['access'], [a for a in fresh if syncing(s, a)]), now)
                 s.pop('error', None)
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
@@ -867,14 +940,7 @@ def account_profiles(body: AccountProfilesBody, request: Request):
         finish(uid, s, tag)
         raise HTTPException(400, 'Choose accounts from the current connection.')
     supplied = {k: v.model_dump(exclude_none=True) for k, v in body.profiles.items()}
-    # Legacy clients omit visibility. Never accidentally unhide a saved account
-    # when an older Finance version saves unrelated profile settings.
-    for k, profile in supplied.items():
-        if 'hidden' not in profile and s.get('accountProfiles', {}).get(k, {}).get('hidden') is True:
-            profile['hidden'] = True
-    # Keep profiles for temporarily missing accounts; replace current connected-account profiles atomically.
-    s['accountProfiles'] = {k: v for k, v in s.get('accountProfiles', {}).items() if k not in allowed}
-    s['accountProfiles'].update(supplied)
+    s['accountProfiles'] = merge_profiles(s.get('accountProfiles', {}), supplied)
     return finish(uid, s, tag)
 
 
@@ -983,3 +1049,47 @@ async def scheduled_simplefin_loop():
             # Never log repr(error) or provider payload; both can contain secrets.
             BACKGROUND_LOGGER.warning("simplefin_scheduled_sync_error class=%s", type(error).__name__)
         await asyncio.sleep(61)
+
+
+@router.post('/account-action')
+def manage_account(body: AccountAction, request: Request):
+    uid = owner(request)
+    s, tag = reserve(uid, 'account-action')
+    try:
+        result = account_action(s, s['accounts'], body)
+        if result.get('delete'):
+            purge_account(store(), cipher(), 'simplefin', uid, s.get('historyMonths', []), body.account)
+            purge_history(s, body.account)
+    except HTTPException:
+        finish(uid, s, tag)
+        raise
+    return {**finish(uid, s, tag), 'accountAction': result}
+
+
+class InstitutionAction(BaseModel):
+    handle: str = Field(pattern=r'^[a-f0-9]{64}$')
+    restore: bool = False
+    deleteHistory: bool = False
+
+
+@router.post('/institution-action')
+def manage_institution(body: InstitutionAction, request: Request):
+    uid = owner(request)
+    s, tag = reserve(uid, 'institution-action')
+    accounts = [a for a in s['accounts'] if institution_handle(a) == body.handle]
+    if not accounts:
+        finish(uid, s, tag)
+        raise HTTPException(404, 'Bank not found.')
+    excluded = s.setdefault('institutionExclusions', {})
+    if body.restore:
+        excluded.pop(body.handle, None)
+        for a in accounts:
+            s.setdefault('accountExclusions', {}).pop(a['key'], None)
+    else:
+        excluded[body.handle] = {'removedAt': int(time.time())}
+        for a in accounts:
+            account_action(s, s['accounts'], AccountAction(account=a['key'], action='remove', deleteHistory=body.deleteHistory))
+            if body.deleteHistory:
+                purge_account(store(), cipher(), 'simplefin', uid, s.get('historyMonths', []), a['key'])
+                purge_history(s, a['key'])
+    return finish(uid, s, tag)

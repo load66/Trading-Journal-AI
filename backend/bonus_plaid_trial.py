@@ -157,7 +157,7 @@ def _display(doc, uid):
          "connectedAt": item.get("created", 0),
          "handle": hashlib.sha256((uid + "\0" + item_id).encode()).hexdigest()}
         for item_id, item in doc["items"].items()
-        if item.get("owner") == uid and not item.get("disconnectedAt")
+        if item.get("owner") == uid and not item.get("disconnectedAt") and not item.get("disconnectingAt")
     ]
     return {"provider": "plaid", "priority": "fallback", "plan": "trial",
             "limit": CAP, "used": doc["used"], "remaining": max(0, CAP - doc["used"] - len(doc["holds"])),
@@ -268,45 +268,112 @@ def exchange(body: Exchange, request: Request):
     raise HTTPException(503, "Plaid quota write requires reconciliation. No automatic retry is allowed.")
 
 
-@router.delete("/items/{handle}", dependencies=[Depends(_private)])
-def disconnect_item(handle: str, request: Request):
-    """Disconnect one Plaid institution; a used Trial slot is NEVER returned."""
-    uid = owner(request)
+def _owned_item(ledger, uid, handle):
     if not re.fullmatch(r"[0-9a-f]{64}", handle):
         raise HTTPException(404, "Connected bank not found.")
-    ledger, tag = _ledger()
-    matches = [(item_id, item) for item_id, item in ledger["items"].items()
-               if item.get("owner") == uid and not item.get("disconnectedAt")
-               and hashlib.sha256((uid + "\0" + item_id).encode()).hexdigest() == handle]
+    matches = [(i, row) for i, row in ledger['items'].items() if row.get('owner') == uid
+               and hashlib.sha256((uid + "\0" + i).encode()).hexdigest() == handle]
     if len(matches) != 1:
         raise HTTPException(404, "Connected bank not found.")
-    item_id, item = matches[0]
-    # No revocation may race an in-progress transaction import.
+    return matches[0]
+
+
+@router.post('/items/{handle}/link-token', dependencies=[Depends(_private)])
+def update_link(handle: str, request: Request):
+    """Existing Item only. No reservation, token exchange or lifetime counter change."""
+    uid = owner(request)
+    ledger, _tag = _ledger()
+    _ident, item = _owned_item(ledger, uid, handle)
+    if item.get('disconnectedAt') or item.get('disconnectingAt') or not item.get('access'):
+        raise HTTPException(409, 'This bank has been disconnected.')
+    result = _provider('/link/token/create', {
+        'access_token': item['access'], 'client_name': 'BonusTracker',
+        'language': 'en', 'country_codes': ['US'], 'user': {'client_user_id': uid},
+        'update': {'account_selection_enabled': True}})
+    token = result.get('link_token')
+    if not isinstance(token, str) or not token:
+        raise HTTPException(502, 'The bank reconnect window could not be opened.')
+    return {'linkToken': token, 'existingItem': True}
+
+
+@router.post('/items/{handle}/update-complete', dependencies=[Depends(_private)])
+def update_complete(handle: str, request: Request):
+    uid = owner(request)
+    ledger, _tag = _ledger()
+    item_id, item = _owned_item(ledger, uid, handle)
+    if item.get('disconnectedAt') or item.get('disconnectingAt'):
+        raise HTTPException(409, 'This bank has been disconnected.')
+    from bonus_plaid_accounts import _read as read_activity, _write as write_activity, _provider as get, _merge, _public
+    activity, tag = read_activity(uid)
+    if activity.get('leaseUntil', 0) > time.time():
+        raise HTTPException(409, 'A sync is in progress. Try again shortly.')
+    raw = get('/accounts/get', item['access'])
+    old = activity['items'].get(item_id, {})
+    state = _merge(old, item_id, item['institution'], raw, None, int(time.time()))
+    shared = {a['key'] for a in state.get('accounts', [])}
+    from finance_account_management import AccountAction, action
+    for a in old.get('accounts', []):
+        if a['key'] not in shared:
+            action(activity, old['accounts'], AccountAction(account=a['key'], action='remove'))
+            state['accounts'].append(a)
+    # Keep excluded account history, and restart the existing cursor safely for new shared accounts.
+    if shared - {a['key'] for a in old.get('accounts', [])}:
+        state['cursor'] = ''
+    state['nextTransactionSyncAt'] = min(state.get('nextTransactionSyncAt', 0), int(time.time()))
+    activity['items'][item_id] = state
+    write_activity(uid, activity, tag)
+    return _public(activity, ledger, uid)
+
+
+@router.delete('/items/{handle}', dependencies=[Depends(_private)])
+def disconnect_item(handle: str, request: Request, delete_history: bool = False):
+    """Durable stop-before-revoke. Retries cannot reintroduce revoked access."""
+    uid = owner(request)
+    ledger, tag = _ledger()
+    item_id, item = _owned_item(ledger, uid, handle)
+    if item.get('disconnectedAt') and not item.get('cleanupPending'):
+        return {'disconnected': True, **_display(ledger, uid)}
     from bonus_plaid_accounts import _read as read_activity, _write as write_activity
     activity, activity_tag = read_activity(uid)
-    if activity.get("leaseUntil", 0) > time.time():
-        raise HTTPException(409, "The current bank sync must finish before disconnecting.")
-    _provider("/item/remove", {"access_token": item["access"]})
-    # Remove saved account activity before hiding the Item in the global ledger.
-    cached = activity.get("items", {}).pop(item_id, {})
-    keys = {account["key"] for account in cached.get("accounts", [])}
-    activity["monitored"] = [k for k in activity.get("monitored", []) if k not in keys]
-    for field in ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews"):
-        activity[field] = {k: v for k, v in activity.get(field, {}).items() if k not in keys}
-    activity.pop("error", None)
-    write_activity(uid, activity, activity_tag)
-    # Keep the immutable lifetime count and a credential-free tombstone.
-    for _ in range(5):
+    marker = 'disconnect:' + item_id
+    if activity.get('leaseUntil', 0) > time.time() and activity.get('lease') != marker:
+        raise HTTPException(409, 'The current bank sync must finish before disconnecting.')
+    # CAS-lock activity before ledger revocation: stale importers cannot commit or race /item/remove.
+    activity['lease'], activity['leaseUntil'] = marker, int(time.time()) + 300
+    activity_tag = write_activity(uid, activity, activity_tag)
+    if not item.get('disconnectedAt') and not item.get('disconnectingAt'):
+        item['disconnectingAt'] = int(time.time())
+        item['retainHistory'] = not delete_history
+        _write(ledger, tag)
+    # This state is excluded from every foreground/background sync before revocation.
+    if not item.get('disconnectedAt'):
+        _provider('/item/remove', {'access_token': item['access']})
         current, current_tag = _read()
-        active = current["items"].get(item_id)
-        if not active or active.get("owner") != uid:
-            raise HTTPException(409, "Bank status changed. Refresh connections.")
-        current["items"][item_id] = {"owner": uid, "institution": item["institution"],
-            "created": item.get("created", 0), "disconnectedAt": int(time.time())}
-        try:
-            _write(current, current_tag)
-            return {"disconnected": True, **_display(current, uid)}
-        except HTTPException as exc:
-            if exc.status_code != 409:
-                raise
-    raise HTTPException(503, "Bank revoked but local status needs reconciliation.")
+        current['items'][item_id] = {'owner': uid, 'institution': item['institution'],
+            'created': item.get('created', 0), 'disconnectedAt': int(time.time()),
+            'retainHistory': item.get('retainHistory', True), 'cleanupPending': True}
+        _write(current, current_tag)
+    else:
+        current = ledger
+    delete_history = not current['items'][item_id].get('retainHistory', True)
+    if delete_history:
+        cached = activity.get('items', {}).pop(item_id, {})
+        keys = {account['key'] for account in cached.get('accounts', [])}
+        from finance_history_archive import purge_account
+        for account in keys:
+            purge_account(store(), cipher(), 'plaid', uid, activity.get('historyMonths', []), account)
+        activity['monitored'] = [k for k in activity.get('monitored', []) if k not in keys]
+        for field in ('accountProfiles', 'transactionReviews'):
+            activity[field] = {k: v for k, v in activity.get(field, {}).items() if k not in keys}
+    else:
+        from finance_account_management import AccountAction, action
+        cached = activity.get('items', {}).get(item_id, {})
+        for account in cached.get('accounts', []):
+            action(activity, cached['accounts'], AccountAction(account=account['key'], action='remove'))
+    activity.pop('lease', None)
+    activity.pop('leaseUntil', None)
+    write_activity(uid, activity, activity_tag)
+    current, tag = _read()
+    current['items'][item_id].pop('cleanupPending', None)
+    _write(current, tag)
+    return {'disconnected': True, **_display(current, uid)}

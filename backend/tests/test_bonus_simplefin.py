@@ -117,7 +117,7 @@ def test_failed_sync_is_throttled_and_retains_evidence(setup,monkeypatch):
     s=seed();b.merge(s,data(account(transactions=[txn()])),NOW);b.write_state('owner',s,None)
     def fail(*a):raise HTTPException(403,'Access rejected')
     monkeypatch.setattr(b,'get_data',fail);r=b.sync('owner')
-    assert r['error']=='Access rejected' and r['transactions'] and r['nextSyncAt']==NOW+b.DAY
+    assert r['error']=='Access rejected' and r['transactions'] and r['nextSyncAt']==NOW+3600
 
 def client(monkeypatch):
     def auth(req):
