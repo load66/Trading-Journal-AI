@@ -367,7 +367,8 @@ def test_high_confidence_internal_transfer_and_recurring_detection(setup):
     lkey, rkey, skey = [a['key'] for a in s['accounts']]
     assert public['transactions'][lkey][b.public_ref(lkey,'out')]['confidence'] == 'high'
     assert 'matched_internal_transfer' in public['transactions'][rkey][b.public_ref(rkey,'in')]['signals']
-    assert public['transactions'][skey][b.public_ref(skey,'m1')]['category'] == 'subscription'
+    assert public['transactions'][skey][b.public_ref(skey,'m1')]['category'] == 'unreviewed'
+    assert 'possible_recurring' in public['transactions'][skey][b.public_ref(skey,'m1')]['signals']
 
 
 def test_ambiguous_same_amount_transfer_remains_unconfirmed(setup):
