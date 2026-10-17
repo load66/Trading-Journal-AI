@@ -708,7 +708,13 @@ def history_month(month: str, request: Request):
         archive_key('simplefin', uid, month)
     except ValueError:
         raise HTTPException(400, 'Choose a valid month.')
-    return {'month': month, 'transactions': read_month(store(), cipher(), 'simplefin', uid, month)}
+    archived = read_month(store(), cipher(), 'simplefin', uid, month)
+    state, _etag = read_state(uid)
+    # Apply the same public-id hashing and category rules as recent activity.
+    # Never send raw bridge transaction identifiers back to the browser.
+    state['transactions'] = archived
+    public = public_state(state)
+    return {'month': month, 'transactions': public.get('transactions', {})}
 
 
 @router.get('')
