@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 from finance_category_rules import category_for, micro_deposit_refs, CATEGORIES
+from bonus_simplefin import TRANSACTION_CATEGORIES, TransactionReviewBody
 
 
 @pytest.mark.parametrize("description,amount,expected", [
@@ -84,3 +85,9 @@ def test_200_realistic_synthetic_examples_below_ten_percent_unreviewed():
 def test_malformed_and_empty_are_safe():
     assert category_for("", None)[0] == "unreviewed"
     assert category_for("", "0.00")[0] == "verification"
+
+
+def test_loan_category_is_persistable_as_user_review():
+    assert 'loan' in CATEGORIES
+    assert 'loan' in TRANSACTION_CATEGORIES
+    assert TransactionReviewBody(account='a'*64, transaction='b'*64, category='loan').category == 'loan'
