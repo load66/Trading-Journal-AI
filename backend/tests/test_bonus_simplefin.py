@@ -1173,3 +1173,34 @@ def test_discovered_account_first_sync_scoped_and_budgeted(setup,monkeypatch):
     assert len(doc['requestAttempts'])==2
     again=c.post('/api/bonus-tracker/simplefin/first-sync',headers=h,json={'accounts':[nk]})
     assert again.status_code==200 and len(calls)==2
+
+
+def test_empty_first_sync_is_waiting_without_claiming_posted_transactions(setup,monkeypatch):
+    initial=seed()
+    initial['monitoredAccounts']=[b.account_key(account())]
+    new=account('two','new')
+    nk=b.account_key(new)
+    initial['accounts'].append({**b.normalize_accounts({'accounts':[new],
+       'connections':[{'conn_id':'two','name':'Synthetic Bank'}]})[0],
+       'firstSeenAt':NOW,'discovered':True})
+    initial['monitoredAccounts'].append(nk)
+    b.write_state('owner',initial,None)
+    calls=[]
+    def provider(access,selected=None,balances=False):
+        calls.append(tuple(a['key'] for a in (selected or [])))
+        return {'accounts':[new],'connections':[{'conn_id':'two','name':'Synthetic Bank'}],
+                'errlist':[]}
+    monkeypatch.setattr(b,'get_data',provider)
+    c=client(monkeypatch);h={'Authorization':'Bearer synthetic'}
+    reply=c.post('/api/bonus-tracker/simplefin/first-sync',headers=h,json={'accounts':[nk]})
+    assert reply.status_code==200
+    assert reply.json()['syncStatus']=='waiting'
+    assert reply.json()['reason']=='history_pending'
+    assert len(calls)==1
+    saved=b.read_state('owner')[0]
+    assert saved['transactions']==initial['transactions']
+    assert saved['accounts'][-1]['discovered'] is True
+    repeat=c.post('/api/bonus-tracker/simplefin/first-sync',headers=h,json={'accounts':[nk]})
+    assert repeat.status_code==200 and repeat.json()['syncStatus']=='waiting'
+    assert len(calls)==1
+    assert len(b.read_state('owner')[0]['requestAttempts'])==1
