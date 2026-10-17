@@ -853,6 +853,64 @@ def test_capped_notice_is_not_attention_and_old_warning_clears(setup):
     assert 'fresh' in merged['transactions'][k]
 
 
+def test_stored_legacy_capped_warning_migrates_on_status_get_without_sync(setup, monkeypatch):
+    memory = setup
+    state = seed()
+    old = 'Requested date range exceeds limit of 90 days and was capped.'
+    state['warnings'] = [old, 'Partial history available for this account.']
+    state['status'] = 'attention'
+    state['institutionIssues'] = {'one': {'kind': 'connection', 'reason': old}}
+    state['accounts'] = b.normalize_accounts(data(account()))
+    b.write_state('owner', state, None)
+    before = memory.rev
+    monkeypatch.setattr(b, 'owner', lambda _request: 'owner')
+    # No network calls or sync should be needed to remove the stale banner.
+    monkeypatch.setattr(b, 'network', lambda *_args, **_kwargs: pytest.fail('Provider call on GET'))
+    client = TestClient(FastAPI())
+    client.app.include_router(b.router)
+    result = client.get('/api/bonus-tracker/simplefin')
+    assert result.status_code == 200, result.text
+    payload = result.json()
+    assert payload['connected'] is True
+    assert payload['status'] == 'connected'
+    assert payload['warnings'] == []
+    assert old in payload['notices']
+    assert len(payload['notices']) == 2
+    assert payload['institutionIssues'] == {}
+    assert all('attentionKind' not in account for account in payload['accounts'])
+    assert memory.rev == before + 1, 'Old encrypted state must be migrated once'
+    saved, _ = b.read_state('owner')
+    assert saved['status'] == 'connected' and saved['warnings'] == []
+    assert len(saved['accounts']) == len(state['accounts'])
+    assert saved['mappings'] == state['mappings']
+    second = client.get('/api/bonus-tracker/simplefin')
+    assert second.status_code == 200
+    assert second.json()['status'] == 'connected'
+    assert memory.rev == before + 1, 'Subsequent reads must not rewrite state'
+
+
+def test_legacy_information_migration_preserves_genuine_actionable_warnings(setup, monkeypatch):
+    state = seed()
+    state['warnings'] = [
+        'Requested date range exceeds limit of 90 days and was capped.',
+        'One account contained 2 invalid transaction row(s); skipped for safety.',
+        'Bank login required for account access.'
+    ]
+    state['status'] = 'attention'
+    b.write_state('owner', state, None)
+    monkeypatch.setattr(b, 'owner', lambda _request: 'owner')
+    client = TestClient(FastAPI())
+    client.app.include_router(b.router)
+    response = client.get('/api/bonus-tracker/simplefin')
+    assert response.status_code == 200
+    result = response.json()
+    assert result['status'] == 'attention'
+    assert len(result['warnings']) == 2
+    assert result['notices'] == ['Requested date range exceeds limit of 90 days and was capped.']
+    assert any('invalid transaction' in warning for warning in result['warnings'])
+    assert any('Bank login' in warning for warning in result['warnings'])
+
+
 def test_per_bank_login_issue_does_not_flag_other_institution(setup):
     other=account(conn='two',ident='b')
     initial=seed()
