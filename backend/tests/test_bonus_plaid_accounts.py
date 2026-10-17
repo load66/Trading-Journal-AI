@@ -639,3 +639,12 @@ def test_plaid_historical_update_complete_without_rows_is_empty_not_loading():
     shown=adapter._public({"items":{"onepay-item":state},"monitored":[key],"lastSuccess":NOW},ledger,"alice")
     assert shown["accounts"][0]["historyComplete"] is True
     assert shown["transactions"][key]=={}
+
+
+def test_plaid_public_groq_summary_is_numeric_only():
+    state={'items':{},'financeAILastSync':{'attempted':2,'categorized':1,'failed':1,'at':1792134000,
+      'description':'Synthetic sensitive text'}}
+    view=adapter._view(state,{'items':{}},'test-owner')
+    result=adapter.public_state(view)
+    assert result['financeAILastSync']=={'attempted':2,'categorized':1,'failed':1,'at':1792134000}
+    assert 'Synthetic sensitive text' not in str(result)

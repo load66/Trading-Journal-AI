@@ -556,11 +556,20 @@ def public_state(s):
         a['invalidTransactionRows'] = s.get('invalidTransactionsByAccount', {}).get(a['key'], a.get('invalidTransactionRows', 0))
     out['monitoredAccounts'] = sorted(set(s.get('monitoredAccounts', [])) | (set(s.get('transactions', {})) & {a['key'] for a in s.get('accounts', [])}))
     out['historyMonths'] = list(s.get('historyMonths', []))
+    # Account-owner-only Groq telemetry. Never expose text, account identities
+    # or provider secrets: only bounded numeric outcomes from the latest sync.
+    raw_stats = s.get('financeAILastSync')
+    if isinstance(raw_stats, dict):
+        out['financeAILastSync'] = {
+            name: max(0, min(int(raw_stats.get(name, 0) or 0), 100000))
+            for name in ('attempted', 'categorized', 'failed', 'at')
+            if isinstance(raw_stats.get(name, 0), (int, float))
+        }
     out['transactions'] = {}
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.79')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.80')
     return out
 
 
