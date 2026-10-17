@@ -693,7 +693,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.84')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.89')
     return out
 
 
