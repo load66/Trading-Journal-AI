@@ -881,3 +881,11 @@ def test_unattributed_notice_does_not_flag_every_bank(setup):
              'errlist':[{'msg':'Bank login required, please sign in.'}]}
     notices,warnings,issues=b.warning_details(payload)
     assert warnings and issues=={} and notices==[]
+
+
+def test_net_worth_opt_out_provenance_is_preserved_in_encrypted_account_profiles(setup):
+    # Schema retains the intent bit; old profiles remain accepted unchanged.
+    from bonus_simplefin import AccountProfile
+    p=AccountProfile(kind='brokerage',balanceMode='exclude',balanceModeUserSet=True,order=2)
+    assert p.model_dump(exclude_none=True)['balanceModeUserSet'] is True
+    assert AccountProfile(kind='brokerage',balanceMode='asset',order=2).balanceModeUserSet is None
