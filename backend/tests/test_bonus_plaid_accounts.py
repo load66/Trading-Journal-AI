@@ -675,3 +675,67 @@ def test_plaid_balance_snapshots_additive_compacted_and_public_owner_scoped():
     assert public["balanceHistory"][key] == second["balanceHistory"][key]
     assert adapter._public(doc, ledger, "another-owner")["balanceHistory"] == {}
     assert "synthetic-item" not in json.dumps(public)
+
+
+def test_all_plaid_provider_calls_fail_without_success_or_data_loss(monkeypatch):
+    """Never acknowledge an outage as a recent successful sync."""
+    from copy import deepcopy
+    prior = adapter._merge({}, "synthetic-item", "Synthetic",
+        {"accounts": [account()]}, (
+            {"stored":fixture(ident="stored")}, {}, set(), "saved-cursor"),
+        NOW - adapter.DAY)
+    key = adapter._account_key("synthetic-item", "example")
+    before = deepcopy(prior)
+    doc = adapter._default()
+    doc["items"] = {"synthetic-item": prior}
+    doc["monitored"] = [key]
+    doc["lastSuccess"] = NOW - adapter.DAY
+    doc["accountProfiles"] = {key: {"kind":"checking","balanceMode":"asset"}}
+    doc["transactionReviews"] = {key: {"stored":{"category":"income","fingerprint":"synthetic"}}}
+    doc["nextSyncAt"] = 0
+    storage = deepcopy(doc)
+    ledger = {"items":{"synthetic-item":{
+        "owner":"alice","institution":"Synthetic","access":"mock-only"}}}
+    monkeypatch.setattr(adapter.quota, "_ledger",lambda:(ledger,"etag"))
+    monkeypatch.setattr(adapter, "_read",lambda uid:(deepcopy(storage),"etag"))
+    monkeypatch.setattr(adapter.time,"time",lambda:NOW)
+    def save(uid,state,tag):
+        storage.clear()
+        storage.update(deepcopy(state))
+        return "etag"
+    monkeypatch.setattr(adapter,"_write",save)
+    called=[]
+    def unavailable(endpoint,token,**kw):
+        called.append(endpoint)
+        raise HTTPException(502,"Synthetic provider failure")
+    monkeypatch.setattr(adapter,"_provider",unavailable)
+    result=adapter.sync_owner("alice")
+    assert called == ["/accounts/get"]
+    assert storage["lastSuccess"] == NOW-adapter.DAY
+    assert result["status"] == "attention"
+    assert result["lastSuccess"] == NOW-adapter.DAY
+    assert result["error"]
+    assert storage["items"]["synthetic-item"]["transactions"] == before["transactions"]
+    assert storage["items"]["synthetic-item"]["balanceHistory"] == before["balanceHistory"]
+    assert storage["items"]["synthetic-item"]["cursor"] == before["cursor"]
+    assert storage["accountProfiles"] == doc["accountProfiles"]
+    assert storage["transactionReviews"] == doc["transactionReviews"]
+    assert storage["items"]["synthetic-item"]["transactionSyncStatus"] == "needs_attention"
+
+
+def test_plaid_exact_replay_is_idempotent_with_history_and_account_profiles():
+    from copy import deepcopy
+    original=adapter._merge({},"synthetic-item","Synthetic",
+        {"accounts":[account()]},(
+            {"one":fixture(ident="one")},{},set(),"cursor-1"),NOW)
+    identical=adapter._merge(original,"synthetic-item","Synthetic",
+        {"accounts":[account()]},(
+            {"one":fixture(ident="one")},{},set(),"cursor-1"),NOW)
+    assert identical == original
+    assert identical["balanceHistory"] == original["balanceHistory"]
+    changed=deepcopy(original)
+    changed["accountProfiles"]={"safe":{"kind":"checking"}}
+    second=adapter._merge(changed,"synthetic-item","Synthetic",
+        {"accounts":[account()]},None,NOW)
+    assert second["accountProfiles"] == changed["accountProfiles"]
+    assert second["transactions"] == changed["transactions"]
