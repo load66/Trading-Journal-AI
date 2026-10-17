@@ -135,6 +135,11 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'unreviewed','high',['possible_reversal']
     if number > 0 and REFUND.search(text):
         return 'refund','high',['possible_refund']
+    # A generic inbound bank 'Payment' is not evidence of wages or income.
+    # Keep it neutral until a distinct account supplies a unique opposite leg,
+    # or the owner confirms a transfer. Manual reviews still take precedence.
+    if number > 0 and re.fullmatch(r'\s*payment(?:\s+received)?\s*', text, re.I):
+        return 'unreviewed','low',['possible_transfer']
     if number > 0 and PAYROLL.search(text) and not FINANCIAL_SOURCE_BARRIER.search(text):
         return 'income','high',['possible_direct_deposit','paycheck']
     if number > 0 and INTEREST.search(text):

@@ -783,7 +783,7 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.90'
+    assert public['financeVersion']=='3.4.93'
 
 
 def test_exact_nonround_reciprocal_move_matches_between_accounts_same_bank():
@@ -1025,3 +1025,13 @@ def test_first_seen_date_survives_sync_and_discovery(setup):
     s['accounts'][0]['firstSeenAt']=NOW-4*86400
     b.merge(s,data(account(transactions=[txn('second','24','Coffee')])),NOW)
     assert s['accounts'][0]['firstSeenAt']==NOW-4*86400
+
+
+def test_generic_inbound_payment_is_neutral_until_counterpart_is_observed():
+    """Provider history can arrive independently; a Payment is not payroll."""
+    from finance_category_rules import category_for
+    assert category_for('Payment', '1000.00') == ('unreviewed', 'low', ['possible_transfer'])
+    assert category_for('Payment received', '1000.00') == ('unreviewed', 'low', ['possible_transfer'])
+    assert category_for('Schreiber Foods Payroll', '1000.00')[0] == 'income'
+    assert category_for('Payment', '-1000.00')[0] != 'income'
+    assert category_for('Payment', '1000.00', pending=True)[2] == []
