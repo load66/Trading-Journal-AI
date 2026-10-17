@@ -37,7 +37,7 @@ BALANCE_MODES = frozenset(('exclude', 'asset', 'liability'))
 TRANSACTION_CATEGORIES = frozenset(('unreviewed', 'income', 'housing', 'utilities', 'groceries',
                                     'dining', 'transportation', 'shopping', 'health', 'entertainment',
                                     'fees', 'taxes', 'travel', 'subscription', 'transfer', 'refund',
-                                    'bonus', 'verification', 'other'))
+                                    'bonus', 'verification', 'loan', 'other'))
 
 
 def empty_state():
