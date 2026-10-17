@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from bonus_backups import owner, store
 from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, public_ref,
     public_state, apply_mapping_selection, apply_evidence_decision, merchant_rule_key, SelectionBody,
-    EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
+    EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody, record_balances)
 import bonus_plaid_trial as quota
 from finance_history_archive import archive_old, read_month, archive_key, purge_account
 from finance_account_management import (AccountAction, syncing, public_accounts, merge_profiles,
@@ -325,6 +325,10 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
     for account in accounts:
         account['firstSeenAt'] = previous.get(account['key'],now)
     out["accounts"] = accounts
+    # Plaid only certifies when these values were observed by our adapter,
+    # not when the financial institution actually produced them. Persist
+    # additive snapshots with the same bounded compaction as SimpleFIN.
+    record_balances(out, accounts, now)
     if changes is None:
         out.setdefault("transactions", {})
         out.setdefault("cursor", "")
@@ -397,6 +401,7 @@ def _view(doc, ledger, uid):
                   if isinstance(row, dict) and row.get("owner") == uid and
                   ((not row.get("disconnectedAt") and not row.get("disconnectingAt")) or row.get("retainHistory"))}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
+            "balanceHistory": {},
             "financeAICache": doc.get("financeAICache", {}),
             "financeAILastSync": doc.get("financeAILastSync", {}),
             "merchantRules": doc.get("merchantRules", {}),
@@ -414,6 +419,9 @@ def _view(doc, ledger, uid):
             continue
         for account in public_accounts(doc, state.get("accounts", [])):
             key = account["key"]
+            history = state.get("balanceHistory", {}).get(key, [])
+            if isinstance(history, list):
+                view["balanceHistory"][key] = copy.deepcopy(history)
             view["accounts"].append({**{k: v for k, v in account.items() if k != "id"},
                                      "connectionHandle": connection_handle(uid, item_id),
                                      "transactionSyncStatus": state.get("transactionSyncStatus", "awaiting_first_sync"),
