@@ -693,6 +693,7 @@ def sync(uid):
             BACKGROUND_LOGGER.warning('finance_category_error class=%s', type(error).__name__)
         s = candidate
         s.pop('error', None)
+        set_provider_status(s)
     except HTTPException as e:
         s['status'] = 'attention'
         s['error'] = e.detail
@@ -857,6 +858,7 @@ def connect(body: ConnectBody, request: Request):
                 tag = write_state(uid, s, tag)
                 s = merge(copy.deepcopy(s), get_data(access, s['accounts']), observed)
                 s.pop('error', None)
+                set_provider_status(s)
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
@@ -928,6 +930,7 @@ def discover(request: Request):
                 tag = write_state(uid, s, tag)
                 s = merge(copy.deepcopy(s), get_data(s['access'], [a for a in fresh if syncing(s, a)]), now)
                 s.pop('error', None)
+                set_provider_status(s)
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
