@@ -99,8 +99,9 @@ def classify_unknown(state, *, post=httpx.post, now=None):
     for row in candidates(state):
         if not isinstance(row, dict) or row.get("pending") or row.get("kind") == "possible_reversal":
             continue
-        if category_for(row.get("description"), row.get("amount"), pending=False,
-                        kind=row.get("kind"))[0] != "unreviewed":
+        deterministic, _confidence, signals = category_for(row.get("description"), row.get("amount"),
+                         pending=False, kind=row.get("kind"))
+        if deterministic != "unreviewed" or "possible_transfer" in signals:
             continue
         desc = sanitized_description(row.get("description"))
         bucket = amount_bucket(row.get("amount"))
