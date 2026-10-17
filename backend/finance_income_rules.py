@@ -55,7 +55,9 @@ def annotate_paychecks(records):
                     ('matched_internal_transfer','investment_transfer','possible_transfer','card_payment'))):
             continue
         row['_paycheckEmployer']=employer
-        by_employer[employer.casefold()].append((row,value))
+        by_employer[(str(row.get('accountKey') or ''),employer.casefold())].append((row,value))
+    # Same employer deposits in distinct accounts are not recurring payments
+    # to one account; require the recurrence on the actual target account.
     for entries in by_employer.values():
         ordered=sorted(entries,key=lambda item:item[0]['posted'])
         qualifying=set()
