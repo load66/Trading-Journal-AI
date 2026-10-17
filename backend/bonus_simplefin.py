@@ -267,6 +267,51 @@ def set_provider_status(state):
     return state['status']
 
 
+def reclassify_stored_warnings(state):
+    """Migrate legacy informational warnings without altering account or ledger data.
+
+    Earlier releases persisted SimpleFIN's capped-range/partial-history notices
+    as actionable warnings. Reclassify the stored strings on a status read so an
+    ordinary GET fixes the banner without a new provider sync.
+    """
+    if not state.get('access'):
+        return False
+    old_warnings = state.get('warnings') or []
+    if not isinstance(old_warnings, list):
+        return False  # Never silently discard malformed stored diagnostics.
+    old_notices = state.get('notices') or []
+    if not isinstance(old_notices, list):
+        old_notices = []
+    real_warnings, moved_notices = [], []
+    for warning in old_warnings:
+        # The same classifier used for fresh provider responses identifies
+        # informational messages. Preserve all other warnings, including
+        # invalid-transaction warnings, rather than downgrading unknown errors.
+        message = clean(warning)
+        if INFORMATION_NOTICE.search(message):
+            moved_notices.append(message)
+        else:
+            real_warnings.append(warning)
+    new_notices = list(dict.fromkeys([*old_notices, *moved_notices]))[:50]
+    old_issues = state.get('institutionIssues') or {}
+    new_issues = (dict(old_issues) if isinstance(old_issues, dict) else {})
+    for key, issue in list(new_issues.items()):
+        if isinstance(issue, dict) and INFORMATION_NOTICE.search(clean(issue.get('reason'))):
+            del new_issues[key]
+    changed = (real_warnings != old_warnings or new_notices != old_notices
+               or new_issues != old_issues)
+    if changed:
+        state['warnings'] = real_warnings
+        state['notices'] = new_notices
+        state['institutionIssues'] = new_issues
+    if state.get('status') in ('attention', 'connected'):
+        previous = state.get('status')
+        set_provider_status(state)
+        changed = changed or state['status'] != previous
+    return changed
+
+
+
 def clean(value, limit=300):
     value = str(value or '')
     value = re.sub(r'https?://\S+', '[link removed]', value)
@@ -648,7 +693,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.84')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.89')
     return out
 
 
@@ -874,7 +919,18 @@ def status(request: Request):
         cipher()
     except HTTPException:
         return {'configured': False, 'connected': False, 'evidenceOnly': True}
-    return public_state(read_state(uid)[0])
+    state, etag = read_state(uid)
+    if reclassify_stored_warnings(state):
+        try:
+            # Conditional encrypted write makes the migration durable exactly once.
+            write_state(uid, state, etag)
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            # Another writer won; never replace its newer account state.
+            state, _ = read_state(uid)
+            reclassify_stored_warnings(state)
+    return public_state(state)
 
 
 @router.post('/connect')
