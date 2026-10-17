@@ -63,3 +63,29 @@ def test_repeated_unknown_person_is_not_promoted_to_paycheck():
     entries=[row('John Doe','1061.24',DAY*100),row('John Doe','1061.24',DAY*114)]
     annotate_paychecks(entries)
     assert all(x['category']=='unreviewed' and 'paycheck' not in x['signals'] for x in entries)
+
+def test_linked_bonus_account_schreiber_candidate_signal_without_payroll_word():
+    """A paycheck credited to a mapped account is reviewable, not verified."""
+    rows=[row('Schreiber Foods','1061.24',DAY*100),
+          row('Schreiber Foods','1061.24',DAY*114)]
+    for r in rows:
+        r['accountKey']='synthetic-linked-account'
+    annotate_paychecks(rows)
+    assert all('possible_direct_deposit' in r['signals'] for r in rows)
+    assert all(r['category']=='income' for r in rows)
+    assert all('possible_bonus' not in r['signals'] for r in rows)
+
+def test_cross_account_similar_employer_not_a_false_biweekly_paycheck():
+    rows=[row('Schreiber Foods','1061.24',DAY*100),
+          row('Schreiber Foods','1061.24',DAY*114)]
+    rows[0]['accountKey']='checking-one'
+    rows[1]['accountKey']='checking-two'
+    annotate_paychecks(rows)
+    assert all('possible_direct_deposit' not in r['signals'] for r in rows)
+    assert all('possible_paycheck' in r['signals'] for r in rows)
+
+def test_user_confirmed_income_rule_has_candidate_signal():
+    r=row('Schreiber Foods','1061.24',DAY*100,'income','user_rule')
+    annotate_paychecks([r])
+    assert 'possible_direct_deposit' in r['signals']
+    assert r['category']=='income'
