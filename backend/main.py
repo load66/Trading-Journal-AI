@@ -207,6 +207,8 @@ from bonus_plaid_trial import router as bonus_plaid_trial_router
 app.include_router(bonus_plaid_trial_router)
 from bonus_plaid_accounts import router as bonus_plaid_accounts_router
 app.include_router(bonus_plaid_accounts_router)
+from finance_preferences import router as finance_preferences_router
+app.include_router(finance_preferences_router)
 from venza_cloud import router as venza_cloud_router
 app.include_router(venza_cloud_router)
 

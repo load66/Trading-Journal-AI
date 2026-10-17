@@ -130,6 +130,8 @@ def classify_unknown(state, *, post=httpx.post, now=None):
                                     {"role": "user", "content": json.dumps({"items": request})}
                                 ]
                             })
+            if response.status_code == 429:
+                break
             if response.status_code != 200:
                 continue
             response_json = response.json()
@@ -137,6 +139,8 @@ def classify_unknown(state, *, post=httpx.post, now=None):
             if choice.get("finish_reason") != "stop":
                 continue
             parsed = json.loads(choice["message"]["content"])
+            if not isinstance(parsed, dict) or set(parsed) != {"items"}:
+                continue
             predicted = parsed.get("items")
             if not isinstance(predicted, list) or len(predicted) > len(batch):
                 continue

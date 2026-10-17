@@ -68,6 +68,10 @@ def test_chart_empty_market_response_returns_clear_warning(monkeypatch, tmp_path
         return []
 
     monkeypatch.setattr(main, "_fetch_alpaca_bars", no_bars)
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **_kwargs: FakeHTTP())
     result = asyncio.run(main.get_chart("SPY", "2026-09-25", "1Min", 1))
 
     assert result["bars"] == []

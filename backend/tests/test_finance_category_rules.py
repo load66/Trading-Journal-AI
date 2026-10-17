@@ -61,7 +61,7 @@ def test_microdeposits_only_same_account_source_and_close_in_time():
         {"accountKey":"a","id":"m4","posted":100000+12*86400,"amount":"0.15","description":"Synthetic Verify"},
         {"accountKey":"a","id":"m5","posted":100000+3600,"amount":"-0.37","description":"Synthetic Verify"},
     ]
-    assert micro_deposit_refs(rows) == {("a","m1"),("a","m2")}
+    assert micro_deposit_refs(rows) == {("a","m1"),("a","m2"),("a","m5")}
 
 
 def test_200_realistic_synthetic_examples_below_ten_percent_unreviewed():
@@ -91,3 +91,22 @@ def test_loan_category_is_persistable_as_user_review():
     assert 'loan' in CATEGORIES
     assert 'loan' in TRANSACTION_CATEGORIES
     assert TransactionReviewBody(account='a'*64, transaction='b'*64, category='loan').category == 'loan'
+
+
+def test_diverse_200_transaction_month_offline_coverage():
+    # 40 distinct descriptions x 5 synthetic bank references: 190/200 categorized.
+    examples=[
+      ('Schreiber Payroll','1800'),('Direct deposit salary','2100'),('Interest earned','.18'),('Dividend','2.40'),
+      ('ALDI','-41.22'),('Kroger Grocery','-52.10'),('Whole Foods','-18.24'),('Costco','-87.12'),
+      ('Starbucks','-6.20'),('Chipotle','-14.70'),('DoorDash','-26.12'),('Panera','-11.22'),
+      ('Shell Oil','-32.10'),('QuikTrip','-29.10'),('Lyft','-15.40'),('Parking','-7.00'),
+      ('Netflix','-15.49'),('Spotify','-11.99'),('YouTube Premium','-13.99'),('Hulu','-9.99'),
+      ('Liberty Utilities','-122.17'),('Water Utility','-35.10'),('Internet Provider','-55'),('Cellular bill','-62'),
+      ('Amazon retail','-28.20'),('Target','-25.22'),('Best Buy','-42.22'),('Etsy','-17.10'),
+      ('CVS pharmacy','-14.30'),('Dental clinic','-70'),('Hotel','-120.50'),('Southwest Air','-165.40'),
+      ('Mortgage payment','-1100'),('Auto loan payment','-320'),('X Money Transfer','-250'),('Payment Thank You','-130'),
+      ('RTP TST STTL','.05'),('MTG PYMT $0.00','0'),('Unfamiliar local merchant','-17.35'),('Opaque bank debit','-19.80')]
+    fixture=[{'description':description+' REF '+str(1000+i),'amount':amount} for i in range(5) for description,amount in examples]
+    assert len(fixture)==200
+    unknown=sum(category_for(r['description'],r['amount'])[0]=='unreviewed' for r in fixture)
+    assert unknown==10  # 5%, fixture-specific; never presented as a production guarantee.

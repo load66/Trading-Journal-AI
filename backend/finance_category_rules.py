@@ -24,7 +24,7 @@ HOUSING = re.compile(r'\b(?:mortgage|home loan|rent|landlord|apartment lease)\b'
 LOAN = re.compile(r'\b(?:student loan|auto loan|vehicle loan|personal loan|loan payment)\b', re.I)
 TRANSFER = re.compile(
     r'\b(?:transfer|xfer|pmt|autopay|epayment|credit card payment|'
-    r'payment thank you|payment to card|credit card autopay|x money transfer)\b',re.I
+    r'payment thank you|payment to card|credit card autopay|x money transfer|crd)\b',re.I
 )
 SELF_P2P = re.compile(r'\b(?:zelle|venmo|cash app|cashapp|p2p)\b.*\b(?:self|my own|myself)\b',re.I)
 MERCHANTS = (
@@ -121,4 +121,21 @@ def micro_deposit_refs(records):
                 for at2,other in group[i+1:]:
                     if at2-at <= 3*86400:
                         matched.add((account,other))
+    for row in records:
+        if not isinstance(row, dict) or row.get('pending'):
+            continue
+        try:
+            amount = Decimal(str(row.get('amount')))
+        except (InvalidOperation, ValueError):
+            continue
+        if not amount.is_finite() or not (-2 < amount < 0):
+            continue
+        key = (str(row.get('accountKey')), re.sub(r'\s+', ' ', str(row.get('description') or '').strip().lower()))
+        credits = [r for r in records if isinstance(r, dict) and
+                   (str(r.get('accountKey')), str(r.get('id'))) in matched and
+                   (str(r.get('accountKey')), re.sub(r'\s+', ' ', str(r.get('description') or '').strip().lower())) == key and
+                   isinstance(r.get('posted'), (int, float)) and isinstance(row.get('posted'), (int, float)) and
+                   abs(r['posted'] - row['posted']) <= 3 * 86400]
+        if len(credits) == 2 and sum(Decimal(str(r['amount'])) for r in credits) == -amount:
+            matched.add((str(row['accountKey']), str(row['id'])))
     return matched

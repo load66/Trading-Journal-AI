@@ -23,6 +23,9 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
     public_state, apply_mapping_selection, apply_evidence_decision, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
+from finance_history_archive import archive_old, read_month, archive_key, purge_account
+from finance_account_management import (AccountAction, syncing, public_accounts, merge_profiles,
+    action as account_action, purge_history, filter_after_removal)
 from finance_ai_categories import classify_unknown, cache_key
 
 BACKGROUND_LOGGER = logging.getLogger(__name__)
@@ -105,6 +108,22 @@ def _read(uid):
 
 
 def _write(uid, doc, etag):
+    # Move older provider data only after encrypted, conditional archive readback.
+    # Transactions are Item-indexed here; archive shards use opaque account keys.
+    source = {}
+    for item_id, item in doc.get("items", {}).items():
+        for ident, row in item.get("transactions", {}).items():
+            if isinstance(row, dict):
+                account = _account_key(item_id, str(row.get("account", "")))
+                source.setdefault(account, {})[ident] = row
+    hot, months = archive_old(store(), cipher(), "plaid", uid, source, int(time.time()))
+    if months:
+        doc["historyMonths"] = sorted(set(doc.get("historyMonths", [])) | set(months))
+        for item_id, item in doc.get("items", {}).items():
+            item["transactions"] = {
+                ident: row for ident, row in item.get("transactions", {}).items()
+                if ident in hot.get(_account_key(item_id, str(row.get("account", ""))), {})
+            }
     raw = cipher().encrypt(json.dumps(doc, separators=(",", ":"), sort_keys=True).encode())
     if len(raw) > MAX_BYTES:
         raise HTTPException(413, "Plaid activity exceeds its safe storage limit.")
@@ -173,6 +192,7 @@ def _account(item_id, institution, row, now):
     raw = row["account_id"]
     return {"id": raw, "key": _account_key(item_id, raw),
             "name": clean(row.get("name") or "Financial account", 90),
+            "mask": (str(row.get("mask")) if isinstance(row.get("mask"), str) and len(row["mask"]) == 4 and row["mask"].isdigit() else None),
             "bank": clean(institution, 100),
             "currency": clean(balance.get("iso_currency_code") or
                                balance.get("unofficial_currency_code"), 8),
@@ -307,12 +327,9 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
                     if k in existing:
                         converted[k] = existing[k]
         transactions[ident] = converted
-    cutoff = now - 90 * DAY
-    # Pending entries remain visible as pending, never in posted-only totals
-    # or automatic bonus evidence. Plaid's removal/replacement delta controls
-    # when a pending authorization disappears.
-    out["transactions"] = {k: v for k, v in transactions.items()
-                          if isinstance(v, dict) and v.get("posted", 0) >= cutoff}
+    # Preserve all received history until verified encrypted monthly archival;
+    # the provider's explicit remove/replacement delta controls pending rows.
+    out["transactions"] = transactions
     out["cursor"] = cursor
     out["invalidTransactionsByAccount"] = {
         _account_key(item_id, raw): count for raw, count in malformed.items() if raw != "unknown"
@@ -342,20 +359,24 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
 
 def _view(doc, ledger, uid):
     accessible = {item_id for item_id, row in ledger["items"].items()
-                  if isinstance(row, dict) and row.get("owner") == uid and not row.get("disconnectedAt")}
+                  if isinstance(row, dict) and row.get("owner") == uid and
+                  ((not row.get("disconnectedAt") and not row.get("disconnectingAt")) or row.get("retainHistory"))}
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
             "financeAICache": doc.get("financeAICache", {}),
             "merchantRules": doc.get("merchantRules", {}),
+            "accountExclusions": doc.get("accountExclusions", {}),
+            "health": doc.get("health", {}),
             "monitoredAccounts": list(doc.get("monitored", [])),
             **{key: copy.deepcopy(doc.get(key, {})) for key in
                ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
             "lastSuccess": doc.get("lastSuccess"), "nextSyncAt": doc.get("nextSyncAt"),
+            "historyMonths": doc.get("historyMonths", []),
             "error": doc.get("error"), "status": "attention" if doc.get("error") else "connected"}
     permitted = set(doc.get("monitored", []))
     for item_id, state in doc.get("items", {}).items():
         if item_id not in accessible:
             continue
-        for account in state.get("accounts", []):
+        for account in public_accounts(doc, state.get("accounts", [])):
             key = account["key"]
             view["accounts"].append({**{k: v for k, v in account.items() if k != "id"},
                                      "connectionHandle": connection_handle(uid, item_id),
@@ -365,7 +386,8 @@ def _view(doc, ledger, uid):
                                      "historyComplete": (state.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE" and any(not tx.get("pending") for tx in state.get("transactions", {}).values())),
                                      "transactionLastSyncAt": state.get("lastTransactionSyncAt"),
                                      "transactionNextSyncAt": state.get("nextTransactionSyncAt", doc.get("nextSyncAt")),
-                                     "transactionSyncError": state.get("transactionSyncError")})
+                                     "transactionSyncError": state.get("transactionSyncError"),
+                                     "connectionStatus": "disconnected" if ledger["items"][item_id].get("disconnectedAt") else "connected"})
             if key in permitted:
                 view["transactions"][key] = {
                     raw: {k: v for k, v in row.items() if k not in ("id", "account")}
@@ -382,6 +404,7 @@ def _view(doc, ledger, uid):
                   view["transactions"].get(key, {}).get(raw, {}))
               and raw in view["transactions"].get(key, {})}
         for key, rows in view["transactionReviews"].items()}
+    filter_after_removal(doc, view["transactions"])
     return view
 
 
@@ -431,10 +454,7 @@ def profiles(body: AccountProfilesBody, request: Request):
     if not set(body.profiles).issubset({a["key"] for a in view["accounts"]}):
         raise HTTPException(400, "Choose only your discovered Plaid accounts.")
     new_profiles = {key: value.model_dump(exclude_none=True) for key, value in body.profiles.items()}
-    for key, profile in new_profiles.items():
-        if 'hidden' not in profile and doc.get("accountProfiles", {}).get(key, {}).get("hidden") is True:
-            profile["hidden"] = True
-    doc["accountProfiles"] = new_profiles
+    doc["accountProfiles"] = merge_profiles(doc.get("accountProfiles", {}), new_profiles)
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
 
@@ -458,6 +478,26 @@ def transaction_review(body: TransactionReviewBody, request: Request):
                 "category": body.category, "updatedAt": int(time.time())}
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
+
+
+@router.get("/accounts/history/{month}", dependencies=[Depends(_private)])
+def history_month(month: str, request: Request):
+    uid = owner(request)
+    try:
+        archive_key("plaid", uid, month)
+    except ValueError:
+        raise HTTPException(400, "Choose a valid month.")
+    ledger, _ = quota._ledger()
+    allowed_items = {ident for ident, row in ledger.get("items", {}).items()
+                     if row.get("owner") == uid and not row.get("disconnectedAt") and not row.get("disconnectingAt")}
+    doc, _ = _read(uid)
+    account_keys = {a["key"] for item, rows in doc.get("items", {}).items()
+                    if item in allowed_items for a in rows.get("accounts", [])}
+    archived = read_month(store(), cipher(), "plaid", uid, month)
+    return {"month": month, "transactions": {
+        key: {ident: {k: v for k, v in tx.items() if k not in ("id", "account")}
+              for ident, tx in rows.items()}
+        for key, rows in archived.items() if key in account_keys}}
 
 
 @router.get("/accounts", dependencies=[Depends(_private)])
@@ -511,8 +551,8 @@ def monitor(body: Monitored, request: Request):
 
 
 @router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
-def disconnect_account_item(handle: str, request: Request):
-    return quota.disconnect_item(handle, request)
+def disconnect_account_item(handle: str, request: Request, delete_history: bool = False):
+    return quota.disconnect_item(handle, request, delete_history=delete_history)
 
 
 @router.post("/accounts/sync", dependencies=[Depends(_private)])
@@ -523,11 +563,16 @@ def sync(request: Request):
 def sync_owner(uid):
     ledger, _ = quota._ledger()
     known = {item_id: row for item_id, row in ledger["items"].items()
-             if row.get("owner") == uid and not row.get("disconnectedAt")}
+             if row.get("owner") == uid and not row.get("disconnectedAt") and not row.get("disconnectingAt")}
     if not known:
         raise HTTPException(409, "Connect a Plaid fallback institution first.")
     doc, etag = _read(uid)
     now = int(time.time())
+    known = {ident: item for ident, item in known.items()
+             if not doc.get('items', {}).get(ident, {}).get('accounts') or
+             any(syncing(doc, a) for a in doc['items'][ident]['accounts'])}
+    if not known:
+        return _public(doc, ledger, uid)
     if doc.get("leaseUntil", 0) > now:
         raise HTTPException(409, "Plaid synchronization is busy.")
     if now < doc.get("nextSyncAt", 0):
@@ -607,12 +652,13 @@ def sync_owner(uid):
             # account discovery. Retry after the reserved provider interval.
             candidate = doc
             candidate["error"] = exc.detail
+        _preserve_excluded(candidate, doc)
         candidate.pop("lease", None)
         candidate.pop("leaseUntil", None)
         try:
             classify_unknown(candidate, now=now)
-        except Exception:
-            pass  # Optional AI must never block or corrupt provider transactions.
+        except Exception as error:
+            BACKGROUND_LOGGER.warning("finance_category_error class=%s", type(error).__name__)
         _write(uid, candidate, etag)
         return _public(candidate, ledger, uid)
     doc["lease"] = uuid.uuid4().hex
@@ -677,12 +723,13 @@ def sync_owner(uid):
         # Fail closed: no partial cursor or transaction import is acknowledged.
         candidate = doc
         candidate["error"] = exc.detail
+    _preserve_excluded(candidate, doc)
     candidate.pop("lease", None)
     candidate.pop("leaseUntil", None)
     try:
         classify_unknown(candidate, now=now)
-    except Exception:
-        pass  # Category suggestions are optional; never fail transaction sync.
+    except Exception as error:
+        BACKGROUND_LOGGER.warning("finance_category_error class=%s", type(error).__name__)
     _write(uid, candidate, etag)
     return _public(candidate, ledger, uid)
 
@@ -699,7 +746,7 @@ def scheduled_sync_once():
             doc, _ = _read(uid)
             now = time.time()
             owned = {item_id for item_id, item in ledger["items"].items()
-                     if item.get("owner") == uid and not item.get("disconnectedAt")}
+                     if item.get("owner") == uid and not item.get("disconnectedAt") and not item.get("disconnectingAt")}
             discover_due = any(item_id not in doc.get("items", {}) and
                 now >= doc.get("newItemDiscoveryAttempts", {}).get(item_id, 0)
                 for item_id in owned)
@@ -723,3 +770,37 @@ async def scheduled_plaid_loop():
         except Exception as error:
             BACKGROUND_LOGGER.warning("plaid_scheduled_sync_error class=%s", type(error).__name__)
         await asyncio.sleep(300)
+
+
+def _preserve_excluded(candidate, previous):
+    for item_id, state in candidate.get('items', {}).items():
+        old = previous.get('items', {}).get(item_id, {})
+        state['transactions'] = {k: v for k, v in state.get('transactions', {}).items()
+            if v.get('posted', 0) > candidate.get('accountExclusions', {}).get(
+                _account_key(item_id, v.get('account', '')), {}).get('deletedBefore', 0)}
+        disabled = {a.get('id') for a in state.get('accounts', []) if not syncing(candidate, a)}
+        for account in old.get('accounts', []):
+            if account['key'] in candidate.get('accountExclusions', {}) and not any(a['key'] == account['key'] for a in state.get('accounts', [])):
+                state.setdefault('accounts', []).append(account)
+                disabled.add(account.get('id'))
+        if not disabled:
+            continue
+        state['transactions'] = {k: v for k, v in state.get('transactions', {}).items() if v.get('account') not in disabled}
+        state['transactions'].update({k: v for k, v in old.get('transactions', {}).items() if v.get('account') in disabled})
+        old_accounts = {a['key']: a for a in old.get('accounts', [])}
+        state['accounts'] = [old_accounts.get(a['key'], a) if a.get('id') in disabled else a for a in state['accounts']]
+    errors = [state for state in candidate.get('items', {}).values() if state.get('transactionSyncStatus') == 'needs_attention']
+    candidate['health'] = {'lastSuccess': candidate.get('lastSuccess'),
+        'lastError': 'HTTPException' if errors else None,
+        'nextRetry': min((x.get('nextTransactionSyncAt', 0) for x in errors), default=None)}
+
+
+@router.post('/accounts/account-action', dependencies=[Depends(_private)])
+def manage_account(body: AccountAction, request: Request):
+    uid, ledger, doc, etag, view = _editable(request)
+    result = account_action(doc, view['accounts'], body)
+    if result.get('delete'):
+        purge_account(store(), cipher(), 'plaid', uid, doc.get('historyMonths', []), body.account)
+        purge_history(doc, body.account)
+    _write(uid, doc, etag)
+    return {**_public(doc, ledger, uid), 'accountAction': result}
