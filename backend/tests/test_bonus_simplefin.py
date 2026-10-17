@@ -781,7 +781,7 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.80'
+    assert public['financeVersion']=='3.4.81'
 
 
 
