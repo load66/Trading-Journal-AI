@@ -208,3 +208,49 @@ def test_finance_categories_v2_backend_category_sets_remain_identical():
     assert "loan_proceeds" not in BUDGET_CATEGORIES
     assert "loan_proceeds" in RULE_CATEGORIES
     assert category_for("Example Lender Loan Disbursement","700.00",pending=True)[0] == "unreviewed"
+
+
+def test_private_owner_transfer_and_p2p_are_neutral_not_payroll():
+    from finance_category_rules import owner_transfer_description, possible_person_to_person
+    assert owner_transfer_description("ACH TRANSFR OWNER NAME", ["OWNER NAME"])
+    assert not owner_transfer_description("ACH TRANSFR EXAMPLE OTHER", ["OWNER NAME"])
+    assert category_for("ACH TRANSFR OWNER NAME", "700.00", owner_names=["OWNER NAME"]) == (
+        "transfer", "medium", ["owner_transfer_unpaired"])
+    assert category_for("Zelle from Example Person", "250.37") == (
+        "transfer", "medium", ["possible_p2p"])
+    assert category_for("Example Employer Payroll", "547.00")[0] == "income"
+    assert not possible_person_to_person("Zelle from Example Employer LLC")
+    assert category_for("Example Lender Loan Disbursement", "700.00", owner_names=["OWNER NAME"])[0] == "loan_proceeds"
+
+
+def test_two_monthly_synthetic_address_debits_suggest_rent_once():
+    from finance_category_rules import annotate_recurring_rent
+    day=86400
+    rows=[
+        {"id":"r1","accountKey":"synthetic:a","posted":day,"amount":"-100.00",
+         "description":"123 Example Lane","category":"unreviewed","signals":[]},
+        {"id":"r2","accountKey":"synthetic:a","posted":day*31,"amount":"-100.00",
+         "description":"123 Example Lane","category":"unreviewed","signals":[]},
+        {"id":"one-off","accountKey":"synthetic:a","posted":day*5,"amount":"-30.00",
+         "description":"456 Fictional Road","category":"unreviewed","signals":[]},
+        {"id":"corrected","accountKey":"synthetic:a","posted":day*61,"amount":"-100.00",
+         "description":"123 Example Lane","category":"other","categorySource":"user","signals":[]},
+    ]
+    annotate_recurring_rent(rows)
+    assert [r["category"] for r in rows] == ["housing","housing","unreviewed","other"]
+    assert [r.get("signals") for r in rows[:2]] == [["possible_rent"],["possible_rent"]]
+
+
+def test_no_loan_or_p2p_credit_becomes_paycheck_during_cadence_enrichment():
+    from finance_income_rules import annotate_paychecks
+    now=10000000
+    rows=[
+        {"id":"l1","accountKey":"a","posted":now,"amount":"700.00",
+         "description":"Example Finance Loan PAYROLL","category":"loan_proceeds","signals":[]},
+        {"id":"l2","accountKey":"a","posted":now+14*86400,"amount":"700.00",
+         "description":"Example Finance Loan PAYROLL","category":"loan_proceeds","signals":[]},
+        {"id":"p","accountKey":"a","posted":now,"amount":"250.37",
+         "description":"Zelle from Example Person","category":"transfer","signals":["possible_p2p"]},
+    ]
+    annotate_paychecks(rows)
+    assert [r["category"] for r in rows] == ["loan_proceeds","loan_proceeds","transfer"]
