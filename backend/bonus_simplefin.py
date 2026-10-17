@@ -763,6 +763,10 @@ def refresh_balances(uid, *, force=False):
         s['balanceRefreshErrorKind'] = 429
         return finish(uid, s, tag)
     s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
+    if force:
+        # Failed startup probes cannot loop every scheduler minute or waste
+        # the shared provider budget while waiting for delayed Bridge data.
+        s['autoStartupRetryAt'] = now + 3600
     # Returning from the external Bridge may request an immediate check,
     # but never more than once per 90 seconds or outside the shared budget.
     s['newBankDiscoveryNextAt'] = now + 90
@@ -1467,6 +1471,12 @@ def disconnect(request: Request):
     return finish(uid, tombstone, tag)
 
 
+def startup_discovery_due(state, now):
+    """One automatic post-upgrade probe, never a failed-probe request storm."""
+    return (not state.get('lastAccountDiscoveryAt')
+            and now >= state.get('autoStartupRetryAt', 0))
+
+
 async def scheduled_simplefin_loop():
     while True:
         try:
@@ -1479,7 +1489,7 @@ async def scheduled_simplefin_loop():
                     # accounts immediately after this additive release.
                     remaining, _ = _remaining_discovery_budget(s, int(time.time()))
                     if remaining > AUTOMATIC_REQUEST_RESERVE:
-                        initial_scan=not s.get('lastAccountDiscoveryAt')
+                        initial_scan=startup_discovery_due(s, int(time.time()))
                         if initial_scan:
                             await run_in_threadpool(refresh_balances, uid, force=True)
                         elif s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
