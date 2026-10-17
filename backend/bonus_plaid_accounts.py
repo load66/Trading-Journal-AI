@@ -24,6 +24,8 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
 from finance_ai_categories import classify_unknown, cache_key
+import re
+import bonus_simplefin as simplefin
 
 BACKGROUND_LOGGER = logging.getLogger(__name__)
 
@@ -347,6 +349,7 @@ def _view(doc, ledger, uid):
     view = {"access": bool(accessible), "accounts": [], "transactions": {},
             "financeAICache": doc.get("financeAICache", {}),
             "merchantRules": doc.get("merchantRules", {}),
+            "accountLinks": doc.get("accountLinks", {}),
             "monitoredAccounts": list(doc.get("monitored", [])),
             **{key: copy.deepcopy(doc.get(key, {})) for key in
                ("mappings", "evidenceReviews", "accountProfiles", "transactionReviews")},
@@ -457,6 +460,881 @@ def transaction_review(body: TransactionReviewBody, request: Request):
         if body.applySimilar:
             doc.setdefault("merchantRules", {})[cache_key(rows[raw].get("description", ""))] = {
                 "category": body.category, "updatedAt": int(time.time())}
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+
+# Confirmed overlapping accounts are stored only in the encrypted owner-scoped
+# Plaid document. Both provider histories remain immutable and individually
+# recoverable. No provider Item is linked, created or revoked by this route.
+class AccountLinkBody(BaseModel):
+    simplefin: str = Field(pattern=r'^[a-f0-9]{64}
+def accounts(request: Request):
+    uid = owner(request)
+    if not quota._ready():
+        return {"provider": "plaid", "configured": False, "connected": False,
+                "accounts": [], "transactions": {}, "monitoredAccounts": [],
+                "warning": "SimpleFIN remains primary. Plaid read-only monitoring is not activated."}
+    ledger, _ = quota._ledger()
+    doc, _ = _read(uid)
+    return _public(doc, ledger, uid)
+
+
+class Monitored(BaseModel):
+    accounts: list[str] = Field(max_length=50)
+
+
+@router.put("/accounts/monitoring", dependencies=[Depends(_private)])
+def monitor(body: Monitored, request: Request):
+    uid = owner(request)
+    ledger, _ = quota._ledger()
+    doc, etag = _read(uid)
+    if doc.get("leaseUntil", 0) > time.time():
+        raise HTTPException(409, "Plaid syncing is busy. Retry later.")
+    all_accounts = {a["key"] for item_id, row in doc["items"].items()
+                    if ledger["items"].get(item_id, {}).get("owner") == uid
+                    for a in row.get("accounts", [])}
+    requested = set(body.accounts)
+    if (len(requested) != len(body.accounts) or not requested.issubset(all_accounts)
+            or any(len(k) != 64 or any(c not in "0123456789abcdef" for c in k)
+                   for k in requested)):
+        raise HTTPException(400, "Select only your discovered Plaid accounts.")
+    new_accounts = requested - set(doc.get("monitored", []))
+    doc["monitored"] = list(body.accounts)
+    for field in ("mappings", "evidenceReviews", "transactionReviews"):
+        doc[field] = {key: value for key, value in doc.get(field, {}).items() if key in requested}
+    # First selection may follow account-only discovery. Once Transactions was
+    # attempted, preference changes must never reset its daily provider budget.
+    if new_accounts and doc.get("transactionNextSyncAt", 0) <= time.time():
+        doc["nextSyncAt"] = 0
+    for item_id, state in doc["items"].items():
+        # An account added to monitoring must not inherit an Item cursor that
+        # skipped its older transactions while that account was unmonitored.
+        if any(a.get("key") in new_accounts for a in state.get("accounts", [])):
+            state["cursor"] = ""
+        state["transactions"] = {k: v for k, v in state.get("transactions", {}).items()
+                                 if _account_key(item_id, v.get("account", "")) in requested}
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+@router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
+def disconnect_account_item(handle: str, request: Request):
+    return quota.disconnect_item(handle, request)
+
+
+@router.post("/accounts/sync", dependencies=[Depends(_private)])
+def sync(request: Request):
+    return sync_owner(owner(request))
+
+
+def sync_owner(uid):
+    ledger, _ = quota._ledger()
+    known = {item_id: row for item_id, row in ledger["items"].items()
+             if row.get("owner") == uid and not row.get("disconnectedAt")}
+    if not known:
+        raise HTTPException(409, "Connect a Plaid fallback institution first.")
+    doc, etag = _read(uid)
+    now = int(time.time())
+    if doc.get("leaseUntil", 0) > now:
+        raise HTTPException(409, "Plaid synchronization is busy.")
+    if now < doc.get("nextSyncAt", 0):
+        # The owner-wide daily budget protects *existing* Items. A just-linked
+        # Item may still make its FIRST transaction request without re-querying
+        # previously synced banks. This prevents a new OnePay bank showing an
+        # account balance but no activity until an unrelated bank's next window.
+        missing = {item_id: item for item_id, item in known.items()
+                   if item_id not in doc.get("items", {})}
+        attempts = doc.setdefault("newItemDiscoveryAttempts", {})
+        eligible_missing = {item_id: item for item_id, item in missing.items()
+                            if now >= attempts.get(item_id, 0)}
+        # Independent per-Item budget also handles delayed first-history
+        # backfill, not only the initial request. Legacy Items with a cursor
+        # and no Item-specific deadline still use the owner-wide daily window.
+        due_items = {item_id: item for item_id, item in known.items()
+                     if item_id in doc.get("items", {}) and
+                     doc["items"][item_id].get("accounts") and
+                     (("nextTransactionSyncAt" in doc["items"][item_id] and
+                       now >= doc["items"][item_id]["nextTransactionSyncAt"]) or
+                      (not doc["items"][item_id].get("lastTransactionAttemptAt") and
+                       not doc["items"][item_id].get("cursor")))}
+        if not eligible_missing and not due_items:
+            return _public(doc, ledger, uid)
+        doc["lease"] = uuid.uuid4().hex
+        doc["leaseUntil"] = now + 300
+        if eligible_missing:
+            doc["nextNewItemDiscoveryAt"] = now + DAY  # legacy visibility
+            for item_id in eligible_missing:
+                attempts[item_id] = now + DAY
+        etag = _write(uid, doc, etag)
+        candidate = copy.deepcopy(doc)
+        try:
+            discovery_failed = False
+            for item_id, item in eligible_missing.items():
+                try:
+                    raw = _provider("/accounts/get", item["access"])
+                    state = _merge({}, item_id, item["institution"], raw, None, now)
+                except HTTPException:
+                    # Keep the failed Item eligible for a later bounded retry
+                    # without rolling back other newly linked institutions.
+                    discovery_failed = True
+                    continue
+                candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
+                    {a["key"] for a in state["accounts"]})
+                if state["accounts"]:
+                    try:
+                        delta = _sync_item(item["access"], "")
+                        state = _merge(state, item_id, item["institution"], raw, delta, now)
+                        candidate["lastSuccess"] = now
+                    except HTTPException as exc:
+                        # Retain successful account discovery and clearly mark
+                        # incomplete first-history coverage, never invent zero.
+                        _sync_failure(state, now, exc.detail)
+                candidate["items"][item_id] = state
+                candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
+            for item_id, item in due_items.items():
+                old = candidate["items"][item_id]
+                try:
+                    delta = _sync_item(item["access"], old.get("cursor"))
+                    # Refresh real bank balances alongside first-time history;
+                    # never forge a new balance timestamp from cached metadata.
+                    raw = _provider("/accounts/get", item["access"])
+                    candidate["items"][item_id] = _merge(
+                        old, item_id, item["institution"], raw, delta, now)
+                    candidate["lastSuccess"] = now
+                except HTTPException as exc:
+                    _sync_failure(old, now, exc.detail)
+            if eligible_missing:
+                candidate["lastAccountDiscovery"] = now
+            if discovery_failed:
+                candidate["error"] = "One or more linked banks need account discovery. Retry after the next provider window."
+            else:
+                candidate.pop("error", None)
+        except HTTPException as exc:
+            # No partial encrypted writes or lost prior activity on failed
+            # account discovery. Retry after the reserved provider interval.
+            candidate = doc
+            candidate["error"] = exc.detail
+        candidate.pop("lease", None)
+        candidate.pop("leaseUntil", None)
+        try:
+            classify_unknown(candidate, now=now)
+        except Exception:
+            pass  # Optional AI must never block or corrupt provider transactions.
+        _write(uid, candidate, etag)
+        return _public(candidate, ledger, uid)
+    doc["lease"] = uuid.uuid4().hex
+    doc["leaseUntil"] = now + 300
+    doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
+    # Automatically linked accounts consume the same bounded daily transaction budget.
+    doc["transactionNextSyncAt"] = now + DAY
+    etag = _write(uid, doc, etag)
+    candidate = copy.deepcopy(doc)
+    try:
+        monitored = set(candidate.get("monitored", []))
+        for item_id, item in known.items():
+            old = candidate["items"].get(item_id, {})
+            try:
+                raw = _provider("/accounts/get", item["access"])
+                if old.get("accounts") and not raw.get("accounts"):
+                    raise HTTPException(502, "This bank did not return its previously linked accounts.")
+                exposed = _merge(old, item_id, item["institution"], raw, None, now)
+            except HTTPException as exc:
+                # A single bank's account-discovery outage must not destroy
+                # saved transactions or prevent other Items from updating.
+                if old:
+                    exposed = copy.deepcopy(old)
+                    _sync_failure(exposed, now, exc.detail)
+                    candidate["items"][item_id] = exposed
+                continue
+            discovered = {a["key"] for a in exposed["accounts"]}
+            new_accounts = discovered - monitored
+            monitored.update(discovered)
+            candidate["monitored"] = sorted(monitored)
+            if new_accounts and old.get("cursor"):
+                # A preexisting cursor may have skipped activity for newly linked accounts.
+                old = {**old, "cursor": ""}
+            # Respect a newly linked Item's own first-sync budget. A daily
+            # owner refresh must not issue a second request for that Item.
+            if discovered and now >= old.get("nextTransactionSyncAt", 0):
+                try:
+                    changes = _sync_item(item["access"], old.get("cursor"))
+                    exposed = _merge(old, item_id, item["institution"], raw, changes, now)
+                except HTTPException as exc:
+                    # A temporarily unavailable Item must not roll back
+                    # successfully synced unrelated banks or lose its cursor.
+                    _sync_failure(exposed, now, exc.detail)
+            # Plaid returns an Item-wide delta, even when only one account is
+            # selected. Discard unselected activity before encrypted persistence.
+            exposed["transactions"] = {
+                ident: row for ident, row in exposed.get("transactions", {}).items()
+                if _account_key(item_id, row.get("account", "")) in monitored
+            }
+            candidate["items"][item_id] = exposed
+        # Permanently drop obsolete receipts, so a removed transaction cannot
+        # silently regain approval if the provider later reuses its identifier.
+        current = _view(candidate, ledger, uid)["transactions"]
+        for field in ("evidenceReviews", "transactionReviews"):
+            candidate[field] = {key: {raw: review for raw, review in rows.items()
+                if raw in current.get(key, {}) and review.get("fingerprint") ==
+                evidence_fingerprint(current[key][raw])}
+                for key, rows in candidate.get(field, {}).items() if key in current}
+        candidate["lastSuccess"] = now
+        candidate.pop("error", None)
+    except HTTPException as exc:
+        # Fail closed: no partial cursor or transaction import is acknowledged.
+        candidate = doc
+        candidate["error"] = exc.detail
+    candidate.pop("lease", None)
+    candidate.pop("leaseUntil", None)
+    try:
+        classify_unknown(candidate, now=now)
+    except Exception:
+        pass  # Category suggestions are optional; never fail transaction sync.
+    _write(uid, candidate, etag)
+    return _public(candidate, ledger, uid)
+
+
+def scheduled_sync_once():
+    if not quota._ready():
+        return
+    ledger, _ = quota._read()
+    if not ledger:
+        return
+    owners = {row.get("owner") for row in ledger["items"].values() if row.get("owner")}
+    for uid in owners:
+        try:
+            doc, _ = _read(uid)
+            now = time.time()
+            owned = {item_id for item_id, item in ledger["items"].items()
+                     if item.get("owner") == uid and not item.get("disconnectedAt")}
+            discover_due = any(item_id not in doc.get("items", {}) and
+                now >= doc.get("newItemDiscoveryAttempts", {}).get(item_id, 0)
+                for item_id in owned)
+            item_due = any(
+                item_id in owned and state.get("accounts") and
+                (("nextTransactionSyncAt" in state and
+                  now >= state["nextTransactionSyncAt"]) or
+                 (not state.get("lastTransactionAttemptAt") and not state.get("cursor")))
+                for item_id, state in doc.get("items", {}).items())
+            if now >= doc.get("nextSyncAt", 0) or discover_due or item_due:
+                sync_owner(uid)
+        except Exception as error:
+            # Only the exception class is logged; no account, token or bank data.
+            BACKGROUND_LOGGER.warning("plaid_owner_sync_error class=%s", type(error).__name__)
+
+
+async def scheduled_plaid_loop():
+    while True:
+        try:
+            await asyncio.to_thread(scheduled_sync_once)
+        except Exception as error:
+            BACKGROUND_LOGGER.warning("plaid_scheduled_sync_error class=%s", type(error).__name__)
+        await asyncio.sleep(300)
+)
+    plaid: str = Field(pattern=r'^[a-f0-9]{64}
+def accounts(request: Request):
+    uid = owner(request)
+    if not quota._ready():
+        return {"provider": "plaid", "configured": False, "connected": False,
+                "accounts": [], "transactions": {}, "monitoredAccounts": [],
+                "warning": "SimpleFIN remains primary. Plaid read-only monitoring is not activated."}
+    ledger, _ = quota._ledger()
+    doc, _ = _read(uid)
+    return _public(doc, ledger, uid)
+
+
+class Monitored(BaseModel):
+    accounts: list[str] = Field(max_length=50)
+
+
+@router.put("/accounts/monitoring", dependencies=[Depends(_private)])
+def monitor(body: Monitored, request: Request):
+    uid = owner(request)
+    ledger, _ = quota._ledger()
+    doc, etag = _read(uid)
+    if doc.get("leaseUntil", 0) > time.time():
+        raise HTTPException(409, "Plaid syncing is busy. Retry later.")
+    all_accounts = {a["key"] for item_id, row in doc["items"].items()
+                    if ledger["items"].get(item_id, {}).get("owner") == uid
+                    for a in row.get("accounts", [])}
+    requested = set(body.accounts)
+    if (len(requested) != len(body.accounts) or not requested.issubset(all_accounts)
+            or any(len(k) != 64 or any(c not in "0123456789abcdef" for c in k)
+                   for k in requested)):
+        raise HTTPException(400, "Select only your discovered Plaid accounts.")
+    new_accounts = requested - set(doc.get("monitored", []))
+    doc["monitored"] = list(body.accounts)
+    for field in ("mappings", "evidenceReviews", "transactionReviews"):
+        doc[field] = {key: value for key, value in doc.get(field, {}).items() if key in requested}
+    # First selection may follow account-only discovery. Once Transactions was
+    # attempted, preference changes must never reset its daily provider budget.
+    if new_accounts and doc.get("transactionNextSyncAt", 0) <= time.time():
+        doc["nextSyncAt"] = 0
+    for item_id, state in doc["items"].items():
+        # An account added to monitoring must not inherit an Item cursor that
+        # skipped its older transactions while that account was unmonitored.
+        if any(a.get("key") in new_accounts for a in state.get("accounts", [])):
+            state["cursor"] = ""
+        state["transactions"] = {k: v for k, v in state.get("transactions", {}).items()
+                                 if _account_key(item_id, v.get("account", "")) in requested}
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+@router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
+def disconnect_account_item(handle: str, request: Request):
+    return quota.disconnect_item(handle, request)
+
+
+@router.post("/accounts/sync", dependencies=[Depends(_private)])
+def sync(request: Request):
+    return sync_owner(owner(request))
+
+
+def sync_owner(uid):
+    ledger, _ = quota._ledger()
+    known = {item_id: row for item_id, row in ledger["items"].items()
+             if row.get("owner") == uid and not row.get("disconnectedAt")}
+    if not known:
+        raise HTTPException(409, "Connect a Plaid fallback institution first.")
+    doc, etag = _read(uid)
+    now = int(time.time())
+    if doc.get("leaseUntil", 0) > now:
+        raise HTTPException(409, "Plaid synchronization is busy.")
+    if now < doc.get("nextSyncAt", 0):
+        # The owner-wide daily budget protects *existing* Items. A just-linked
+        # Item may still make its FIRST transaction request without re-querying
+        # previously synced banks. This prevents a new OnePay bank showing an
+        # account balance but no activity until an unrelated bank's next window.
+        missing = {item_id: item for item_id, item in known.items()
+                   if item_id not in doc.get("items", {})}
+        attempts = doc.setdefault("newItemDiscoveryAttempts", {})
+        eligible_missing = {item_id: item for item_id, item in missing.items()
+                            if now >= attempts.get(item_id, 0)}
+        # Independent per-Item budget also handles delayed first-history
+        # backfill, not only the initial request. Legacy Items with a cursor
+        # and no Item-specific deadline still use the owner-wide daily window.
+        due_items = {item_id: item for item_id, item in known.items()
+                     if item_id in doc.get("items", {}) and
+                     doc["items"][item_id].get("accounts") and
+                     (("nextTransactionSyncAt" in doc["items"][item_id] and
+                       now >= doc["items"][item_id]["nextTransactionSyncAt"]) or
+                      (not doc["items"][item_id].get("lastTransactionAttemptAt") and
+                       not doc["items"][item_id].get("cursor")))}
+        if not eligible_missing and not due_items:
+            return _public(doc, ledger, uid)
+        doc["lease"] = uuid.uuid4().hex
+        doc["leaseUntil"] = now + 300
+        if eligible_missing:
+            doc["nextNewItemDiscoveryAt"] = now + DAY  # legacy visibility
+            for item_id in eligible_missing:
+                attempts[item_id] = now + DAY
+        etag = _write(uid, doc, etag)
+        candidate = copy.deepcopy(doc)
+        try:
+            discovery_failed = False
+            for item_id, item in eligible_missing.items():
+                try:
+                    raw = _provider("/accounts/get", item["access"])
+                    state = _merge({}, item_id, item["institution"], raw, None, now)
+                except HTTPException:
+                    # Keep the failed Item eligible for a later bounded retry
+                    # without rolling back other newly linked institutions.
+                    discovery_failed = True
+                    continue
+                candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
+                    {a["key"] for a in state["accounts"]})
+                if state["accounts"]:
+                    try:
+                        delta = _sync_item(item["access"], "")
+                        state = _merge(state, item_id, item["institution"], raw, delta, now)
+                        candidate["lastSuccess"] = now
+                    except HTTPException as exc:
+                        # Retain successful account discovery and clearly mark
+                        # incomplete first-history coverage, never invent zero.
+                        _sync_failure(state, now, exc.detail)
+                candidate["items"][item_id] = state
+                candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
+            for item_id, item in due_items.items():
+                old = candidate["items"][item_id]
+                try:
+                    delta = _sync_item(item["access"], old.get("cursor"))
+                    # Refresh real bank balances alongside first-time history;
+                    # never forge a new balance timestamp from cached metadata.
+                    raw = _provider("/accounts/get", item["access"])
+                    candidate["items"][item_id] = _merge(
+                        old, item_id, item["institution"], raw, delta, now)
+                    candidate["lastSuccess"] = now
+                except HTTPException as exc:
+                    _sync_failure(old, now, exc.detail)
+            if eligible_missing:
+                candidate["lastAccountDiscovery"] = now
+            if discovery_failed:
+                candidate["error"] = "One or more linked banks need account discovery. Retry after the next provider window."
+            else:
+                candidate.pop("error", None)
+        except HTTPException as exc:
+            # No partial encrypted writes or lost prior activity on failed
+            # account discovery. Retry after the reserved provider interval.
+            candidate = doc
+            candidate["error"] = exc.detail
+        candidate.pop("lease", None)
+        candidate.pop("leaseUntil", None)
+        try:
+            classify_unknown(candidate, now=now)
+        except Exception:
+            pass  # Optional AI must never block or corrupt provider transactions.
+        _write(uid, candidate, etag)
+        return _public(candidate, ledger, uid)
+    doc["lease"] = uuid.uuid4().hex
+    doc["leaseUntil"] = now + 300
+    doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
+    # Automatically linked accounts consume the same bounded daily transaction budget.
+    doc["transactionNextSyncAt"] = now + DAY
+    etag = _write(uid, doc, etag)
+    candidate = copy.deepcopy(doc)
+    try:
+        monitored = set(candidate.get("monitored", []))
+        for item_id, item in known.items():
+            old = candidate["items"].get(item_id, {})
+            try:
+                raw = _provider("/accounts/get", item["access"])
+                if old.get("accounts") and not raw.get("accounts"):
+                    raise HTTPException(502, "This bank did not return its previously linked accounts.")
+                exposed = _merge(old, item_id, item["institution"], raw, None, now)
+            except HTTPException as exc:
+                # A single bank's account-discovery outage must not destroy
+                # saved transactions or prevent other Items from updating.
+                if old:
+                    exposed = copy.deepcopy(old)
+                    _sync_failure(exposed, now, exc.detail)
+                    candidate["items"][item_id] = exposed
+                continue
+            discovered = {a["key"] for a in exposed["accounts"]}
+            new_accounts = discovered - monitored
+            monitored.update(discovered)
+            candidate["monitored"] = sorted(monitored)
+            if new_accounts and old.get("cursor"):
+                # A preexisting cursor may have skipped activity for newly linked accounts.
+                old = {**old, "cursor": ""}
+            # Respect a newly linked Item's own first-sync budget. A daily
+            # owner refresh must not issue a second request for that Item.
+            if discovered and now >= old.get("nextTransactionSyncAt", 0):
+                try:
+                    changes = _sync_item(item["access"], old.get("cursor"))
+                    exposed = _merge(old, item_id, item["institution"], raw, changes, now)
+                except HTTPException as exc:
+                    # A temporarily unavailable Item must not roll back
+                    # successfully synced unrelated banks or lose its cursor.
+                    _sync_failure(exposed, now, exc.detail)
+            # Plaid returns an Item-wide delta, even when only one account is
+            # selected. Discard unselected activity before encrypted persistence.
+            exposed["transactions"] = {
+                ident: row for ident, row in exposed.get("transactions", {}).items()
+                if _account_key(item_id, row.get("account", "")) in monitored
+            }
+            candidate["items"][item_id] = exposed
+        # Permanently drop obsolete receipts, so a removed transaction cannot
+        # silently regain approval if the provider later reuses its identifier.
+        current = _view(candidate, ledger, uid)["transactions"]
+        for field in ("evidenceReviews", "transactionReviews"):
+            candidate[field] = {key: {raw: review for raw, review in rows.items()
+                if raw in current.get(key, {}) and review.get("fingerprint") ==
+                evidence_fingerprint(current[key][raw])}
+                for key, rows in candidate.get(field, {}).items() if key in current}
+        candidate["lastSuccess"] = now
+        candidate.pop("error", None)
+    except HTTPException as exc:
+        # Fail closed: no partial cursor or transaction import is acknowledged.
+        candidate = doc
+        candidate["error"] = exc.detail
+    candidate.pop("lease", None)
+    candidate.pop("leaseUntil", None)
+    try:
+        classify_unknown(candidate, now=now)
+    except Exception:
+        pass  # Category suggestions are optional; never fail transaction sync.
+    _write(uid, candidate, etag)
+    return _public(candidate, ledger, uid)
+
+
+def scheduled_sync_once():
+    if not quota._ready():
+        return
+    ledger, _ = quota._read()
+    if not ledger:
+        return
+    owners = {row.get("owner") for row in ledger["items"].values() if row.get("owner")}
+    for uid in owners:
+        try:
+            doc, _ = _read(uid)
+            now = time.time()
+            owned = {item_id for item_id, item in ledger["items"].items()
+                     if item.get("owner") == uid and not item.get("disconnectedAt")}
+            discover_due = any(item_id not in doc.get("items", {}) and
+                now >= doc.get("newItemDiscoveryAttempts", {}).get(item_id, 0)
+                for item_id in owned)
+            item_due = any(
+                item_id in owned and state.get("accounts") and
+                (("nextTransactionSyncAt" in state and
+                  now >= state["nextTransactionSyncAt"]) or
+                 (not state.get("lastTransactionAttemptAt") and not state.get("cursor")))
+                for item_id, state in doc.get("items", {}).items())
+            if now >= doc.get("nextSyncAt", 0) or discover_due or item_due:
+                sync_owner(uid)
+        except Exception as error:
+            # Only the exception class is logged; no account, token or bank data.
+            BACKGROUND_LOGGER.warning("plaid_owner_sync_error class=%s", type(error).__name__)
+
+
+async def scheduled_plaid_loop():
+    while True:
+        try:
+            await asyncio.to_thread(scheduled_sync_once)
+        except Exception as error:
+            BACKGROUND_LOGGER.warning("plaid_scheduled_sync_error class=%s", type(error).__name__)
+        await asyncio.sleep(300)
+)
+    primary: str = Field(pattern=r'^(simplefin|plaid|remove)
+def accounts(request: Request):
+    uid = owner(request)
+    if not quota._ready():
+        return {"provider": "plaid", "configured": False, "connected": False,
+                "accounts": [], "transactions": {}, "monitoredAccounts": [],
+                "warning": "SimpleFIN remains primary. Plaid read-only monitoring is not activated."}
+    ledger, _ = quota._ledger()
+    doc, _ = _read(uid)
+    return _public(doc, ledger, uid)
+
+
+class Monitored(BaseModel):
+    accounts: list[str] = Field(max_length=50)
+
+
+@router.put("/accounts/monitoring", dependencies=[Depends(_private)])
+def monitor(body: Monitored, request: Request):
+    uid = owner(request)
+    ledger, _ = quota._ledger()
+    doc, etag = _read(uid)
+    if doc.get("leaseUntil", 0) > time.time():
+        raise HTTPException(409, "Plaid syncing is busy. Retry later.")
+    all_accounts = {a["key"] for item_id, row in doc["items"].items()
+                    if ledger["items"].get(item_id, {}).get("owner") == uid
+                    for a in row.get("accounts", [])}
+    requested = set(body.accounts)
+    if (len(requested) != len(body.accounts) or not requested.issubset(all_accounts)
+            or any(len(k) != 64 or any(c not in "0123456789abcdef" for c in k)
+                   for k in requested)):
+        raise HTTPException(400, "Select only your discovered Plaid accounts.")
+    new_accounts = requested - set(doc.get("monitored", []))
+    doc["monitored"] = list(body.accounts)
+    for field in ("mappings", "evidenceReviews", "transactionReviews"):
+        doc[field] = {key: value for key, value in doc.get(field, {}).items() if key in requested}
+    # First selection may follow account-only discovery. Once Transactions was
+    # attempted, preference changes must never reset its daily provider budget.
+    if new_accounts and doc.get("transactionNextSyncAt", 0) <= time.time():
+        doc["nextSyncAt"] = 0
+    for item_id, state in doc["items"].items():
+        # An account added to monitoring must not inherit an Item cursor that
+        # skipped its older transactions while that account was unmonitored.
+        if any(a.get("key") in new_accounts for a in state.get("accounts", [])):
+            state["cursor"] = ""
+        state["transactions"] = {k: v for k, v in state.get("transactions", {}).items()
+                                 if _account_key(item_id, v.get("account", "")) in requested}
+    _write(uid, doc, etag)
+    return _public(doc, ledger, uid)
+
+
+@router.delete("/accounts/items/{handle}", dependencies=[Depends(_private)])
+def disconnect_account_item(handle: str, request: Request):
+    return quota.disconnect_item(handle, request)
+
+
+@router.post("/accounts/sync", dependencies=[Depends(_private)])
+def sync(request: Request):
+    return sync_owner(owner(request))
+
+
+def sync_owner(uid):
+    ledger, _ = quota._ledger()
+    known = {item_id: row for item_id, row in ledger["items"].items()
+             if row.get("owner") == uid and not row.get("disconnectedAt")}
+    if not known:
+        raise HTTPException(409, "Connect a Plaid fallback institution first.")
+    doc, etag = _read(uid)
+    now = int(time.time())
+    if doc.get("leaseUntil", 0) > now:
+        raise HTTPException(409, "Plaid synchronization is busy.")
+    if now < doc.get("nextSyncAt", 0):
+        # The owner-wide daily budget protects *existing* Items. A just-linked
+        # Item may still make its FIRST transaction request without re-querying
+        # previously synced banks. This prevents a new OnePay bank showing an
+        # account balance but no activity until an unrelated bank's next window.
+        missing = {item_id: item for item_id, item in known.items()
+                   if item_id not in doc.get("items", {})}
+        attempts = doc.setdefault("newItemDiscoveryAttempts", {})
+        eligible_missing = {item_id: item for item_id, item in missing.items()
+                            if now >= attempts.get(item_id, 0)}
+        # Independent per-Item budget also handles delayed first-history
+        # backfill, not only the initial request. Legacy Items with a cursor
+        # and no Item-specific deadline still use the owner-wide daily window.
+        due_items = {item_id: item for item_id, item in known.items()
+                     if item_id in doc.get("items", {}) and
+                     doc["items"][item_id].get("accounts") and
+                     (("nextTransactionSyncAt" in doc["items"][item_id] and
+                       now >= doc["items"][item_id]["nextTransactionSyncAt"]) or
+                      (not doc["items"][item_id].get("lastTransactionAttemptAt") and
+                       not doc["items"][item_id].get("cursor")))}
+        if not eligible_missing and not due_items:
+            return _public(doc, ledger, uid)
+        doc["lease"] = uuid.uuid4().hex
+        doc["leaseUntil"] = now + 300
+        if eligible_missing:
+            doc["nextNewItemDiscoveryAt"] = now + DAY  # legacy visibility
+            for item_id in eligible_missing:
+                attempts[item_id] = now + DAY
+        etag = _write(uid, doc, etag)
+        candidate = copy.deepcopy(doc)
+        try:
+            discovery_failed = False
+            for item_id, item in eligible_missing.items():
+                try:
+                    raw = _provider("/accounts/get", item["access"])
+                    state = _merge({}, item_id, item["institution"], raw, None, now)
+                except HTTPException:
+                    # Keep the failed Item eligible for a later bounded retry
+                    # without rolling back other newly linked institutions.
+                    discovery_failed = True
+                    continue
+                candidate["monitored"] = sorted(set(candidate.get("monitored", [])) |
+                    {a["key"] for a in state["accounts"]})
+                if state["accounts"]:
+                    try:
+                        delta = _sync_item(item["access"], "")
+                        state = _merge(state, item_id, item["institution"], raw, delta, now)
+                        candidate["lastSuccess"] = now
+                    except HTTPException as exc:
+                        # Retain successful account discovery and clearly mark
+                        # incomplete first-history coverage, never invent zero.
+                        _sync_failure(state, now, exc.detail)
+                candidate["items"][item_id] = state
+                candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
+            for item_id, item in due_items.items():
+                old = candidate["items"][item_id]
+                try:
+                    delta = _sync_item(item["access"], old.get("cursor"))
+                    # Refresh real bank balances alongside first-time history;
+                    # never forge a new balance timestamp from cached metadata.
+                    raw = _provider("/accounts/get", item["access"])
+                    candidate["items"][item_id] = _merge(
+                        old, item_id, item["institution"], raw, delta, now)
+                    candidate["lastSuccess"] = now
+                except HTTPException as exc:
+                    _sync_failure(old, now, exc.detail)
+            if eligible_missing:
+                candidate["lastAccountDiscovery"] = now
+            if discovery_failed:
+                candidate["error"] = "One or more linked banks need account discovery. Retry after the next provider window."
+            else:
+                candidate.pop("error", None)
+        except HTTPException as exc:
+            # No partial encrypted writes or lost prior activity on failed
+            # account discovery. Retry after the reserved provider interval.
+            candidate = doc
+            candidate["error"] = exc.detail
+        candidate.pop("lease", None)
+        candidate.pop("leaseUntil", None)
+        try:
+            classify_unknown(candidate, now=now)
+        except Exception:
+            pass  # Optional AI must never block or corrupt provider transactions.
+        _write(uid, candidate, etag)
+        return _public(candidate, ledger, uid)
+    doc["lease"] = uuid.uuid4().hex
+    doc["leaseUntil"] = now + 300
+    doc["nextSyncAt"] = now + DAY  # reserve provider budget before remote call
+    # Automatically linked accounts consume the same bounded daily transaction budget.
+    doc["transactionNextSyncAt"] = now + DAY
+    etag = _write(uid, doc, etag)
+    candidate = copy.deepcopy(doc)
+    try:
+        monitored = set(candidate.get("monitored", []))
+        for item_id, item in known.items():
+            old = candidate["items"].get(item_id, {})
+            try:
+                raw = _provider("/accounts/get", item["access"])
+                if old.get("accounts") and not raw.get("accounts"):
+                    raise HTTPException(502, "This bank did not return its previously linked accounts.")
+                exposed = _merge(old, item_id, item["institution"], raw, None, now)
+            except HTTPException as exc:
+                # A single bank's account-discovery outage must not destroy
+                # saved transactions or prevent other Items from updating.
+                if old:
+                    exposed = copy.deepcopy(old)
+                    _sync_failure(exposed, now, exc.detail)
+                    candidate["items"][item_id] = exposed
+                continue
+            discovered = {a["key"] for a in exposed["accounts"]}
+            new_accounts = discovered - monitored
+            monitored.update(discovered)
+            candidate["monitored"] = sorted(monitored)
+            if new_accounts and old.get("cursor"):
+                # A preexisting cursor may have skipped activity for newly linked accounts.
+                old = {**old, "cursor": ""}
+            # Respect a newly linked Item's own first-sync budget. A daily
+            # owner refresh must not issue a second request for that Item.
+            if discovered and now >= old.get("nextTransactionSyncAt", 0):
+                try:
+                    changes = _sync_item(item["access"], old.get("cursor"))
+                    exposed = _merge(old, item_id, item["institution"], raw, changes, now)
+                except HTTPException as exc:
+                    # A temporarily unavailable Item must not roll back
+                    # successfully synced unrelated banks or lose its cursor.
+                    _sync_failure(exposed, now, exc.detail)
+            # Plaid returns an Item-wide delta, even when only one account is
+            # selected. Discard unselected activity before encrypted persistence.
+            exposed["transactions"] = {
+                ident: row for ident, row in exposed.get("transactions", {}).items()
+                if _account_key(item_id, row.get("account", "")) in monitored
+            }
+            candidate["items"][item_id] = exposed
+        # Permanently drop obsolete receipts, so a removed transaction cannot
+        # silently regain approval if the provider later reuses its identifier.
+        current = _view(candidate, ledger, uid)["transactions"]
+        for field in ("evidenceReviews", "transactionReviews"):
+            candidate[field] = {key: {raw: review for raw, review in rows.items()
+                if raw in current.get(key, {}) and review.get("fingerprint") ==
+                evidence_fingerprint(current[key][raw])}
+                for key, rows in candidate.get(field, {}).items() if key in current}
+        candidate["lastSuccess"] = now
+        candidate.pop("error", None)
+    except HTTPException as exc:
+        # Fail closed: no partial cursor or transaction import is acknowledged.
+        candidate = doc
+        candidate["error"] = exc.detail
+    candidate.pop("lease", None)
+    candidate.pop("leaseUntil", None)
+    try:
+        classify_unknown(candidate, now=now)
+    except Exception:
+        pass  # Category suggestions are optional; never fail transaction sync.
+    _write(uid, candidate, etag)
+    return _public(candidate, ledger, uid)
+
+
+def scheduled_sync_once():
+    if not quota._ready():
+        return
+    ledger, _ = quota._read()
+    if not ledger:
+        return
+    owners = {row.get("owner") for row in ledger["items"].values() if row.get("owner")}
+    for uid in owners:
+        try:
+            doc, _ = _read(uid)
+            now = time.time()
+            owned = {item_id for item_id, item in ledger["items"].items()
+                     if item.get("owner") == uid and not item.get("disconnectedAt")}
+            discover_due = any(item_id not in doc.get("items", {}) and
+                now >= doc.get("newItemDiscoveryAttempts", {}).get(item_id, 0)
+                for item_id in owned)
+            item_due = any(
+                item_id in owned and state.get("accounts") and
+                (("nextTransactionSyncAt" in state and
+                  now >= state["nextTransactionSyncAt"]) or
+                 (not state.get("lastTransactionAttemptAt") and not state.get("cursor")))
+                for item_id, state in doc.get("items", {}).items())
+            if now >= doc.get("nextSyncAt", 0) or discover_due or item_due:
+                sync_owner(uid)
+        except Exception as error:
+            # Only the exception class is logged; no account, token or bank data.
+            BACKGROUND_LOGGER.warning("plaid_owner_sync_error class=%s", type(error).__name__)
+
+
+async def scheduled_plaid_loop():
+    while True:
+        try:
+            await asyncio.to_thread(scheduled_sync_once)
+        except Exception as error:
+            BACKGROUND_LOGGER.warning("plaid_scheduled_sync_error class=%s", type(error).__name__)
+        await asyncio.sleep(300)
+)
+
+
+def _display_mask(account):
+    mask = account.get("mask")
+    if isinstance(mask, str) and re.fullmatch(r"[0-9]{4}", mask):
+        return mask
+    name = str(account.get("name") or "").strip()
+    match = re.search(r"(?<![0-9])([0-9]{4})$", name)
+    return match.group(1) if match else None
+
+
+def _category_type(account, profile=None):
+    profile = profile if isinstance(profile, dict) else {}
+    kind = profile.get("kind")
+    if isinstance(kind, str) and kind not in ("", "unclassified"):
+        return kind
+    text = " ".join(str(account.get(field) or "") for field in
+                    ("accountSubtype", "accountType", "name")).lower()
+    for pattern, result in (
+        (r"\\bchecking\\b", "checking"), (r"\\bsavings\\b", "savings"),
+        (r"\\bcredit(?:[_ -]?card)?\\b", "credit_card"),
+        (r"\\bmortgage\\b", "mortgage"), (r"\\bloan\\b", "loan"),
+        (r"\\bbrokerage|investment\\b", "brokerage"),
+        (r"\\bretirement|401k|ira\\b", "retirement")
+    ):
+        if re.search(pattern, text):
+            return result
+    return "unclassified"
+
+
+def _bank_tokens(account):
+    name = str(account.get("bank") or "").lower()
+    name = re.sub(r"[^a-z0-9 ]", " ", name)
+    words = set(name.split())
+    # Common institution aliases, not account-owner inferred identities.
+    return words - {"jpmorgan", "bank", "banking", "national", "association",
+                    "the", "financial", "services", "n", "a", "na", "inc", "llc"}
+
+
+@router.put("/accounts/reconciliation", dependencies=[Depends(_private)])
+def reconcile_accounts(body: AccountLinkBody, request: Request):
+    uid, ledger, doc, etag, plaid_view = _editable(request)
+    # Read the existing owner's encrypted SimpleFIN data. NEVER sync a bank
+    # during account pairing; a link is a user preference, not a provider call.
+    sf_state, _ = simplefin.read_state(uid)
+    sf_accounts = {a.get("key"): a for a in sf_state.get("accounts", [])
+                   if isinstance(a, dict) and isinstance(a.get("key"), str)}
+    plaid_accounts = {a.get("key"): a for a in plaid_view.get("accounts", [])
+                      if isinstance(a, dict) and isinstance(a.get("key"), str)}
+    sf = sf_accounts.get(body.simplefin)
+    plaid = plaid_accounts.get(body.plaid)
+    if sf is None or plaid is None:
+        raise HTTPException(400, "Choose two of your connected accounts.")
+    identifier = hashlib.sha256((body.simplefin + ":" + body.plaid).encode()).hexdigest()
+    links = doc.setdefault("accountLinks", {})
+    if body.primary == "remove":
+        links.pop(identifier, None)
+    else:
+        left_mask, right_mask = _display_mask(sf), _display_mask(plaid)
+        sf_kind = _category_type(sf, sf_state.get("accountProfiles", {}).get(body.simplefin))
+        plaid_kind = _category_type(plaid, doc.get("accountProfiles", {}).get(body.plaid))
+        if (not left_mask or left_mask != right_mask or sf_kind == "unclassified"
+                or sf_kind != plaid_kind or not (_bank_tokens(sf) & _bank_tokens(plaid))):
+            raise HTTPException(400, "Account identity could not be matched safely. Check last four, account type and institution.")
+        # One account can participate in only one confirmed pair; resolving the
+        # conflict explicitly avoids chain merges and false aggregate totals.
+        for key, pair in links.items():
+            if key != identifier and isinstance(pair, dict) and (
+                pair.get("simplefin") in (body.simplefin, body.plaid) or
+                pair.get("plaid") in (body.simplefin, body.plaid)):
+                raise HTTPException(409, "This account is already paired. Remove the earlier pairing first.")
+        links[identifier] = {"simplefin": body.simplefin,
+                             "plaid": body.plaid, "primary": body.primary,
+                             "confirmedAt": int(time.time())}
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
 
