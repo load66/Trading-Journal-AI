@@ -6,20 +6,20 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
-- Deployed: backend v3.4.94 merged to main at 3d29d2c815f4b8cdd5c8d5700f5115bd6d6e898b (Railway deploy status: to be verified)
-- In progress: Release 1 frontend mortgage/loan balance fixes in load66/bonus-tracker
-- Next step: verify merged backend v3.4.95 production deployment, then complete frontend regression CI and Pages release
+- Deployed: backend v3.4.95, main commit 3f4e0980c3a758cf00340704ffbdbab5d762537c (Railway SUCCESS)
+- In progress: frontend v3.4.95 release verification, PR #149 in load66/bonus-tracker
+- Next step: finish frontend three-browser release verification and GitHub Pages deployment
 
 ## Release 1 (v3.4.94)
 
 - Issue: P1 — Account-scoped category confirmation rules
 - Issue: P1 — Prevent false-positive transfer matching
-- Test status: pending verification
+- Test status: PASS — CI run 39046859631
 
 ## Finance 3.4.95 mortgage payment classification
 
 - Issue: P1 — Recognize mortgage servicer debits as housing, not issuer transfers
 - Issue: P1 — Keep card-payment detection for non-housing movements
-- Test status: PASS — Backend Tests and Frontend Build, CI run 39049563177
+- Test status: PASS — Backend Tests and Frontend Build, CI runs 39049563177 and 39049746533
 - PR: https://github.com/load66/Trading-Journal-AI/pull/220
-- Deployment status: pending merge and Railway commit verification
+- Deployment status: SUCCESS — Railway deployment 4947f9c2-b3e7-45d7-af5d-13d3fa8dc790
