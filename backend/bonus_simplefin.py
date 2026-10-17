@@ -175,7 +175,7 @@ def get_data(access, selected=None, balances=False):
     p = safe_url(access)
     endpoint = urlunsplit(('https', p.hostname, p.path.rstrip('/') + '/accounts', '', ''))
     now = int(time.time())
-    params = [('version', '2'), ('start-date', str(now - 90 * DAY)), ('end-date', str(now + 1))]
+    params = [('version', '2'), ('start-date', str(now - 89 * DAY)), ('end-date', str(now))]
     if balances:
         params.append(('balances-only', '1'))
     else:
@@ -455,6 +455,88 @@ def classify(amount, description):
     return 'deposit'
 
 
+# Bridge warnings are not authentication failures. A capped date window or an
+# incomplete activity notice must never trigger a bank reconnect flow.
+INFO_WARNINGS = re.compile(
+    r'requested date range|date range exceeds|exceeds limit of \d+ days|'
+    r'date range.{0,80}capp?ed|partial (?:data|transaction|history)|'
+    r'some (?:transactions|data) (?:are|is) (?:not )?available|'
+    r'(?:transactions|history) (?:may be|is) incomplete', re.I)
+ACCESS_WARNINGS = re.compile(
+    r'(?:access|authorization|authentication|token|permission).{0,40}'
+    r'(?:denied|rejected|expired|revoked|invalid)|'
+    r'(?:denied|rejected|expired|revoked).{0,40}'
+    r'(?:access|authorization|authentication|token|permission)', re.I)
+LOGIN_WARNINGS = re.compile(
+    r'(?:log[\s-]*in|sign[\s-]*in|reauthoriz|re-?connect|'
+    r'update (?:your )?credentials|credentials? (?:required|invalid)|'
+    r'bank login required|multi.factor.{0,20}required)', re.I)
+CONNECTION_WARNINGS = re.compile(
+    r'(?:connection|institution|bank).{0,45}(?:failed|error|unavailable|lost|broken)|'
+    r'(?:failed|unable) to (?:connect|reach|retrieve) (?:bank|institution)', re.I)
+
+
+def classify_bridge_warnings(data):
+    """Return safe warnings and scoped health. Never infer a bank from prose."""
+    warnings, per_connection, general = [], {}, None
+    for source in ('errlist', 'errors'):
+        for entry in data.get(source, []):
+            if not isinstance(entry, (dict, str)):
+                continue
+            message = clean(entry.get('msg') or entry.get('message')) if isinstance(entry, dict) else clean(entry)
+            if not message:
+                continue
+            warnings.append(message)
+            if INFO_WARNINGS.search(message):
+                BACKGROUND_LOGGER.info('simplefin_info_warning kind=provider_notice')
+                continue
+            if ACCESS_WARNINGS.search(message):
+                kind, action = 'access_rejected', 'reconnect'
+            elif LOGIN_WARNINGS.search(message):
+                kind, action = 'bank_login', 'fix_on_simplefin'
+            elif CONNECTION_WARNINGS.search(message):
+                kind, action = 'connection_error', None
+            else:
+                BACKGROUND_LOGGER.info('simplefin_info_warning kind=unclassified_notice')
+                continue
+            health = {'status':'needs_attention', 'reason':message[:200],
+                      'reasonCode':kind, 'action':action}
+            connection = ''
+            if isinstance(entry, dict):
+                connection = str(entry.get('conn_id') or entry.get('connection_id') or
+                                 entry.get('connection') or '').strip()
+            if connection:
+                per_connection[connection] = health
+            else:
+                # A provider-wide failure has no proven institution. Show one
+                # connection-level diagnostic rather than red alerts on all banks.
+                general = health
+    return warnings[:50], per_connection, general
+
+
+def refresh_institution_health(state, data, missing=()):
+    warnings, per_connection, general = classify_bridge_warnings(data)
+    by_account = {}
+    for account in state.get('accounts', []):
+        if not isinstance(account, dict):
+            continue
+        key = account.get('key')
+        if not key:
+            continue
+        conn = str(account.get('connection') or '')
+        health = per_connection.get(conn)
+        if key in missing:
+            health = {'status':'needs_attention','reason':'Bank account missing from the latest SimpleFIN response.',
+                      'reasonCode':'missing_account','action':None}
+        if health:
+            by_account[key] = health
+    # Replace old warnings and health on every successful provider response.
+    state['warnings'] = warnings
+    state['institutionHealth'] = by_account
+    state['providerHealth'] = general
+    state['status'] = 'attention' if by_account or general else 'connected'
+    return state
+
 def merge(state, data, now):
     old_by_key = {a['key']: a for a in state['accounts']}
     # Account IDs can collide across provider connections. A transaction sync may update only
@@ -465,9 +547,7 @@ def merge(state, data, now):
     record_balances(state, fresh, now)
     watched = {a['key'] for a in state['accounts'] if syncing(state, a)} & (set(state['mappings']) | set(state.get('monitoredAccounts', [])))
     state['missingAccounts'] = sorted(k for k in watched if k not in fresh_by_key)
-    warnings = [clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)]
-    warnings += [clean(e) for e in data.get('errors', []) if isinstance(e, str)]
-    state['warnings'] = warnings[:50]
+    warnings, _, _ = classify_bridge_warnings(data)
     for a in data['accounts']:
         k = account_key(a)
         if k not in watched:
@@ -537,7 +617,9 @@ def merge(state, data, now):
     state['lastSuccess'] = now
     state['windowStart'] = now - 30 * DAY
     state['windowEnd'] = now
-    state['status'] = 'attention' if warnings or state['missingAccounts'] else 'connected'
+    refresh_institution_health(state, data, state['missingAccounts'])
+    # Row-validation notices remain visible without impersonating a bank login failure.
+    state['warnings'] = list(dict.fromkeys(state['warnings'] + [w for w in warnings if w not in state['warnings']]))[:50]
     return state
 
 
@@ -548,7 +630,11 @@ def public_state(s):
               'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
-    out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}
+    out['accounts'] = [{**{k: v for k, v in a.items() if k not in ('id', 'connection')},
+                        'institutionStatus': s.get('institutionHealth', {}).get(a['key'], {}).get('status', 'connected'),
+                        'institutionReason': s.get('institutionHealth', {}).get(a['key'], {}).get('reason'),
+                        'institutionReasonCode': s.get('institutionHealth', {}).get(a['key'], {}).get('reasonCode'),
+                        'institutionAction': s.get('institutionHealth', {}).get(a['key'], {}).get('action')}
                        for a in public_accounts(s, s.get('accounts', []))]
     for a in out['accounts']:
         a['invalidTransactionRows'] = s.get('invalidTransactionsByAccount', {}).get(a['key'], a.get('invalidTransactionRows', 0))
@@ -558,7 +644,7 @@ def public_state(s):
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.81')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.82')
     return out
 
 
@@ -789,10 +875,8 @@ def connect(body: ConnectBody, request: Request):
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        if s['warnings']:
-            s['status'] = 'attention'
+        # Discovery notices do not undo a healthy transaction sync.
+        refresh_institution_health(s, data, s.get('missingAccounts', []))
     except (HTTPException, UnicodeError) as e:
         s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
         s['status'] = 'attention'
@@ -862,9 +946,9 @@ def discover(request: Request):
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
-        s['warnings'] = ([clean(e.get('msg')) for e in data.get('errlist', []) if isinstance(e, dict)] +
-                         [clean(e) for e in data.get('errors', []) if isinstance(e, str)])[:50]
-        s['status'] = 'attention' if s.get('error') or s['warnings'] or s.get('missingAccounts') else 'connected'
+        refresh_institution_health(s, data, s.get('missingAccounts', []))
+        if s.get('error'):
+            s['status'] = 'attention'
     except HTTPException as e:
         s['error'] = e.detail
         s['status'] = 'attention'
