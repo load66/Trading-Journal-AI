@@ -58,3 +58,8 @@ def test_ach_ppd_employer_credit_and_user_override():
     assert explicit['category']=='income'
     assert 'paycheck' in explicit['signals']
     assert forced['category']=='other'
+
+def test_repeated_unknown_person_is_not_promoted_to_paycheck():
+    entries=[row('John Doe','1061.24',DAY*100),row('John Doe','1061.24',DAY*114)]
+    annotate_paychecks(entries)
+    assert all(x['category']=='unreviewed' and 'paycheck' not in x['signals'] for x in entries)

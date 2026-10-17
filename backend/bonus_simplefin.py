@@ -36,6 +36,8 @@ router = APIRouter(prefix='/api/bonus-tracker/simplefin', dependencies=[Depends(
 BACKGROUND_LOGGER = logging.getLogger(__name__)
 
 DAY = 86400
+FULL_SYNC_INTERVAL = 6 * 3600
+BALANCE_SYNC_INTERVAL = 3 * 3600
 MAX_STATE = 8 * 1024 * 1024
 HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
 ACCOUNT_KINDS = frozenset(('unclassified', 'checking', 'savings', 'credit_card', 'brokerage',
@@ -619,7 +621,8 @@ def merge(state, data, now):
 def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'notices', 'institutionIssues', 'missingAccounts', 'lastSuccess',
-              'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'nextGuidedDiscoveryAt', 'error',
+              'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'nextGuidedDiscoveryAt',
+              'lastBalanceRefreshAt', 'nextBalanceRefreshAt', 'error',
               'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
@@ -676,6 +679,37 @@ def claim_request(state, now):
     state['requestAttempts'] = attempts + [now]
 
 
+
+def refresh_balances(uid):
+    """Nontransaction balance refresh between full 6-hour pulls.
+
+    No background request can bypass the same 24-call rolling account quota.
+    History, bonus reviews, user corrections and the next transaction cursor
+    are never changed by a balance-only response.
+    """
+    s, tag = reserve(uid, 'balance-refresh')
+    now = int(time.time())
+    if (not s.get('access') or not s.get('accounts')
+            or now < s.get('nextBalanceRefreshAt', 0)
+            or now >= s.get('nextSyncAt', 0)):
+        return finish(uid, s, tag)
+    s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
+    try:
+        claim_request(s, now)
+        tag = write_state(uid, s, tag)
+        data = get_data(s['access'], balances=True)
+        fresh = {row['key']: row for row in normalize_accounts(data)}
+        old = s.get('accounts', [])
+        s['accounts'] = [{**row, **fresh[row['key']]} if row['key'] in fresh else row
+                         for row in old]
+        record_balances(s, [row for row in s['accounts'] if row['key'] in fresh], now)
+        s['lastBalanceRefreshAt'] = now
+    except HTTPException as exc:
+        # Retain the saved ledger. A temporary balance refresh failure alone
+        # does not claim every institution needs reconnection.
+        s['balanceRefreshErrorKind'] = exc.status_code
+    return finish(uid, s, tag)
+
 def sync(uid):
     s, tag = reserve(uid, 'sync')
     if not s.get('access'):
@@ -692,7 +726,8 @@ def sync(uid):
         return finish(uid, s, tag)
     s['lastAttempt'] = now
     # Reserve the next attempt before network I/O. Restart/timeout cannot exhaust provider quotas.
-    s['nextSyncAt'] = now + DAY
+    s['nextSyncAt'] = now + FULL_SYNC_INTERVAL
+    s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
     try:
         claim_request(s, now)
         tag = write_state(uid, s, tag)
@@ -864,7 +899,8 @@ def connect(body: ConnectBody, request: Request):
         record_balances(s, s['accounts'], observed)
         # Reserve the daily provider budget before automatic first import.
         if s['accounts']:
-            s['lastAttempt'], s['nextSyncAt'] = observed, observed + DAY
+            s['lastAttempt'], s['nextSyncAt'] = observed, observed + FULL_SYNC_INTERVAL
+            s['nextBalanceRefreshAt'] = observed + BALANCE_SYNC_INTERVAL
             tag = write_state(uid, s, tag)
             try:
                 claim_request(s, observed)
@@ -954,7 +990,8 @@ def discover(request: Request, guided: bool = False):
         s.pop('error', None)
         record_balances(s, [a for a in fresh if a['key'] in current and syncing(s, a)], now)
         if any(syncing(s, a) for a in fresh) and now >= s.get('nextSyncAt', 0):
-            s['lastAttempt'], s['nextSyncAt'] = now, now + DAY
+            s['lastAttempt'], s['nextSyncAt'] = now, now + FULL_SYNC_INTERVAL
+            s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
             tag = write_state(uid, s, tag)
             try:
                 claim_request(s, now)
@@ -1145,8 +1182,11 @@ async def scheduled_simplefin_loop():
             if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
                 uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
                 s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
-                    await run_in_threadpool(sync, uid)
+                if s.get('access') and s.get('accounts'):
+                    if time.time() >= s.get('nextSyncAt', 0):
+                        await run_in_threadpool(sync, uid)
+                    elif time.time() >= s.get('nextBalanceRefreshAt', 0):
+                        await run_in_threadpool(refresh_balances, uid)
         except Exception as error:
             # Never log repr(error) or provider payload; both can contain secrets.
             BACKGROUND_LOGGER.warning("simplefin_scheduled_sync_error class=%s", type(error).__name__)

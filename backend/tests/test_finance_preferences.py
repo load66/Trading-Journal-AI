@@ -72,3 +72,15 @@ def test_uncategorized_budget_is_allowed_without_changing_transaction_classifica
     assert f._validate('budgets', 'unreviewed', {'amount':'125.50'}) == {'amount':'125.50'}
     with pytest.raises(HTTPException):
         f._validate('budgets', 'transfer', {'amount':'125.50'})
+
+def test_saved_finance_rules_are_validated_and_do_not_change_account_records():
+    assert f._validate("rules","schreiber foods",{"category":"income","employer":True}) == {
+        "category":"income","employer":True,"ownAccount":False}
+    assert f._validate("rules","to citibank",{"category":"transfer","ownAccount":True})["ownAccount"]
+    assert f._validate("rules","schreiber foods",None) is None
+    with pytest.raises(HTTPException):
+        f._validate("rules","to citibank",{"category":"income","ownAccount":True})
+    with pytest.raises(HTTPException):
+        f._validate("rules","schreiber foods",{"category":"transfer","employer":True})
+    with pytest.raises(HTTPException):
+        f._validate("rules","x",{"category":"transfer"})
