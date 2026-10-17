@@ -335,8 +335,12 @@ def disconnect_item(handle: str, request: Request, delete_history: bool = False)
         return {'disconnected': True, **_display(ledger, uid)}
     from bonus_plaid_accounts import _read as read_activity, _write as write_activity
     activity, activity_tag = read_activity(uid)
-    if activity.get('leaseUntil', 0) > time.time():
+    marker = 'disconnect:' + item_id
+    if activity.get('leaseUntil', 0) > time.time() and activity.get('lease') != marker:
         raise HTTPException(409, 'The current bank sync must finish before disconnecting.')
+    # CAS-lock activity before ledger revocation: stale importers cannot commit or race /item/remove.
+    activity['lease'], activity['leaseUntil'] = marker, int(time.time()) + 300
+    activity_tag = write_activity(uid, activity, activity_tag)
     if not item.get('disconnectedAt') and not item.get('disconnectingAt'):
         item['disconnectingAt'] = int(time.time())
         item['retainHistory'] = not delete_history
@@ -359,13 +363,15 @@ def disconnect_item(handle: str, request: Request, delete_history: bool = False)
         for account in keys:
             purge_account(store(), cipher(), 'plaid', uid, activity.get('historyMonths', []), account)
         activity['monitored'] = [k for k in activity.get('monitored', []) if k not in keys]
-        for field in ('mappings', 'evidenceReviews', 'accountProfiles', 'transactionReviews'):
+        for field in ('accountProfiles', 'transactionReviews'):
             activity[field] = {k: v for k, v in activity.get(field, {}).items() if k not in keys}
     else:
         from finance_account_management import AccountAction, action
         cached = activity.get('items', {}).get(item_id, {})
         for account in cached.get('accounts', []):
             action(activity, cached['accounts'], AccountAction(account=account['key'], action='remove'))
+    activity.pop('lease', None)
+    activity.pop('leaseUntil', None)
     write_activity(uid, activity, activity_tag)
     current, tag = _read()
     current['items'][item_id].pop('cleanupPending', None)

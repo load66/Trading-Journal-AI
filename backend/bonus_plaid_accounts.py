@@ -387,7 +387,7 @@ def _view(doc, ledger, uid):
                                      "transactionLastSyncAt": state.get("lastTransactionSyncAt"),
                                      "transactionNextSyncAt": state.get("nextTransactionSyncAt", doc.get("nextSyncAt")),
                                      "transactionSyncError": state.get("transactionSyncError"),
-                                     "connectionStatus": "disconnected" if ledger["items"][item_id].get("disconnectedAt") else "connected"})
+                                     "connectionStatus": "disconnected" if ledger["items"][item_id].get("disconnectedAt") else "disconnecting" if ledger["items"][item_id].get("disconnectingAt") else "connected"})
             if key in permitted:
                 view["transactions"][key] = {
                     raw: {k: v for k, v in row.items() if k not in ("id", "account")}

@@ -243,3 +243,41 @@ def test_explicit_delete_one_bank_revokes_credential_without_recycling_trial_slo
     assert calls.count("/item/remove") == 1
     assert client.delete("/api/bonus-tracker/plaid/items/" + handle,
                          headers={"Authorization": "Bearer a"}).status_code == 200
+
+
+def test_disconnect_locks_activity_before_revoke_and_retries_idempotently(setup, monkeypatch):
+    import bonus_plaid_accounts as activity
+    client,memory=setup
+    monkeypatch.setattr(activity,'store',lambda:memory)
+    doc,tag=plaid._ledger()
+    doc['used']=1
+    doc['items']['existing']={'owner':'owner-a','institution':'Synthetic Bank','access':'synthetic-secret','created':1}
+    plaid._write(doc,tag)
+    key=activity._account_key('existing','cash')
+    state=activity._default()
+    state['items']['existing']={'accounts':[{'key':key,'id':'cash','bank':'Synthetic Bank'}],
+                                'transactions':{'old':{'account':'cash','posted':1792133900,'amount':'10.00'}}}
+    state['monitored']=[key]
+    activity._write('owner-a',state,None)
+    handle=activity.connection_handle('owner-a','existing')
+    calls=[]
+    def failed(endpoint,payload):
+        calls.append(endpoint)
+        ledger,_=plaid._read()
+        saved,_=activity._read('owner-a')
+        assert ledger['items']['existing']['disconnectingAt']>0
+        assert saved['lease']=='disconnect:existing'
+        raise HTTPException(502,'Synthetic revocation outage')
+    monkeypatch.setattr(plaid,'_provider',failed)
+    assert client.delete('/api/bonus-tracker/plaid/items/'+handle,headers={'Authorization':'Bearer a'}).status_code==502
+    # All sync paths exclude a disconnecting token even before successful revocation.
+    with pytest.raises(HTTPException) as exc:activity.sync_owner('owner-a')
+    assert exc.value.status_code==409
+    monkeypatch.setattr(plaid,'_provider',lambda endpoint,payload: calls.append(endpoint) or {'removed':True})
+    assert client.delete('/api/bonus-tracker/plaid/items/'+handle,headers={'Authorization':'Bearer a'}).status_code==200
+    final,_=plaid._read();saved,_=activity._read('owner-a')
+    assert 'access' not in final['items']['existing'] and final['used']==1
+    assert saved['items']['existing']['transactions']==state['items']['existing']['transactions']
+    assert 'lease' not in saved
+    assert client.delete('/api/bonus-tracker/plaid/items/'+handle,headers={'Authorization':'Bearer a'}).status_code==200
+    assert calls==['/item/remove','/item/remove']

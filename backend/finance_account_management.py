@@ -14,6 +14,8 @@ def institution_handle(account):
 
 def syncing(doc, account):
     key = account['key']
+    if account.get('connectionStatus') in ('disconnected', 'disconnecting'):
+        return False
     removed = doc.get('accountExclusions', {}).get(key, {}).get('removedAt')
     excluded_bank = institution_handle(account) in doc.get('institutionExclusions', {})
     return not removed and not excluded_bank and doc.get('accountProfiles', {}).get(key, {}).get('syncEnabled', True)
