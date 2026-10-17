@@ -762,7 +762,7 @@ def refresh_balances(uid, *, force=False):
     if force and remaining <= AUTOMATIC_REQUEST_RESERVE:
         s['balanceRefreshErrorKind'] = 429
         return finish(uid, s, tag)
-    s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
+    s['nextBalanceRefreshAt'] = now + (BALANCE_SYNC_INTERVAL if s.get('accounts') else 3600)
     if force:
         # Failed startup probes cannot loop every scheduler minute or waste
         # the shared provider budget while waiting for delayed Bridge data.
@@ -1492,7 +1492,9 @@ async def scheduled_simplefin_loop():
                         initial_scan=startup_discovery_due(s, int(time.time()))
                         if initial_scan:
                             await run_in_threadpool(refresh_balances, uid, force=True)
-                        elif s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
+                        elif (s.get('accounts') and
+                              any(syncing(s, a) for a in s['accounts']) and
+                              time.time() >= s.get('nextSyncAt', 0)):
                             await run_in_threadpool(sync, uid)
                         elif time.time() >= s.get('nextBalanceRefreshAt', 0):
                             await run_in_threadpool(refresh_balances, uid)
