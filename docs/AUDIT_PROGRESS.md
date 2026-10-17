@@ -1,14 +1,14 @@
 # Audit progress
 
-Active agent: codex — Finance Categories v2 — branch codex/finance-categories-v2
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
 
 - Deployed: backend v3.4.95, main commit 3f4e0980c3a758cf00340704ffbdbab5d762537c (Railway SUCCESS)
-- In progress: SimpleFIN add-bank backend v3.4.97 release candidate, PR #223
-- Next step: after full CI merge PR #223, verify Railway SUCCESS on exact merge commit, then frontend PR #155
+- In progress: Finance Categories v2 paused (unmerged) for SimpleFIN missing-bank hotfix
+- Next step: resume Finance Categories v2 after SimpleFIN missing-bank hotfix is deployed and verified
 
 ## Release 1 (v3.4.94)
 
