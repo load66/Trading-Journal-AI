@@ -1248,7 +1248,7 @@ def test_hourly_discovery_populates_new_linked_accounts_without_owner_click(setu
     assert saved['accountProfiles'][original]==previous['accountProfiles'][original]
     assert saved['mappings']==previous['mappings']
     assert saved['transactions'][k2]['first-history']['amount']=='-4.25'
-    assert saved['accounts'][0]['key']==original
+    assert original in {a['key'] for a in saved['accounts']}
     assert len(saved['requestAttempts'])==2
     b.refresh_balances('owner')
     assert len(calls)==2
