@@ -34,7 +34,7 @@ def _key(uid):
 
 def _default():
     return {"version":1,"revision":0,"budgets":{},"duplicates":{},
-            "recurring":{},"transactionMeta":{},"rules":{}}
+            "recurring":{},"transactionMeta":{},"rules":{},"ownerNames":{}}
 
 
 def _read(uid):
@@ -53,6 +53,7 @@ def _read(uid):
         if not isinstance(doc,dict) or doc.get("version")!=1:
             raise ValueError("invalid")
         doc.setdefault("rules",{})
+        doc.setdefault("ownerNames",{})
         if not isinstance(doc["rules"],dict):
             raise ValueError("rules")
         return doc,response["ETag"]
@@ -122,6 +123,25 @@ def _validate(section,key,value):
         if not isinstance(name,str) or len(name)>90 or not isinstance(value.get("dismissed",False),bool) or not isinstance(value.get("confirmed",False),bool):
             raise HTTPException(422,"Invalid recurring item changes.")
         return {"name":name.strip(),"dismissed":value.get("dismissed",False),"confirmed":value.get("confirmed",False)}
+    if section=="ownerNames":
+        if key!="primary":
+            raise HTTPException(422,"Invalid owner-name preference.")
+        if value is None:
+            return None
+        if not isinstance(value,dict) or set(value)!={"names"} or not isinstance(value["names"],list):
+            raise HTTPException(422,"Enter your name or clear this preference.")
+        names=[]
+        for name in value["names"]:
+            if not isinstance(name,str):
+                raise HTTPException(422,"Enter a valid name.")
+            normalized=re.sub(r'\s+',' ',name.strip())
+            if not 3<=len(normalized)<=100 or not re.fullmatch(r"[A-Za-z]+(?: [A-Za-z]+){1,3}",normalized):
+                raise HTTPException(422,"Enter names using alphabetic words.")
+            if normalized.casefold() not in {n.casefold() for n in names}:
+                names.append(normalized)
+        if not 1<=len(names)<=4:
+            raise HTTPException(422,"Enter between one and four names.")
+        return {"names":names}
     if section=="rules":
         if not isinstance(key,str) or not 2 <= len(key) <= 90 or any(ord(c)<32 for c in key):
             raise HTTPException(422,"Choose a valid merchant or transaction description.")
@@ -167,7 +187,7 @@ def update_preferences(body:Change,request:Request,response:Response):
     doc,etag=_read(uid)
     if body.revision!=doc.get("revision",0):
         raise HTTPException(409,"These settings changed; reload before saving.")
-    if body.section not in ("budgets","duplicates","recurring","transactionMeta","rules"):
+    if body.section not in ("budgets","duplicates","recurring","transactionMeta","rules","ownerNames"):
         raise HTTPException(422,"Unknown Finance settings section.")
     value=_validate(body.section,body.key,body.value)
     new=copy.deepcopy(doc)
