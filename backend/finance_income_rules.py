@@ -55,7 +55,8 @@ def annotate_paychecks(records):
                     ('matched_internal_transfer','investment_transfer','possible_transfer','card_payment'))):
             continue
         row['_paycheckEmployer']=employer
-        by_employer[employer.casefold()].append((row,value))
+        by_employer[(str(row.get('accountKey') or ''), employer.casefold())].append((row,value))
+    # Do not infer a payroll pattern from transactions on different bank accounts.
     for entries in by_employer.values():
         ordered=sorted(entries,key=lambda item:item[0]['posted'])
         qualifying=set()
@@ -70,7 +71,7 @@ def annotate_paychecks(records):
             employer=row.pop('_paycheckEmployer')
             if row.get('categorySource') in ('user','user_rule'):
                 if row.get('category')=='income':
-                    row['signals']=sorted(set(row.get('signals',[])+['paycheck']))
+                    row['signals']=sorted(set(row.get('signals',[])+['paycheck', 'possible_direct_deposit']))
                 continue
             explicit=bool(PAY_DESCRIPTOR.search(row.get('description') or ''))
             is_company=bool(COMPANY.search(employer))
