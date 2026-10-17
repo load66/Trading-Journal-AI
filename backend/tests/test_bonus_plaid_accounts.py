@@ -605,3 +605,21 @@ def test_plaid_missing_history_status_is_not_certified():
 def test_plaid_history_loading_exponential_schedule():
     assert [adapter._retry_at(NOW, i) - NOW for i in range(1, 6)] == [
         3600, 3 * 3600, 6 * 3600, adapter.DAY, adapter.DAY]
+
+
+def test_plaid_hidden_profile_is_backward_compatible(monkeypatch):
+    key=adapter._account_key("plaid-item","example")
+    doc=adapter._default()
+    snapshot={"accounts":[{"key":key}],"transactions":{}}
+    ledger={"items":{}}
+    monkeypatch.setattr(adapter,"_editable",lambda request:("owner",ledger,doc,"etag",snapshot))
+    monkeypatch.setattr(adapter,"_write",lambda *a,**kw:"tag")
+    monkeypatch.setattr(adapter,"_public",lambda *a:doc)
+    model={"kind":"checking","order":0,"balanceMode":"asset"}
+    payload=adapter.AccountProfilesBody(profiles={key:{**model,"hidden":True}})
+    adapter.profiles(payload,None)
+    assert doc["accountProfiles"][key]["hidden"] is True
+    adapter.profiles(adapter.AccountProfilesBody(profiles={key:model}),None)
+    assert doc["accountProfiles"][key]["hidden"] is True
+    adapter.profiles(adapter.AccountProfilesBody(profiles={key:{**model,"hidden":False}}),None)
+    assert doc["accountProfiles"][key]["hidden"] is False
