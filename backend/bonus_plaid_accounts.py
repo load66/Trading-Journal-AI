@@ -27,6 +27,7 @@ from finance_history_archive import archive_old, read_month, archive_key, purge_
 from finance_account_management import (AccountAction, syncing, public_accounts, merge_profiles,
     action as account_action, purge_history, filter_after_removal)
 from finance_ai_categories import classify_unknown, cache_key
+from finance_plaid_enrichment import enrich as plaid_enrich
 
 BACKGROUND_LOGGER = logging.getLogger(__name__)
 
@@ -238,7 +239,7 @@ def _transaction(row, now):
             "pending": pending, "kind": classify(amount, description),
             "currency": clean(row.get("iso_currency_code") or
                               row.get("unofficial_currency_code"), 8),
-            "observedAt": now, "lastObservedAt": now}
+            "observedAt": now, "lastObservedAt": now, **plaid_enrich(row)}
 
 
 def _sync_item(token, current_cursor):
