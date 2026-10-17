@@ -502,7 +502,8 @@ def enrich_transactions(state, result):
         if (row.get('pending') or row.get('categorySource') in ('user', 'user_rule')
                 or Decimal(row['amount']) == 0
                 or row.get('kind') in ('possible_bonus', 'possible_reversal')
-                or row.get('category') in ('income','bonus','refund','verification')
+                or (row.get('category') == 'income' and 'paycheck' in row.get('signals', []))
+                or row.get('category') in ('bonus','refund','verification')
                 or not isinstance(row.get('posted'), (int, float))):
             continue
         eligible.append((account, raw_id, row))
@@ -576,7 +577,7 @@ def classify(amount, description):
         return 'withdrawal'
     if re.search(r'payroll|salary|refund|interest|dividend|transfer|cashback|cash back', text):
         return 'other_deposit'
-    if re.search(r'\bbonus\b|promotional (?:credit|payment|reward)', text):
+    if re.search(r'\bbonus\b|promotional (?:credit|payment|reward)|promotion(?:al)?\s+reward|sign[- ]?up\s+reward', text):
         return 'possible_bonus'
     return 'deposit'
 
