@@ -14,7 +14,7 @@ import uuid
 
 import httpx
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from bonus_backups import owner, store
 from bonus_simplefin import cipher
@@ -227,8 +227,19 @@ class Exchange(BaseModel):
     publicToken: str = Field(min_length=8, max_length=1000, repr=False)
 
 
+def _initial_read_only_sync(uid):
+    """Import new Item accounts and history on server immediately after exchange."""
+    try:
+        from bonus_plaid_accounts import sync_owner
+        sync_owner(uid)
+    except Exception as exc:
+        # Only error class; no account data or token in logs.
+        import logging
+        logging.getLogger(__name__).warning("plaid_first_sync class=%s", type(exc).__name__)
+
+
 @router.post("/exchange", dependencies=[Depends(_private)])
-def exchange(body: Exchange, request: Request):
+def exchange(body: Exchange, request: Request, background_tasks: BackgroundTasks):
     uid = owner(request)
     doc, tag = _ledger()
     hold = doc["holds"].get(body.session)
@@ -261,7 +272,10 @@ def exchange(body: Exchange, request: Request):
         del doc["holds"][body.session]
         try:
             _write(doc, tag)
-            return {"connected": True, **_display(doc, uid)}
+            # Commit the lifetime Item exactly once BEFORE triggering the
+            # separate, read-only account/transaction import.
+            background_tasks.add_task(_initial_read_only_sync, uid)
+            return {"connected": True, "initialSync": "started", **_display(doc, uid)}
         except HTTPException as exc:
             if exc.status_code != 409:
                 raise
