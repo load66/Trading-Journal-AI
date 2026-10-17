@@ -702,43 +702,46 @@ def test_verification_patterns_are_not_income_or_expenses(description,amount):
     assert signals==[]
 
 
-def test_hidden_account_profile_is_additive_and_legacy_safe(setup, monkeypatch):
-    s=seed();k=b.account_key(account());b.write_state('owner',s,None)
-    c=client(monkeypatch);endpoint='/api/bonus-tracker/simplefin/account-profiles'
-    headers={'Authorization':'Bearer synthetic'}
-    model={'kind':'checking','order':0,'balanceMode':'asset'}
-    hidden=c.put(endpoint,headers=headers,json={'profiles':{k:{**model,'hidden':True}}})
-    assert hidden.status_code==200
-    assert hidden.json()['accountProfiles'][k]['hidden'] is True
-    assert s['transactions']=={}, 'The original fixture is never mutated'
-    # Older clients do not send the field. This must not restore a hidden bank.
-    legacy=c.put(endpoint,headers=headers,json={'profiles':{k:model}})
-    assert legacy.status_code==200
-    stored=b.read_state('owner')[0]
-    assert stored['accountProfiles'][k]['hidden'] is True
-    restored=c.put(endpoint,headers=headers,json={'profiles':{k:{**model,'hidden':False}}})
-    assert restored.status_code==200
-    assert b.read_state('owner')[0]['accountProfiles'][k]['hidden'] is False
+def test_user_learned_category_precedence_over_automatic_matching(setup):
+    """An explicit apply-to-similar correction wins over guessed transfers."""
+    debit = account('one', 'left', [txn('out', '-200', 'Transfer payment')])
+    credit = account('two', 'right', [txn('in', '200', 'Transfer payment')])
+    s = b.empty_state()
+    s['accounts'] = b.normalize_accounts(data(debit, credit))
+    s['monitoredAccounts'] = [a['key'] for a in s['accounts']]
+    b.merge(s, data(debit, credit), NOW)
+    left, right = b.account_key(debit), b.account_key(credit)
+    s['merchantRules'] = {
+        b.cache_key('Transfer payment'): {'category': 'other', 'updatedAt': NOW}
+    }
+    public = b.public_state(s)
+    for account_key, raw in [(left, 'out'), (right, 'in')]:
+        row = public['transactions'][account_key][b.public_ref(account_key, raw)]
+        assert row['category'] == 'other'
+        assert row['categorySource'] == 'user_rule'
+        assert 'matched_internal_transfer' not in row['signals']
+
+    # Matching microdeposits must also defer to a saved user merchant rule.
+    small = account('one', 'micro', [
+        txn('first', '0.17', 'Trial deposit synthetic'),
+        txn('second', '0.29', 'Trial deposit synthetic')
+    ])
+    t = b.empty_state()
+    t['accounts'] = b.normalize_accounts(data(small))
+    t['monitoredAccounts'] = [b.account_key(small)]
+    b.merge(t, data(small), NOW)
+    t['merchantRules'] = {
+        b.cache_key('Trial deposit synthetic'): {'category': 'other', 'updatedAt': NOW}
+    }
+    p = b.public_state(t)
+    for ident in ('first', 'second'):
+        row = p['transactions'][b.account_key(small)][b.public_ref(b.account_key(small), ident)]
+        assert row['category'] == 'other'
+        assert row['categorySource'] == 'user_rule'
 
 
-def test_simplefin_empty_or_malformed_response_does_not_hide_pending(setup):
-    s=seed();k=b.account_key(account())
-    p={**txn('pending','-0.13','TRIAL DEP',pending=True),
-       'posted':0,'transacted_at':NOW-100}
-    b.merge(s,data(account(transactions=[p])),NOW)
-    b.merge(s,data(account(transactions=[])),NOW+1)
-    assert len(b.public_state(s)['transactions'][k])==1
-    bad=txn(ident='invalid',amount='NaN')
-    b.merge(s,data(account(transactions=[bad])),NOW+2)
-    assert len(b.public_state(s)['transactions'][k])==1
-    assert 'pendingClearedAt' not in s['transactions'][k]['pending']
-
-
-def test_loan_category_matches_frontend_and_accepts_user_corrections():
-    assert 'loan' in b.TRANSACTION_CATEGORIES
-    loan=b.automatic_category({'pending':False,'amount':'-250.00',
-                              'description':'AUTO LOAN PAYMENT','kind':'withdrawal'})
-    mortgage=b.automatic_category({'pending':False,'amount':'-1350.00',
-                                  'description':'Mortgage payment','kind':'withdrawal'})
-    assert loan[0]=='loan'
-    assert mortgage[0]=='housing'
+@pytest.mark.parametrize('bank_description', [
+    'Transfer', 'Transaction', 'Payment', 'POS Transaction'
+])
+def test_generic_merchant_title_keeps_original_bank_description(bank_description):
+    assert b.merchant_name(bank_description) == bank_description

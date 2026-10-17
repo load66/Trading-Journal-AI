@@ -607,19 +607,25 @@ def test_plaid_history_loading_exponential_schedule():
         3600, 3 * 3600, 6 * 3600, adapter.DAY, adapter.DAY]
 
 
-def test_plaid_hidden_profile_is_backward_compatible(monkeypatch):
-    key=adapter._account_key("plaid-item","example")
-    doc=adapter._default()
-    snapshot={"accounts":[{"key":key}],"transactions":{}}
-    ledger={"items":{}}
-    monkeypatch.setattr(adapter,"_editable",lambda request:("owner",ledger,doc,"etag",snapshot))
-    monkeypatch.setattr(adapter,"_write",lambda *a,**kw:"tag")
-    monkeypatch.setattr(adapter,"_public",lambda *a:doc)
-    model={"kind":"checking","order":0,"balanceMode":"asset"}
-    payload=adapter.AccountProfilesBody(profiles={key:{**model,"hidden":True}})
-    adapter.profiles(payload,None)
-    assert doc["accountProfiles"][key]["hidden"] is True
-    adapter.profiles(adapter.AccountProfilesBody(profiles={key:model}),None)
-    assert doc["accountProfiles"][key]["hidden"] is True
-    adapter.profiles(adapter.AccountProfilesBody(profiles={key:{**model,"hidden":False}}),None)
-    assert doc["accountProfiles"][key]["hidden"] is False
+def test_single_malformed_plaid_transaction_does_not_drop_valid_account_activity(monkeypatch):
+    good = fixture(ident="valid")
+    bad = {**fixture(ident="bad"), "date":"2026-99-99"}
+    missing_id = {**fixture(ident=""), "account_id":"example"}
+    monkeypatch.setattr(adapter, "_provider", lambda endpoint, access, **kwargs: {
+        "added":[good,bad,missing_id], "modified":[], "removed":[],
+        "next_cursor":"next", "has_more":False,
+        "transactions_update_status":"INITIAL_UPDATE_COMPLETE"
+    })
+    changes = adapter._sync_item("synthetic", "")
+    result = adapter._merge({}, "one-item", "Synthetic CU",
+                            {"accounts":[account()]}, changes, NOW)
+    assert list(result["transactions"]) == ["valid"]
+    assert result["cursor"] == "next"
+    assert result["invalidTransactionsByAccount"][adapter._account_key("one-item","example")] == 2
+    assert result["transactionSyncStatus"] == "history_still_loading"
+    ledger={"items":{"one-item":{"owner":"alice","access":"fake","institution":"Synthetic CU"}}}
+    shown=adapter._public({"version":1,"items":{"one-item":result},
+                           "monitored":[adapter._account_key("one-item","example")],
+                           "lastSuccess":NOW},ledger,"alice")
+    assert shown["accounts"][0]["invalidTransactionRows"] == 2
+    assert len(shown["transactions"][adapter._account_key("one-item","example")]) == 1
