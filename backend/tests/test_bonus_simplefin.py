@@ -700,3 +700,41 @@ def test_verification_patterns_are_not_income_or_expenses(description,amount):
     assert category=='verification'
     assert confidence=='high'
     assert signals==[]
+
+
+def test_user_learned_category_precedence_over_automatic_matching(setup):
+    """An explicit apply-to-similar correction wins over guessed transfers."""
+    debit = account('one', 'left', [txn('out', '-200', 'Transfer payment')])
+    credit = account('two', 'right', [txn('in', '200', 'Transfer payment')])
+    s = b.empty_state()
+    s['accounts'] = b.normalize_accounts(data(debit, credit))
+    s['monitoredAccounts'] = [a['key'] for a in s['accounts']]
+    b.merge(s, data(debit, credit), NOW)
+    left, right = b.account_key(debit), b.account_key(credit)
+    s['merchantRules'] = {
+        b.cache_key('Transfer payment'): {'category': 'other', 'updatedAt': NOW}
+    }
+    public = b.public_state(s)
+    for account_key, raw in [(left, 'out'), (right, 'in')]:
+        row = public['transactions'][account_key][b.public_ref(account_key, raw)]
+        assert row['category'] == 'other'
+        assert row['categorySource'] == 'user_rule'
+        assert 'matched_internal_transfer' not in row['signals']
+
+    # Matching microdeposits must also defer to a saved user merchant rule.
+    small = account('one', 'micro', [
+        txn('first', '0.17', 'Trial deposit synthetic'),
+        txn('second', '0.29', 'Trial deposit synthetic')
+    ])
+    t = b.empty_state()
+    t['accounts'] = b.normalize_accounts(data(small))
+    t['monitoredAccounts'] = [b.account_key(small)]
+    b.merge(t, data(small), NOW)
+    t['merchantRules'] = {
+        b.cache_key('Trial deposit synthetic'): {'category': 'other', 'updatedAt': NOW}
+    }
+    p = b.public_state(t)
+    for ident in ('first', 'second'):
+        row = p['transactions'][b.account_key(small)][b.public_ref(b.account_key(small), ident)]
+        assert row['category'] == 'other'
+        assert row['categorySource'] == 'user_rule'
