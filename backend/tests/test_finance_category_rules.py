@@ -44,7 +44,21 @@ from bonus_simplefin import TRANSACTION_CATEGORIES, TransactionReviewBody
     ("Hotel", "-112.00", "travel"),
     ("Service charge", "-3.00", "fees"),
     ("Transaction", "-19.83", "unreviewed"),
-    ("Venmo to someone", "-18.25", "unreviewed")
+    ("Venmo to someone", "-18.25", "unreviewed"),
+    ("To Brokerage", "-2000", "transfer"),
+    ("To Citibank", "-251", "transfer"),
+    ("From Lafayette Fcu", "500", "transfer"),
+    ("To Personal Checking", "-7379.04", "transfer"),
+    ("From Personal Savings", "7379.04", "transfer"),
+    ("To Paypal", "-428.17", "transfer"),
+    ("U.S. Bank", "-820.77", "transfer"),
+    ("Capital One", "-200", "transfer"),
+    ("T-Mobile", "-157.62", "utilities"),
+    ("Apple", "-249.52", "shopping"),
+    ("Apple.com/Bill", "-4.99", "subscription"),
+    ("iCloud", "-2.99", "subscription"),
+    ("Verizon Wireless", "-90.11", "utilities"),
+    ("Target", "-81.00", "shopping")
 ])
 def test_classify_examples(description, amount, expected):
     category, confidence, signals = category_for(description, amount)
@@ -118,3 +132,18 @@ def test_diverse_200_transaction_month_offline_coverage():
     assert len(fixture)==200
     unknown=sum(category_for(r['description'],r['amount'])[0]=='unreviewed' for r in fixture)
     assert unknown==10  # 5%, fixture-specific; never presented as a production guarantee.
+
+
+def test_provisional_large_money_moves_do_not_become_expenses_or_groq_candidates():
+    for label, amount in [('To Unrecognized Wallet', '-2000'),('Citibank transfer reference', '-1000'),('From Unknown Account', '-500')]:
+        category, confidence, signals = category_for(label, amount)
+        assert category == 'unreviewed'
+        assert 'possible_transfer' in signals
+
+
+def test_exact_financial_labels_are_not_false_positive_shopping():
+    assert category_for('To Starbucks', '-12.37')[0] == 'unreviewed'
+    assert category_for('Capital One Cafe purchase', '-22.00')[0] == 'unreviewed'
+    assert category_for('Apple', '-249.52')[0] == 'shopping'
+    assert 'investment_transfer' in category_for('To Brokerage', '-2000')[2]
+    assert 'card_payment' in category_for('U.S. Bank', '-820.77')[2]
