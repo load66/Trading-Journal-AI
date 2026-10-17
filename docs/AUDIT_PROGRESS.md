@@ -6,6 +6,12 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
+- Plaid fast sync backend draft PR #228 remains unmerged: existing-Item-only ES256 key verification, strict non-billable allowlist, persisted per-call 24/day cap, 3-hour Item deadline and 5-minute on-demand guard
+- Additional backend work committed: owner-authorized nonblocking sync-now endpoint and global-lease single-Item sync; manual reviews and other Item cursor/deadline data are preserved in synthetic regression tests
+- Backend test CI 39076566800 PASS and 39076624842 PASS; build and latest checkpoint verification pending; no live provider calls in tests
+- Blocked Categories v2 frontend PR #157: Railway exact-commit success for backend e6d9ce72a130a882ef16e493fa80884b4a6fb4eb not verified
+- Next step: implement verified public Plaid webhook with secure burst coalescing and existing-Item webhook registration; finish sync-now tests, frontend, and deployment verification. No merge of draft PR until full green CI.
+
 - In progress: Plaid fast sync backend PR https://github.com/load66/Trading-Journal-AI/pull/228 (draft, not deployed)
 - Implemented on branch: ES256 webhook JWT/body verifier and short-lived key cache, exact non-billable allowlist, pure 3-hour polling and 5-minute freshness policy, rolling 24-call budget, persistent Trial-ledger call reservations, 3-hour per-Item deadline
 - Regression status: verifier test failed before implementation on CI 39075832179 and passed after on CI 39076021727; policy suite passed CI 39076148049; integrated reservation/deadline suite awaiting final CI
