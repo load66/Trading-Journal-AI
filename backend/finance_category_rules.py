@@ -13,37 +13,37 @@ CATEGORIES = frozenset((
     'travel','subscription','transfer','refund','bonus','other'
 ))
 VERIFICATION = re.compile(
-    r'(?<![a-z])(?:acct\\s*verify|acctverify|verification|verify|trial\\s*dep|'
-    r'micro\\s*dep|test\\s*dep|rtp\\s*test|rtptststtl|rtp\\s*tst\\s*sttl|'
+    r'(?<![a-z])(?:acct\s*verify|acctverify|verification|verify|trial\s*dep|'
+    r'micro\s*dep|test\s*dep|rtp\s*test|rtptststtl|rtp\s*tst\s*sttl|'
     r'prenote|validation)(?![a-z])', re.I
 )
-PAYROLL = re.compile(r'\\b(?:payroll|salary|wages|direct\\s*dep(?:osit)?|paycheck)\\b', re.I)
-REFUND = re.compile(r'\\b(?:refund|return(?:ed)?\\s+(?:purchase|item|payment)|reimbursement|merchant credit)\\b', re.I)
-INTEREST = re.compile(r'\\b(?:interest (?:paid|earned|credit)|dividends?|apy interest)\\b', re.I)
-HOUSING = re.compile(r'\\b(?:mortgage|home loan|rent|landlord|apartment lease)\\b', re.I)
-LOAN = re.compile(r'\\b(?:student loan|auto loan|vehicle loan|personal loan|loan payment)\\b', re.I)
+PAYROLL = re.compile(r'\b(?:payroll|salary|wages|direct\s*dep(?:osit)?|paycheck)\b', re.I)
+REFUND = re.compile(r'\b(?:refund|return(?:ed)?\s+(?:purchase|item|payment)|reimbursement|merchant credit)\b', re.I)
+INTEREST = re.compile(r'\b(?:interest (?:paid|earned|credit)|dividends?|apy interest)\b', re.I)
+HOUSING = re.compile(r'\b(?:mortgage|home loan|rent|landlord|apartment lease)\b', re.I)
+LOAN = re.compile(r'\b(?:student loan|auto loan|vehicle loan|personal loan|loan payment)\b', re.I)
 TRANSFER = re.compile(
-    r'\\b(?:transfer|xfer|pmt|autopay|epayment|credit card payment|'
-    r'payment thank you|payment to card|credit card autopay|x money transfer)\\b',re.I
+    r'\b(?:transfer|xfer|pmt|autopay|epayment|credit card payment|'
+    r'payment thank you|payment to card|credit card autopay|x money transfer)\b',re.I
 )
-SELF_P2P = re.compile(r'\\b(?:zelle|venmo|cash app|cashapp|p2p)\\b.*\\b(?:self|my own|myself)\\b',re.I)
+SELF_P2P = re.compile(r'\b(?:zelle|venmo|cash app|cashapp|p2p)\b.*\b(?:self|my own|myself)\b',re.I)
 MERCHANTS = (
-    ('groceries', r'\\b(?:walmart|aldi|kroger|whole foods|safeway|trader joe|'
-                  r'costco|sam.?s club|grocery|supermarket|publix|hy vee)\\b'),
-    ('dining', r'\\b(?:starbucks|mcdonald|chipotle|doordash|ubereats|grubhub|'
-               r'restaurant|coffee shop|panera|dunkin|taco bell)\\b'),
-    ('transportation', r'\\b(?:shell oil|exxon|chevron|quiktrip|casey.?s|'
-                       r'gas station|fuel|parking|toll|lyft|uber trip)\\b'),
-    ('subscription', r'\\b(?:netflix|spotify|youtube premium|hulu|apple subscription|'
-                     r'disney plus|amazon prime membership)\\b'),
-    ('utilities', r'\\b(?:liberty utilities|electric company|water utility|'
-                  r'internet provider|utility bill|cellular bill|at&t wireless)\\b'),
-    ('shopping', r'\\b(?:amazon marketplace|amazon retail|best buy|target|ebay|etsy)\\b'),
-    ('travel', r'\\b(?:airline|delta air|united air|southwest air|hotel|airbnb|rental car)\\b'),
-    ('health', r'\\b(?:pharmacy|walgreens|cvs|hospital|doctor|dental|clinic|medical)\\b'),
-    ('entertainment',r'\\b(?:movie theater|cinema|amc theatre|concert|ticketmaster)\\b'),
-    ('fees',r'\\b(?:overdraft fee|maintenance fee|service charge|atm fee|late fee)\\b'),
-    ('taxes',r'\\b(?:irs payment|state tax|property tax|estimated tax)\\b'),
+    ('groceries', r'\b(?:walmart|aldi|kroger|whole foods|safeway|trader joe|'
+                  r'costco|sam.?s club|grocery|supermarket|publix|hy vee)\b'),
+    ('dining', r'\b(?:starbucks|mcdonald|chipotle|doordash|ubereats|grubhub|'
+               r'restaurant|coffee shop|panera|dunkin|taco bell)\b'),
+    ('transportation', r'\b(?:shell oil|exxon|chevron|quiktrip|casey.?s|'
+                       r'gas station|fuel|parking|toll|lyft|uber trip)\b'),
+    ('subscription', r'\b(?:netflix|spotify|youtube premium|hulu|apple subscription|'
+                     r'disney plus|amazon prime membership)\b'),
+    ('utilities', r'\b(?:liberty utilities|electric company|water utility|'
+                  r'internet provider|utility bill|cellular bill|at&t wireless)\b'),
+    ('shopping', r'\b(?:amazon marketplace|amazon retail|best buy|target|ebay|etsy)\b'),
+    ('travel', r'\b(?:airline|delta air|united air|southwest air|hotel|airbnb|rental car)\b'),
+    ('health', r'\b(?:pharmacy|walgreens|cvs|hospital|doctor|dental|clinic|medical)\b'),
+    ('entertainment',r'\b(?:movie theater|cinema|amc theatre|concert|ticketmaster)\b'),
+    ('fees',r'\b(?:overdraft fee|maintenance fee|service charge|atm fee|late fee)\b'),
+    ('taxes',r'\b(?:irs payment|state tax|property tax|estimated tax)\b'),
 )
 _COMPILED_MERCHANTS = tuple((cat,re.compile(pattern,re.I)) for cat,pattern in MERCHANTS)
 
@@ -105,7 +105,7 @@ def micro_deposit_refs(records):
             continue
         account = row.get('accountKey')
         ident = row.get('id')
-        source = re.sub(r'\\s+',' ',str(row.get('description') or '').strip().lower())
+        source = re.sub(r'\s+',' ',str(row.get('description') or '').strip().lower())
         if not account or not ident or not source:
             continue
         grouped[(str(account),source)].append((timestamp,str(ident)))
