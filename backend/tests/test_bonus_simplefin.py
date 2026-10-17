@@ -1204,3 +1204,121 @@ def test_empty_first_sync_is_waiting_without_claiming_posted_transactions(setup,
     assert repeat.status_code==200 and repeat.json()['syncStatus']=='waiting'
     assert len(calls)==1
     assert len(b.read_state('owner')[0]['requestAttempts'])==1
+
+
+def test_scheduled_combined_import_four_new_banks_in_single_automatic_call(setup,monkeypatch):
+    s=seed()
+    old_key=b.account_key(account())
+    s['monitoredAccounts']=[old_key]
+    s['transactions']={old_key:{'prior':{'id':'prior','posted':NOW-200,
+                          'amount':'-1.50','description':'Synthetic prior','pending':False}}}
+    s['accountProfiles']={old_key:{'kind':'checking','balanceMode':'asset'}}
+    b.write_state('owner',s,None)
+    accounts=[account()]+[
+        account(f'conn-{i}',f'new-{i}',
+            [txn(f'post-{i}',f'{i*10}.01','Synthetic posted activity')])
+        for i in range(1,5)]
+    requests=[]
+    def provider(access,selected=None,balances=False):
+        requests.append((selected,balances))
+        assert access==ACCESS and selected is None and balances is False
+        return {'accounts':accounts,'connections':[
+            {'conn_id':'one','name':'Synthetic Original'}]+[
+            {'conn_id':f'conn-{i}','name':f'Synthetic {i}'}
+            for i in range(1,5)],'errlist':[]}
+    monkeypatch.setattr(b,'get_data',provider)
+    first=b.auto_refresh('owner')
+    assert first['autoRefreshStatus']=='complete'
+    assert len(first['accounts'])==5
+    assert len(first['recentDiscoveredAccounts'])==4
+    assert len(first['monitoredAccounts'])==5
+    assert first['budgetRemaining']==23
+    assert len(requests)==1
+    for i in range(1,5):
+        key=b.account_key(accounts[i])
+        assert key in first['monitoredAccounts']
+        assert first['transactions'][key][f'post-{i}']['amount']==f'{i*10}.01'
+    assert b.read_state('owner')[0]['transactions'][old_key]['prior']['amount']=='-1.50'
+    again=b.auto_refresh('owner')
+    assert len(requests)==1 and again['budgetRemaining']==23
+    assert again['recentDiscoveredAccounts']==first['recentDiscoveredAccounts']
+    assert b.read_state('owner')[0]['mappings']==s['mappings']
+    assert b.read_state('owner')[0]['accountProfiles'][old_key]==s['accountProfiles'][old_key]
+
+
+def test_scheduled_import_never_overrides_opt_out_and_zero_budget(setup,monkeypatch):
+    existing=account()
+    disabled=account('two','disabled')
+    new=account('three','fresh',[txn('posted','-19.07','Synthetic purchase')])
+    s=seed()
+    excluded=b.account_key(disabled)
+    s['accounts'].extend(b.normalize_accounts({
+        'accounts':[disabled],'connections':[{'conn_id':'two','name':'Synthetic Bank'}]}))
+    s['accountProfiles']={excluded:{'syncEnabled':False,'kind':'checking'}}
+    s['accountExclusions']={excluded:{'removedAt':NOW-86400}}
+    b.write_state('owner',s,None)
+    calls=[]
+    def provider(access,selected=None,balances=False):
+        calls.append(1)
+        return {'accounts':[existing,disabled,new],'connections':[
+           {'conn_id':'one','name':'Synthetic'}, {'conn_id':'two','name':'Disabled'},
+           {'conn_id':'three','name':'New'}],'errlist':[]}
+    monkeypatch.setattr(b,'get_data',provider)
+    out=b.auto_refresh('owner')
+    assert len(calls)==1
+    assert excluded not in out['monitoredAccounts']
+    assert excluded not in out['transactions']
+    assert b.account_key(new) in out['monitoredAccounts']
+    saved=b.read_state('owner')[0]
+    assert saved['accountProfiles'][excluded]==s['accountProfiles'][excluded]
+    assert saved['accountExclusions'][excluded]==s['accountExclusions'][excluded]
+    later,tag=b.read_state('owner')
+    later['nextAutoRefreshAt']=0
+    later['requestAttempts']=[NOW-300]*24
+    prior=copy.deepcopy(later['transactions'])
+    b.write_state('owner',later,tag)
+    monkeypatch.setattr(b,'get_data',lambda *_a,**_kw:pytest.fail('Budget-exhausted automatic sync must not call provider'))
+    limited=b.auto_refresh('owner')
+    assert limited['autoRefreshStatus']=='limit'
+    assert limited['budgetRemaining']==0
+    assert b.read_state('owner')[0]['transactions']==prior
+
+
+def test_scheduled_empty_or_failed_provider_preserves_saved_state(setup,monkeypatch):
+    state=seed()
+    key=b.account_key(account())
+    state['monitoredAccounts']=[key]
+    state['transactions']={key:{'historical':{'id':'historical','amount':'-5.37',
+               'posted':NOW-90,'description':'Synthetic store','pending':False}}}
+    state['balanceHistory']={key:[{'at':NOW-600,'observedAt':NOW-600,
+                                   'balance':'50.00','currency':'USD'}]}
+    b.write_state('owner',state,None)
+    before=b.read_state('owner')[0]
+    monkeypatch.setattr(b,'get_data',lambda *_a,**_kw:{
+        'accounts':[], 'connections':[], 'errlist':[]})
+    empty=b.auto_refresh('owner')
+    assert empty['autoRefreshStatus']=='no_accounts'
+    after=b.read_state('owner')[0]
+    for name in ('accounts','mappings','transactions','accountProfiles','balanceHistory'):
+        assert after[name]==before[name]
+    after['nextAutoRefreshAt']=0
+    b.write_state('owner',after,b.read_state('owner')[1])
+    def denied(*_a,**_kw):raise HTTPException(502,'Synthetic provider error')
+    monkeypatch.setattr(b,'get_data',denied)
+    failed=b.auto_refresh('owner')
+    assert failed['autoRefreshStatus']=='error'
+    after_failed=b.read_state('owner')[0]
+    for name in ('accounts','mappings','transactions','accountProfiles','balanceHistory'):
+        assert after_failed[name]==before[name]
+
+
+def test_combined_hourly_get_data_omits_account_filter(monkeypatch):
+    queries=[]
+    def network(*_args,**kwargs):
+        queries.extend(kwargs['params'])
+        return json.dumps({'accounts':[],'connections':[],'errlist':[]})
+    monkeypatch.setattr(b,'network',network)
+    b.get_data(ACCESS,selected=None)
+    assert ('balances-only','1') not in queries
+    assert not any(key=='account' for key,_ in queries)
+    assert ('pending','1') in queries
