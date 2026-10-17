@@ -42,3 +42,29 @@ def test_invalid_budget_records_fail_closed():
         reserve_call(["invalid"], NOW)
     with pytest.raises(ValueError):
         reserve_call([NOW + 100], NOW)
+
+def test_cap_reservation_is_atomic_on_existing_item_ledger(monkeypatch):
+    from copy import deepcopy
+    from fastapi import HTTPException
+    import bonus_plaid_accounts as adapter
+    ledger = {"items": {"opaque-item": {
+        "owner": "synthetic-owner", "access": "synthetic-access",
+    }}}
+    monkeypatch.setattr(adapter.quota, "_ready", lambda: True)
+    monkeypatch.setattr(adapter.quota, "_ledger", lambda: (deepcopy(ledger), "tag"))
+    def write(doc, tag):
+        ledger.clear()
+        ledger.update(deepcopy(doc))
+        return "tag"
+    monkeypatch.setattr(adapter.quota, "_write", write)
+    monkeypatch.setattr(adapter.time, "time", lambda: NOW)
+    for _ in range(MAX_DAILY_CALLS):
+        adapter._reserve_transaction_call("synthetic-access")
+    assert len(ledger["items"]["opaque-item"]["transactionSyncCalls"]) == MAX_DAILY_CALLS
+    with pytest.raises(HTTPException) as err:
+        adapter._reserve_transaction_call("synthetic-access")
+    assert err.value.status_code == 429
+    assert len(ledger["items"]["opaque-item"]["transactionSyncCalls"]) == MAX_DAILY_CALLS
+    with pytest.raises(HTTPException) as unknown:
+        adapter._reserve_transaction_call("unrecognized")
+    assert unknown.value.status_code == 403
