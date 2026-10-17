@@ -296,7 +296,12 @@ def merchant_name(description):
     text = re.sub(r'\b(?:pos|debit|credit|purchase|payment|ach|card|online|pending)\b', ' ', description, flags=re.I)
     text = re.sub(r'[#*]?\d{4,}', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip(' -_/')
-    return clean(text.title(), 80) or 'Transaction'
+    title = clean(text.title(), 80)
+    # Avoid generic or blank merchant headings when the bank provided more
+    # useful original wording; do not lose it to keyword cleanup.
+    if not title or title.lower() in ('transaction', 'transfer', 'payment', 'bank transaction'):
+        return clean(description, 80) or 'Transaction'
+    return title
 
 
 def automatic_category(row):
