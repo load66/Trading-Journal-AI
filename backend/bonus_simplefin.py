@@ -321,6 +321,10 @@ def enrich_transactions(state, result):
                 row['categorySource'] = 'user'
             else:
                 row['categorySource'] = 'automatic'
+                learned = state.get('merchantRules', {}).get(cache_key(row.get('description', '')))
+                if isinstance(learned, dict) and learned.get('category') in TRANSACTION_CATEGORIES:
+                    category, confidence = learned['category'], 'confirmed'
+                    row['categorySource'] = 'user_rule'
                 if category == 'unreviewed':
                     suggestion = state.get('financeAICache', {}).get(cache_key(row.get('description', '')))
                     if (isinstance(suggestion, dict) and
@@ -656,6 +660,7 @@ class TransactionReviewBody(BaseModel):
     account: str = Field(pattern=r'^[0-9a-f]{64}$')
     transaction: str = Field(pattern=r'^[0-9a-f]{64}$')
     category: str
+    applySimilar: bool = False
 
     @field_validator('category')
     @classmethod
@@ -880,6 +885,10 @@ def transaction_review(body: TransactionReviewBody, request: Request):
     else:
         s.setdefault('transactionReviews', {}).setdefault(body.account, {})[raw] = {
             'category': body.category, 'reviewedAt': int(time.time())}
+        if body.applySimilar:
+            name = s['transactions'][body.account][raw].get('description', '')
+            s.setdefault('merchantRules', {})[cache_key(name)] = {
+                'category': body.category, 'updatedAt': int(time.time())}
     return finish(uid, s, tag)
 
 
