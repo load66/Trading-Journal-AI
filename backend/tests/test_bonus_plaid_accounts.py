@@ -739,3 +739,40 @@ def test_plaid_exact_replay_is_idempotent_with_history_and_account_profiles():
         {"accounts":[account()]},None,NOW)
     assert second["accountProfiles"] == changed["accountProfiles"]
     assert second["transactions"] == changed["transactions"]
+
+
+def test_missing_plaid_account_retains_history_reviews_and_can_reappear():
+    """A temporarily absent account must never be erased or silently rekeyed."""
+    from copy import deepcopy
+    original_accounts = [account(),{**account(),"account_id":"temporarily-hidden",
+                                         "name":"Other synthetic checking"}]
+    first=adapter._merge({}, "synthetic-item", "Synthetic Bank",
+        {"accounts":original_accounts},(
+            {"hidden-tx":{**fixture(ident="hidden-tx"),
+                          "account_id":"temporarily-hidden"}},
+            {},set(),"cursor"),NOW-adapter.DAY)
+    before=deepcopy(first)
+    missing_key=adapter._account_key("synthetic-item","temporarily-hidden")
+    partial=adapter._merge(first,"synthetic-item","Synthetic Bank",
+        {"accounts":[account()]},None,NOW)
+    assert len(partial["accounts"]) == 2
+    assert partial["missingAccountKeys"] == [missing_key]
+    absent=next(x for x in partial["accounts"] if x["key"]==missing_key)
+    assert absent["missingFromLatest"] is True
+    assert absent["attentionKind"] == "connection"
+    assert absent["observedAt"] == before["accounts"][1]["observedAt"]
+    assert partial["transactions"] == before["transactions"]
+    assert partial["balanceHistory"][missing_key] == before["balanceHistory"][missing_key]
+    assert partial["cursor"] == before["cursor"]
+    # Discovery recovering later keeps account identity and records.
+    returned=adapter._merge(partial,"synthetic-item","Synthetic Bank",
+        {"accounts":original_accounts},None,NOW+adapter.DAY)
+    assert returned["missingAccountKeys"] == []
+    assert not any(x.get("missingFromLatest") for x in returned["accounts"])
+    assert returned["transactions"] == first["transactions"]
+    assert missing_key in returned["balanceHistory"]
+    with pytest.raises(HTTPException) as error:
+        adapter._merge(returned,"synthetic-item","Synthetic Bank",
+            {"accounts":[]},None,NOW+2*adapter.DAY)
+    assert error.value.status_code == 502
+    assert returned["transactions"] == first["transactions"]
