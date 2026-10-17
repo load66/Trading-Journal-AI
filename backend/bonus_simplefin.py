@@ -252,9 +252,12 @@ def record_balances(state, accounts, observed_at):
             except HTTPException:
                 pass
         rows = history.setdefault(account['key'], [])
-        if rows and all(rows[-1].get(k) == row.get(k) for k in ('at', 'balance', 'availableBalance', 'currency')):
-            continue
-        rows.append(row)
+        # A stable balance still contributes one daily observation. Otherwise
+        # unchanged accounts would never build a useful 24-month trend.
+        if rows and rows[-1].get('observedAt', 0)//DAY == observed_at//DAY:
+            rows[-1] = row
+        else:
+            rows.append(row)
         # At most one daily point for 90 days, then weekly through 24 months.
         from datetime import datetime, timezone
         seen = set()
