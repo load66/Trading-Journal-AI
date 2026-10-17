@@ -15,7 +15,7 @@ from bonus_backups import owner, store
 router = APIRouter(prefix="/api/bonus-tracker/finance-retirement", tags=["Finance retirement"])
 PHRASE = "DELETE FINANCE DATA"
 MAX_OBJECTS = 10000
-MONTH = r"[0-9]{4}-(?:0[1-9]|1[0-2])\\.enc"
+MONTH = r"[0-9]{4}-(?:0[1-9]|1[0-2])\.enc"
 
 
 def _rules(uid):
@@ -28,15 +28,15 @@ def _rules(uid):
     prefs = "bonus-tracker-finances/v1/" + uid + "/"
     return (
         (sf, (
-            ("simplefin_state", re.compile(re.escape(sf) + r"state\\.enc\\Z")),
-            ("simplefin_history", re.compile(re.escape(sf) + r"history/" + MONTH + r"\\Z")),
+            ("simplefin_state", re.compile(re.escape(sf) + r"state\.enc\Z")),
+            ("simplefin_history", re.compile(re.escape(sf) + r"history/" + MONTH + r"\Z")),
             # Preserve the explicitly identified old pre-disconnect location only.
             # Unknown legacy locations must be reported rather than wildcard-purged.
-            ("simplefin_pre_disconnect", re.compile(re.escape(sf) + r"pre-disconnect/[A-Za-z0-9_-]{1,80}\\.enc\\Z")),
+            ("simplefin_pre_disconnect", re.compile(re.escape(sf) + r"pre-disconnect/[A-Za-z0-9_-]{1,80}\.enc\Z")),
         )),
-        (plaid, (("plaid_history", re.compile(re.escape(plaid) + r"history/" + MONTH + r"\\Z")),)),
-        (trial, (("plaid_activity", re.compile(re.escape(trial) + r"activity\\.enc\\Z")),)),
-        (prefs, (("finance_preferences", re.compile(re.escape(prefs) + r"preferences\\.enc\\Z")),)),
+        (plaid, (("plaid_history", re.compile(re.escape(plaid) + r"history/" + MONTH + r"\Z")),)),
+        (trial, (("plaid_activity", re.compile(re.escape(trial) + r"activity\.enc\Z")),)),
+        (prefs, (("finance_preferences", re.compile(re.escape(prefs) + r"preferences\.enc\Z")),)),
     )
 
 
@@ -80,7 +80,7 @@ def _scan(storage, uid):
 def _fingerprint(matched):
     h = hashlib.sha256()
     for category, key, etag in sorted(matched):
-        h.update((category + "\\0" + key + "\\0" + etag + "\\n").encode())
+        h.update((category + "\0" + key + "\0" + etag + "\n").encode())
     return h.hexdigest()
 
 
