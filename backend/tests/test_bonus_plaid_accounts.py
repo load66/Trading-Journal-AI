@@ -632,7 +632,7 @@ def test_single_malformed_plaid_transaction_does_not_drop_valid_account_activity
 
 def test_plaid_historical_update_complete_without_rows_is_empty_not_loading():
     state=adapter._merge({}, "onepay-item", "One Pay",
-        {"accounts":[account()]}, adapter.SyncResult({}, {}, set(), "completed", update_status="HISTORICAL_UPDATE_COMPLETE"), NOW)
+        {"accounts":[account()]}, adapter.SyncDelta(({}, {}, set(), "completed"), update_status="HISTORICAL_UPDATE_COMPLETE"), NOW)
     assert state["transactionSyncStatus"]=="ready"
     ledger={"items":{"onepay-item":{"owner":"alice","access":"synthetic","institution":"One Pay"}}}
     key=adapter._account_key("onepay-item","example")
