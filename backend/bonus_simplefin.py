@@ -513,6 +513,8 @@ def update_provider_status(state, data):
 
 
 def merge(state, data, now):
+    # Successful provider responses clear any prior transient transport failure.
+    state.pop('error', None)
     old_by_key = {a['key']: a for a in state['accounts']}
     # Account IDs can collide across provider connections. A transaction sync may update only
     # accounts already discovered for this owner; discovery is the only operation that adds accounts.
