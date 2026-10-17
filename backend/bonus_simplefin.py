@@ -217,6 +217,7 @@ def normalize_accounts(data):
         c = conns.get(str(a.get('conn_id')), {})
         result.append({'key': account_key(a), 'id': a['id'], 'connection': str(a.get('conn_id', '')),
                        'name': clean(a.get('name')), 'bank': clean(c.get('name') or a.get('conn_name') or a.get('org', {}).get('name')),
+                       'mask': (str(a.get('mask') or a.get('last4') or '')[-4:] if str(a.get('mask') or a.get('last4') or '').isdigit() and len(str(a.get('mask') or a.get('last4') or '')) == 4 else None),
                        'currency': clean(a.get('currency'), 40), 'balance': clean(a.get('balance'), 40),
                        'availableBalance': clean(a.get('available-balance'), 40) if a.get('available-balance') is not None else None,
                        'balanceDate': a.get('balance-date') if isinstance(a.get('balance-date'), (int, float)) else None})
