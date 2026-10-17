@@ -222,7 +222,9 @@ def normalize_accounts(data):
                        'mask': (str(a.get('mask') or a.get('last4') or '')[-4:] if str(a.get('mask') or a.get('last4') or '').isdigit() and len(str(a.get('mask') or a.get('last4') or '')) == 4 else None),
                        'currency': clean(a.get('currency'), 40), 'balance': clean(a.get('balance'), 40),
                        'availableBalance': clean(a.get('available-balance'), 40) if a.get('available-balance') is not None else None,
-                       'balanceDate': a.get('balance-date') if isinstance(a.get('balance-date'), (int, float)) else None})
+                       'balanceDate': a.get('balance-date') if isinstance(a.get('balance-date'), (int, float)) else None,
+                       'accountType': clean(a.get('type'), 32),
+                       'accountSubtype': clean(a.get('subtype'), 40)})
     if len({a['key'] for a in result}) != len(result):
         raise HTTPException(502, 'SimpleFIN returned conflicting account identities.')
     return result
@@ -436,8 +438,9 @@ def enrich_transactions(state, result):
         if any(20 * DAY <= b['posted'] - a['posted'] <= 40 * DAY for a, b in zip(ordered, ordered[1:])):
             for row in ordered:
                 row['signals'] = sorted(set(row['signals'] + ['possible_recurring']))
-                if row['category'] == 'unreviewed':
-                    row.update(category='subscription', confidence='medium')
+                # A temporal pattern never establishes purchase intent or a subscription.
+                # Historic automatic rows are projected anew by public_state without
+                # modifying the stored transaction or a user review.
 
 
 def classify(amount, description):
@@ -545,7 +548,7 @@ def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'missingAccounts', 'lastSuccess',
               'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error',
-              'accountProfiles', 'balanceHistory', 'health', 'accountExclusions')
+              'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAIStats')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
     out['accounts'] = [{k: v for k, v in a.items() if k not in ('id', 'connection')}

@@ -6,6 +6,7 @@ Call this during an authenticated provider sync, NEVER during a public GET.
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,7 @@ MAX_DAILY_REQUESTS = 2
 MAX_BATCH = 50
 MAX_CACHE = 10000
 URI = "https://api.groq.com/openai/v1/chat/completions"
+LOGGER = logging.getLogger("finance_categorization")
 SYSTEM = (
     "Categorize these synthetic-shape banking descriptions conservatively. "
     "Return one JSON object with an items array of objects with i (integer), "
@@ -76,7 +78,11 @@ def candidates(state):
 def classify_unknown(state, *, post=httpx.post, now=None):
     """Add suggestions only. Network errors fail open to Uncategorized, no retries."""
     key = os.getenv("GROQ_API_KEY", "").strip()
+    stats = {"attempted": 0, "categorized": 0, "failed": 0}
+    # Counts contain no descriptions, account IDs, transaction IDs or balances.
+    state["financeAIStats"] = stats
     if not key:
+        LOGGER.info("finance_ai_sync attempted=0 categorized=0 failed=0 reason=no_key")
         return 0
     now = int(time.time()) if now is None else int(now)
     today = time.strftime("%Y-%m-%d", time.gmtime(now))
@@ -110,6 +116,7 @@ def classify_unknown(state, *, post=httpx.post, now=None):
         if len(unique) >= MAX_BATCH * remaining:
             break
     if not unique:
+        LOGGER.info("finance_ai_sync attempted=0 categorized=0 failed=0 reason=no_candidates")
         return 0
     model = os.getenv("FINANCE_CATEGORY_MODEL") or os.getenv("GROQ_MODEL") or MODEL_DEFAULT
     total = 0
@@ -120,6 +127,7 @@ def classify_unknown(state, *, post=httpx.post, now=None):
         batch = items[offset:offset + MAX_BATCH]
         request = [{**payload, "i": i} for i, (_, payload) in enumerate(batch)]
         usage["calls"] += 1
+        stats["attempted"] += len(batch)
         try:
             response = post(URI, timeout=20, headers={"Authorization": "Bearer " + key},
                             json={
@@ -158,12 +166,17 @@ def classify_unknown(state, *, post=httpx.post, now=None):
                     validated = {}
                     break
                 seen.add(index)
-                if confidence >= 0.7:
+                if confidence >= (0.9 if category == "subscription" else 0.7):
                     validated[batch[index][0]] = {"category": category, "confidenceScore": round(confidence, 2)}
             for hashed, result in validated.items():
                 if len(cache) < MAX_CACHE:
-                    cache.setdefault(hashed, result)
-                    total += 1
+                    if hashed not in cache:
+                        cache[hashed] = result
+                        total += 1
+                        stats["categorized"] += 1
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, AttributeError):
             continue
+    stats["failed"] = stats["attempted"] - stats["categorized"]
+    LOGGER.info("finance_ai_sync attempted=%s categorized=%s failed=%s",
+                stats["attempted"], stats["categorized"], stats["failed"])
     return total

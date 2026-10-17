@@ -584,7 +584,7 @@ def test_plaid_not_ready_and_initial_update_do_not_claim_complete(monkeypatch):
                                {"accounts": [account()]}, delta, NOW + index)
         assert state["nextTransactionSyncAt"] == NOW + index + seconds
         assert state["transactionSyncStatus"] == (
-            "awaiting_provider_data" if status == "HISTORICAL_UPDATE_COMPLETE"
+            "no_transactions" if status == "HISTORICAL_UPDATE_COMPLETE"
             else "history_still_loading")
         assert (state["transactionUpdateStatus"] == "HISTORICAL_UPDATE_COMPLETE") == (
             status == "HISTORICAL_UPDATE_COMPLETE")
@@ -629,3 +629,16 @@ def test_single_malformed_plaid_transaction_does_not_drop_valid_account_activity
                            "lastSuccess":NOW},ledger,"alice")
     assert shown["accounts"][0]["invalidTransactionRows"] == 2
     assert len(shown["transactions"][adapter._account_key("one-item","example")]) == 1
+
+
+
+def test_plaid_empty_completed_history_is_not_still_loading():
+    state=adapter._merge({},'test-item','Test Bank',{'accounts':[account()]},
+                         adapter.SyncDelta(({}, {}, set(), 'cursor'),
+                                           'HISTORICAL_UPDATE_COMPLETE'),NOW)
+    assert state['transactionSyncStatus']=='no_transactions'
+    key=adapter._account_key('test-item','example')
+    ledger={'items':{'test-item':{'owner':'alice','access':'synthetic'}}}
+    public=adapter._public({'version':1,'items':{'test-item':state},
+                            'monitored':[key],'lastSuccess':NOW},ledger,'alice')
+    assert public['accounts'][0]['historyComplete'] is True

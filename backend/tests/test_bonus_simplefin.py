@@ -367,7 +367,9 @@ def test_high_confidence_internal_transfer_and_recurring_detection(setup):
     lkey, rkey, skey = [a['key'] for a in s['accounts']]
     assert public['transactions'][lkey][b.public_ref(lkey,'out')]['confidence'] == 'high'
     assert 'matched_internal_transfer' in public['transactions'][rkey][b.public_ref(rkey,'in')]['signals']
-    assert public['transactions'][skey][b.public_ref(skey,'m1')]['category'] == 'subscription'
+    stream = public['transactions'][skey][b.public_ref(skey,'m1')]
+    assert stream['category'] == 'unreviewed'
+    assert 'possible_recurring' in stream['signals']
 
 
 def test_ambiguous_same_amount_transfer_remains_unconfirmed(setup):
@@ -745,3 +747,26 @@ def test_user_learned_category_precedence_over_automatic_matching(setup):
 ])
 def test_generic_merchant_title_keeps_original_bank_description(bank_description):
     assert b.merchant_name(bank_description) == bank_description
+
+
+
+def test_card_payments_and_monthly_transfers_are_never_subscriptions(setup):
+    payment = account('one', 'cardpay', [
+        txn('p1', '-200', 'Capital One AUTOPAY'),
+        {**txn('p2', '-200', 'Capital One AUTOPAY'), 'posted': NOW-30*b.DAY},
+        txn('m1', '-1000', 'Robinhood IRA contribution'),
+        {**txn('m2', '-1000', 'Robinhood IRA contribution'), 'posted': NOW-30*b.DAY},
+    ])
+    state=b.empty_state();state['accounts']=b.normalize_accounts(data(payment))
+    state['monitoredAccounts']=[b.account_key(payment)]
+    b.merge(state,data(payment),NOW)
+    key=b.account_key(payment)
+    for ident in ('p1','p2','m1','m2'):
+        result=b.public_state(state)['transactions'][key][b.public_ref(key,ident)]
+        assert result['category']=='transfer'
+        assert result['categorySource']=='automatic'
+        assert result['category']!='subscription'
+    assert 'possible_recurring' in result['signals']
+    state['transactionReviews']={key:{'p1':{'category':'shopping'}}}
+    assert b.public_state(state)['transactions'][key][b.public_ref(key,'p1')]['category']=='shopping'
+    assert b.automatic_category({'description':'Netflix monthly','amount':'-12.99','pending':False})[0]=='subscription'
