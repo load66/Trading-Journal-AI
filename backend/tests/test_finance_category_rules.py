@@ -254,3 +254,13 @@ def test_no_loan_or_p2p_credit_becomes_paycheck_during_cadence_enrichment():
     ]
     annotate_paychecks(rows)
     assert [r["category"] for r in rows] == ["loan_proceeds","loan_proceeds","transfer"]
+
+
+def test_cross_repository_category_manifest_exact_contract():
+    import json
+    from finance_preferences import CATEGORIES as SPENDING
+    contract=json.loads((Path(__file__).parent/"fixtures"/"finance-categories-contract.json").read_text())
+    assert sorted(CATEGORIES)==contract["categories"]
+    assert sorted(SPENDING)==contract["spending"]
+    assert "loan_proceeds" in contract["neutral"]
+    assert CATEGORIES==TRANSACTION_CATEGORIES
