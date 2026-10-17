@@ -605,3 +605,27 @@ def test_plaid_missing_history_status_is_not_certified():
 def test_plaid_history_loading_exponential_schedule():
     assert [adapter._retry_at(NOW, i) - NOW for i in range(1, 6)] == [
         3600, 3 * 3600, 6 * 3600, adapter.DAY, adapter.DAY]
+
+
+def test_single_malformed_plaid_transaction_does_not_drop_valid_account_activity(monkeypatch):
+    good = fixture(ident="valid")
+    bad = {**fixture(ident="bad"), "date":"2026-99-99"}
+    missing_id = {**fixture(ident=""), "account_id":"example"}
+    monkeypatch.setattr(adapter, "_provider", lambda endpoint, access, **kwargs: {
+        "added":[good,bad,missing_id], "modified":[], "removed":[],
+        "next_cursor":"next", "has_more":False,
+        "transactions_update_status":"INITIAL_UPDATE_COMPLETE"
+    })
+    changes = adapter._sync_item("synthetic", "")
+    result = adapter._merge({}, "one-item", "Synthetic CU",
+                            {"accounts":[account()]}, changes, NOW)
+    assert list(result["transactions"]) == ["valid"]
+    assert result["cursor"] == "next"
+    assert result["invalidTransactionsByAccount"][adapter._account_key("one-item","example")] == 2
+    assert result["transactionSyncStatus"] == "history_still_loading"
+    ledger={"items":{"one-item":{"owner":"alice","access":"fake","institution":"Synthetic CU"}}}
+    shown=adapter._public({"version":1,"items":{"one-item":result},
+                           "monitored":[adapter._account_key("one-item","example")],
+                           "lastSuccess":NOW},ledger,"alice")
+    assert shown["accounts"][0]["invalidTransactionRows"] == 2
+    assert len(shown["transactions"][adapter._account_key("one-item","example")]) == 1
