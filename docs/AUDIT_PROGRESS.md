@@ -7,9 +7,9 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 ## Handoff
 
 - Owner superseding decision (2026-10-17): abandon Finance/Plaid enhancement queue; Finance-removal inventory and guarded owner-action sequence on `codex/remove-finance`.
-- Phase: read-only inventory / owner revocation confirmation pending; no code removal, provider calls, data purge, or deployments authorized in this phase.
+- Phase: owner confirmed manual Plaid/SimpleFIN revocations and separately authorized retiring Tracker bank-activity review in chat (2026-10-17). Backend removal plus owner-only purge API implemented on branch; **R2 purge was not executed**.
 - PRs abandoned without merge: #228, #210, #200, #193, #191, #187, #186.
-- Next step: owner manually revokes/disconnects all bank providers, confirms empty account list in chat, and decides whether to retire the bonus-evidence dependency; then reviewed backend-first implementation.
+- Next step: verify final full pytest/backend build, merge backend and confirm Railway SUCCESS on exact commit. Then frontend full units/browser release; owner alone may invoke guarded R2 purge.
 
 
 - Categories v2 backend v3.5.0: PR #224 merged; Railway SUCCESS on ed0d5314e7e5adfb367466b361995728c2ea3d7d
