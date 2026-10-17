@@ -15,3 +15,10 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 - Issue: P1 — Account-scoped category confirmation rules
 - Issue: P1 — Prevent false-positive transfer matching
 - Test status: pending verification
+
+## Finance 3.4.95 mortgage payment classification
+
+- Issue: P1 — Recognize mortgage servicer debits as housing, not issuer transfers
+- Issue: P1 — Keep card-payment detection for non-housing movements
+- Test status: New synthetic exact-cents regression tests; CI pending
+- Deployment: pending PR, full tests and Railway verification
