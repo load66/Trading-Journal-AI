@@ -72,6 +72,36 @@ def test_microdeposits_only_same_account_source_and_close_in_time():
     assert micro_deposit_refs(rows) == {("a","m1"),("a","m2"),("a","m5")}
 
 
+
+@pytest.mark.parametrize("description,amount,category,flag",[
+    ("To Brokerage","-2000","transfer","investment_transfer"),
+    ("To Citibank","-251","transfer","possible_transfer"),
+    ("From Lafayette Fcu","500","transfer","possible_transfer"),
+    ("To Personal Checking","-7379.04","transfer","possible_transfer"),
+    ("From Personal Savings","7379.04","transfer","possible_transfer"),
+    ("To Paypal","-428.17","transfer","possible_transfer"),
+    ("U.S. Bank","-820.77","transfer","card_payment"),
+    ("Capital One","-200","transfer","card_payment"),
+    ("T-Mobile","-157.62","utilities",None),
+    ("Apple","-249.52","shopping",None),
+    ("Apple.com/Bill","-9.99","subscription",None),
+    ("iCloud","-2.99","subscription",None),
+    ("Verizon Wireless","-95.10","utilities",None),
+    ("AT&T","-105.00","utilities",None),
+])
+def test_real_bank_wording_no_false_spend(description,amount,category,flag):
+    result=category_for(description,amount)
+    assert result[0]==category
+    if flag: assert flag in result[2]
+
+def test_uncertain_financial_transfer_safety_net():
+    from finance_category_rules import suspicious_unknown
+    assert suspicious_unknown("To My Wallet", "-2000")
+    assert suspicious_unknown("From Local Bank 7722", "-500")
+    assert not suspicious_unknown("Unknown restaurant", "-2000")
+    assert not suspicious_unknown("Coffee stand", "-10.25")
+    assert not suspicious_unknown("To Cafe", "-25.85")
+
 def test_200_realistic_synthetic_examples_below_ten_percent_unreviewed():
     descriptions = [
         ("Employer Payroll Direct Deposit", "1750.00"),
