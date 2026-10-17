@@ -539,6 +539,8 @@ def merge(state, data, now):
     # Account IDs can collide across provider connections. A transaction sync may update only
     # accounts already discovered for this owner; discovery is the only operation that adds accounts.
     fresh = [a for a in normalize_accounts(data) if a['key'] in old_by_key and syncing(state, a)]
+    for a in fresh:
+        a['firstSeenAt'] = old_by_key[a['key']].get('firstSeenAt', now)
     fresh_by_key = {a['key']: a for a in fresh}
     state['accounts'] = list(fresh) + [a for k, a in old_by_key.items() if k not in fresh_by_key]
     record_balances(state, fresh, now)
@@ -698,7 +700,7 @@ def refresh_balances(uid):
         claim_request(s, now)
         tag = write_state(uid, s, tag)
         data = get_data(s['access'], balances=True)
-        fresh = {row['key']: row for row in normalize_accounts(data)}
+        fresh = {row['key']: {**row, 'firstSeenAt': next((a.get('firstSeenAt',now) for a in s['accounts'] if a['key']==row['key']),now)} for row in normalize_accounts(data)}
         old = s.get('accounts', [])
         s['accounts'] = [{**row, **fresh[row['key']]} if row['key'] in fresh else row
                          for row in old]
@@ -893,7 +895,7 @@ def connect(body: ConnectBody, request: Request):
         claim_request(s, int(time.time()))
         tag = write_state(uid, s, tag)
         data = get_data(access, balances=True)
-        s['accounts'] = normalize_accounts(data)
+        s['accounts'] = [{**a,'firstSeenAt':int(time.time())} for a in normalize_accounts(data)]
         s['monitoredAccounts'] = sorted(a['key'] for a in s['accounts'])
         observed = int(time.time())
         record_balances(s, s['accounts'], observed)
@@ -978,6 +980,9 @@ def discover(request: Request, guided: bool = False):
         tag = write_state(uid, s, tag)
         data = get_data(s['access'], balances=True)
         fresh = normalize_accounts(data)
+        observed_accounts = {a['key']: a for a in s['accounts']}
+        for a in fresh:
+            a['firstSeenAt'] = observed_accounts.get(a['key'],{}).get('firstSeenAt', now)
         watched = set(s['mappings']) | set(s.get('monitoredAccounts', []))
         s['missingAccounts'] = sorted(k for k in watched if k not in {a['key'] for a in fresh})
         current = {a['key']: a for a in fresh}

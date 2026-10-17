@@ -960,3 +960,10 @@ def test_linked_schreiber_paychecks_emit_possible_dd_without_milestones(setup):
     assert all(x['category']=='income' for x in records)
     assert 'reqMet' not in s and 'bonusRecd' not in s
 
+
+def test_first_seen_date_survives_sync_and_discovery(setup):
+    s=seed()
+    k=b.account_key(account())
+    s['accounts'][0]['firstSeenAt']=NOW-4*86400
+    b.merge(s,data(account(transactions=[txn('second','24','Coffee')])),NOW)
+    assert s['accounts'][0]['firstSeenAt']==NOW-4*86400

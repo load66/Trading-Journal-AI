@@ -321,6 +321,9 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
     if len(set(a["key"] for a in accounts)) != len(accounts):
         raise HTTPException(502, "Plaid account identities are duplicated.")
     out = copy.deepcopy(old) if isinstance(old, dict) else {}
+    previous = {a['key']: a.get('firstSeenAt',now) for a in out.get('accounts',[]) if isinstance(a,dict) and a.get('key')}
+    for account in accounts:
+        account['firstSeenAt'] = previous.get(account['key'],now)
     out["accounts"] = accounts
     if changes is None:
         out.setdefault("transactions", {})
