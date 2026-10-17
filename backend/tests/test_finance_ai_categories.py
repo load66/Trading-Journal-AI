@@ -96,3 +96,15 @@ def test_groq_can_classify_sixty_five_distinct_synthetic_descriptions_in_a_day(m
     assert s['financeAILastSync']['attempted']==65
     assert s['financeAILastSync']['categorized']==65
     assert s['financeAILastSync']['failed']==0
+
+
+def test_possible_transfer_is_never_sent_to_groq(monkeypatch):
+    monkeypatch.setenv('GROQ_API_KEY','synthetic-only')
+    s=state()
+    for row in s['transactions']['a'].values():
+        row['description']='To Unrecognized Wallet'
+        row['amount']='-2000.00'
+    attempts=[]
+    assert classify_unknown(s,post=lambda *_a,**_k: attempts.append(True),now=1792134000)==0
+    assert attempts==[]
+    assert s['financeAILastSync']['attempted']==0
