@@ -738,3 +738,10 @@ def test_user_learned_category_precedence_over_automatic_matching(setup):
         row = p['transactions'][b.account_key(small)][b.public_ref(b.account_key(small), ident)]
         assert row['category'] == 'other'
         assert row['categorySource'] == 'user_rule'
+
+
+@pytest.mark.parametrize('bank_description', [
+    'Transfer', 'Transaction', 'Payment', 'POS Transaction'
+])
+def test_generic_merchant_title_keeps_original_bank_description(bank_description):
+    assert b.merchant_name(bank_description) == bank_description
