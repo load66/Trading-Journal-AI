@@ -700,3 +700,22 @@ def test_verification_patterns_are_not_income_or_expenses(description,amount):
     assert category=='verification'
     assert confidence=='high'
     assert signals==[]
+
+
+def test_hidden_account_profile_is_additive_and_legacy_safe(setup, monkeypatch):
+    s=seed();k=b.account_key(account());b.write_state('owner',s,None)
+    c=client(monkeypatch);endpoint='/api/bonus-tracker/simplefin/account-profiles'
+    headers={'Authorization':'Bearer synthetic'}
+    model={'kind':'checking','order':0,'balanceMode':'asset'}
+    hidden=c.put(endpoint,headers=headers,json={'profiles':{k:{**model,'hidden':True}}})
+    assert hidden.status_code==200
+    assert hidden.json()['accountProfiles'][k]['hidden'] is True
+    assert s['transactions']=={}, 'The original fixture is never mutated'
+    # Older clients do not send the field. This must not restore a hidden bank.
+    legacy=c.put(endpoint,headers=headers,json={'profiles':{k:model}})
+    assert legacy.status_code==200
+    stored=b.read_state('owner')[0]
+    assert stored['accountProfiles'][k]['hidden'] is True
+    restored=c.put(endpoint,headers=headers,json={'profiles':{k:{**model,'hidden':False}}})
+    assert restored.status_code==200
+    assert b.read_state('owner')[0]['accountProfiles'][k]['hidden'] is False
