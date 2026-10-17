@@ -341,7 +341,7 @@ def _view(doc, ledger, uid):
                                      "connectionHandle": connection_handle(uid, item_id),
                                      "transactionSyncStatus": state.get("transactionSyncStatus", "awaiting_first_sync"),
                                      "transactionUpdateStatus": state.get("transactionUpdateStatus"),
-                                     "historyComplete": state.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE",
+                                     "historyComplete": (state.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE" and any(not tx.get("pending") for tx in state.get("transactions", {}).values())),
                                      "transactionLastSyncAt": state.get("lastTransactionSyncAt"),
                                      "transactionNextSyncAt": state.get("nextTransactionSyncAt", doc.get("nextSyncAt")),
                                      "transactionSyncError": state.get("transactionSyncError")})
