@@ -129,7 +129,7 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'verification','high',[]
     if pending:
         return 'unreviewed','low',[]
-    if kind == 'possible_bonus':
+    if kind == 'possible_bonus' or (number > 0 and re.search(r'\b(?:promotional\s+bonus|promotion(?:al)?\s+(?:credit|reward)|bank\s+bonus|signup\s+bonus|sign[- ]?up\s+reward)\b', text, re.I)):
         return 'bonus','high',['possible_bonus']
     if kind == 'possible_reversal':
         return 'unreviewed','high',['possible_reversal']
