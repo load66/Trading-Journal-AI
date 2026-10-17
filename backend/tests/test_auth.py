@@ -265,8 +265,8 @@ def test_auth_errors_remain_readable_only_to_allowed_frontend(monkeypatch, tmp_p
         assert 'access-control-allow-origin' not in other.headers
 
 
-def test_simplefin_auth_errors_are_private_and_origin_scoped(monkeypatch, tmp_path):
-    """Production middleware rejects unauthenticated banking calls before APIRouter dependencies."""
+def test_finance_retirement_auth_errors_are_private_and_origin_scoped(monkeypatch, tmp_path):
+    """Production middleware rejects unauthenticated cleanup calls before APIRouter dependencies."""
     main = fresh_main(
         monkeypatch, tmp_path,
         AUTH_REQUIRED="true", SUPABASE_URL="https://project.supabase.co",
@@ -276,9 +276,8 @@ def test_simplefin_auth_errors_are_private_and_origin_scoped(monkeypatch, tmp_pa
     from fastapi.testclient import TestClient
     with TestClient(main.app) as client:
         requests = (
-            ('GET', '/api/bonus-tracker/simplefin'),
-            ('POST', '/api/bonus-tracker/simplefin/sync'),
-            ('PUT', '/api/bonus-tracker/simplefin/monitoring'),
+            ('GET', '/api/bonus-tracker/finance-retirement/dry-run'),
+            ('POST', '/api/bonus-tracker/finance-retirement/execute'),
         )
         for method, path in requests:
             response = client.request(method, path, headers={'Origin': 'https://load66.github.io'})
@@ -289,7 +288,7 @@ def test_simplefin_auth_errors_are_private_and_origin_scoped(monkeypatch, tmp_pa
             assert 'accounts' not in response.json()
             assert 'transactions' not in response.json()
         forbidden_origin = client.get(
-            '/api/bonus-tracker/simplefin',
+            '/api/bonus-tracker/finance-retirement/dry-run',
             headers={'Origin': 'https://attacker.invalid'},
         )
         assert forbidden_origin.status_code == 401
