@@ -99,7 +99,7 @@ def test_invalid_amount_is_skipped_and_valid_rows_are_retained(setup,monkeypatch
         txn(ident='bad',amount='NaN'),txn(ident='good',amount='2.00',description='Coffee shop')])))
     result=b.sync('owner')
     k=b.account_key(account())
-    assert result['status']=='connected'
+    assert result['status']=='attention'  # Invalid transaction rows are a genuine data problem.
     assert len(result['transactions'][k]) == 1
     assert 'invalid transaction' in result['warnings'][0]
     assert b.read_state('owner')[0]['transactions'][k]['good']['amount']=='2.00'
@@ -783,7 +783,7 @@ def test_ai_sync_metadata_contains_only_counts():
     state['financeAILastSync']={'at':1792134000,'attempted':51,'categorized':46,'failed':5}
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
-    assert public['financeVersion']=='3.4.81'
+    assert public['financeVersion']=='3.4.82'
 
 
 def test_exact_nonround_reciprocal_move_matches_between_accounts_same_bank():
