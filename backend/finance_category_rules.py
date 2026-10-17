@@ -79,6 +79,8 @@ def financial_movement(description, amount):
         return 'transfer', ['card_payment']
     if BROKER_CONTRIBUTION.search(label):
         return 'transfer', ['investment_transfer']
+    if re.search(r'\b(?:x\s*money\s*transfer|payment\s*thank\s*you)\b',label,re.I):
+        return 'transfer', ['transfer']
     if value < 0 and (value == value.to_integral_value() or abs(value) >= 1000) and (
             direction or FINANCIAL_NAME.search(label)):
         return 'unreviewed', ['possible_transfer']
