@@ -17,6 +17,7 @@ MAX_OBJECT = 512 * 1024
 LIMIT_ENTRIES = 2000
 CATEGORIES = frozenset(("housing","loan","utilities","groceries","dining","transportation",
     "shopping","health","entertainment","fees","taxes","travel","subscription","other","unreviewed"))
+RULE_CATEGORIES = CATEGORIES | frozenset(('income','transfer','refund','verification','bonus'))
 ACCOUNT = re.compile(r"^(simplefin|plaid):[a-f0-9]{64}$")
 PAIR = re.compile(r"^((simplefin):[a-f0-9]{64})\|((plaid):[a-f0-9]{64})$")
 ENTRY = re.compile(r"^(simplefin|plaid):[a-f0-9]{64}:[a-zA-Z0-9_-]{1,128}$")
@@ -33,7 +34,7 @@ def _key(uid):
 
 def _default():
     return {"version":1,"revision":0,"budgets":{},"duplicates":{},
-            "recurring":{},"transactionMeta":{}}
+            "recurring":{},"transactionMeta":{},"rules":{}}
 
 
 def _read(uid):
@@ -51,6 +52,9 @@ def _read(uid):
         doc=json.loads(cipher().decrypt(raw))
         if not isinstance(doc,dict) or doc.get("version")!=1:
             raise ValueError("invalid")
+        doc.setdefault("rules",{})
+        if not isinstance(doc["rules"],dict):
+            raise ValueError("rules")
         return doc,response["ETag"]
     except Exception:
         raise HTTPException(503,"Finance settings need attention; saved values remain untouched.") from None
@@ -118,6 +122,22 @@ def _validate(section,key,value):
         if not isinstance(name,str) or len(name)>90 or not isinstance(value.get("dismissed",False),bool) or not isinstance(value.get("confirmed",False),bool):
             raise HTTPException(422,"Invalid recurring item changes.")
         return {"name":name.strip(),"dismissed":value.get("dismissed",False),"confirmed":value.get("confirmed",False)}
+    if section=="rules":
+        if not isinstance(key,str) or not 2 <= len(key) <= 90 or any(ord(c)<32 for c in key):
+            raise HTTPException(422,"Choose a valid merchant or transaction description.")
+        if value is None:
+            return None
+        if (not isinstance(value,dict) or set(value)-{"category","employer","ownAccount"}
+                or value.get("category") not in RULE_CATEGORIES
+                or type(value.get("employer",False)) is not bool
+                or type(value.get("ownAccount",False)) is not bool):
+            raise HTTPException(422,"Choose a valid Finance category rule.")
+        if value.get("ownAccount") and value.get("category")!="transfer":
+            raise HTTPException(422,"Own-account rules must be transfers.")
+        if value.get("employer") and value.get("category")!="income":
+            raise HTTPException(422,"Employer rules must be income.")
+        return {"category":value["category"],"employer":value.get("employer",False),
+                "ownAccount":value.get("ownAccount",False)}
     if section=="transactionMeta":
         if not ENTRY.fullmatch(key):
             raise HTTPException(422,"Invalid transaction.")
@@ -147,7 +167,7 @@ def update_preferences(body:Change,request:Request,response:Response):
     doc,etag=_read(uid)
     if body.revision!=doc.get("revision",0):
         raise HTTPException(409,"These settings changed; reload before saving.")
-    if body.section not in ("budgets","duplicates","recurring","transactionMeta"):
+    if body.section not in ("budgets","duplicates","recurring","transactionMeta","rules"):
         raise HTTPException(422,"Unknown Finance settings section.")
     value=_validate(body.section,body.key,body.value)
     new=copy.deepcopy(doc)
