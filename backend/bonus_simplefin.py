@@ -37,6 +37,7 @@ BACKGROUND_LOGGER = logging.getLogger(__name__)
 
 DAY = 86400
 FULL_SYNC_INTERVAL = 6 * 3600
+AUTO_REFRESH_INTERVAL = 3600  # One discovery+transaction request per hour, within shared 24/day cap.
 BALANCE_SYNC_INTERVAL = 3 * 3600
 MAX_STATE = 8 * 1024 * 1024
 HOSTS = {'bridge.simplefin.org', 'beta-bridge.simplefin.org'}
@@ -182,7 +183,11 @@ def get_data(access, selected=None, balances=False):
     if balances:
         params.append(('balances-only', '1'))
     else:
-        params.extend(('account', x['id']) for x in selected)
+        # Omit account filters only for the combined hourly read: SimpleFIN
+        # then includes newly linked institutions and existing transactions
+        # in one budgeted request. Scoped calls retain explicit IDs.
+        if selected is not None:
+            params.extend(('account', x['id']) for x in selected)
         params.append(('pending', '1'))
     raw = network(endpoint, auth=(unquote(p.username), unquote(p.password)), params=params)
     try:
@@ -601,7 +606,11 @@ def merge(state, data, now):
     # accounts already discovered for this owner; discovery is the only operation that adds accounts.
     fresh = [a for a in normalize_accounts(data) if a['key'] in old_by_key and syncing(state, a)]
     for a in fresh:
-        a['firstSeenAt'] = old_by_key[a['key']].get('firstSeenAt', now)
+        previous = old_by_key[a['key']]
+        a['firstSeenAt'] = previous.get('firstSeenAt', now)
+        for marker in ('autoDiscoveredAt', 'firstSyncAt'):
+            if marker in previous:
+                a[marker] = previous[marker]
     fresh_by_key = {a['key']: a for a in fresh}
     state['accounts'] = list(fresh) + [a for k, a in old_by_key.items() if k not in fresh_by_key]
     record_balances(state, fresh, now)
@@ -710,11 +719,18 @@ def public_state(s):
         if a.get('discovered') and a['key'] not in monitored and not a.get('firstSyncAt')]
     out['newBankDiscoveryNextAt'] = s.get('newBankDiscoveryNextAt') or None
     out['budgetRemaining'] = _remaining_discovery_budget(s,int(time.time()))[0]
+    out['nextAutoRefreshAt'] = s.get('nextAutoRefreshAt') or None
+    out['lastAutoRefreshAt'] = s.get('lastAutoRefreshAt') or None
+    out['autoRefreshStatus'] = s.get('autoRefreshStatus', 'pending')
+    out['recentDiscoveredAccounts'] = [
+        a for a in out['accounts'] if isinstance(a.get('autoDiscoveredAt'), (int,float))
+        and a['autoDiscoveredAt'] >= time.time()-7*DAY
+    ]
     out['transactions'] = {}
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
     out['evidenceReviews'] = public_evidence_reviews(s)
-    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.97')
+    out.update(connected=bool(s.get('access')), configured=True, evidenceOnly=True, financeVersion='3.4.98')
     return out
 
 
@@ -1405,17 +1421,80 @@ def disconnect(request: Request):
     return finish(uid, tombstone, tag)
 
 
+def auto_refresh(uid):
+    """Hourly read-only discovery AND account activity in a single provider call.
+
+    The same encrypted state, owner lease, 24-call rolling quota and conditional
+    R2 writes protect both account identity and history. Never re-enable an
+    explicitly removed/disabled account; never erase records on missing banks.
+    """
+    s,tag=reserve(uid,'auto-refresh')
+    now=int(time.time())
+    if not s.get('access') or now<s.get('nextAutoRefreshAt',0):
+        return finish(uid,s,tag)
+    s['nextAutoRefreshAt']=now+AUTO_REFRESH_INTERVAL
+    s['lastAutoRefreshAttemptAt']=now
+    remaining,reset=_remaining_discovery_budget(s,now)
+    if not remaining:
+        s['nextAutoRefreshAt']=max(now+AUTO_REFRESH_INTERVAL, reset or now+AUTO_REFRESH_INTERVAL)
+        s['autoRefreshStatus']='limit'
+        return finish(uid,s,tag)
+    try:
+        claim_request(s,now)
+        tag=write_state(uid,s,tag)
+        # No account filter: returns all Bridge-visible institutions and
+        # transactions in one request; never call /claim or Plaid.
+        response=get_data(s['access'],selected=None)
+        fresh=normalize_accounts(response)
+        if not fresh:
+            s['autoRefreshStatus']='no_accounts'
+            return finish(uid,s,tag)
+        old_by_key={a['key']:a for a in s.get('accounts',[])}
+        added=set()
+        for account in fresh:
+            key=account['key']
+            if key not in old_by_key:
+                account['firstSeenAt']=now
+                account['autoDiscoveredAt']=now
+                old_by_key[key]=account
+                added.add(key)
+            elif old_by_key[key].get('discovered') and key not in s.get('monitoredAccounts',[]) and syncing(s,old_by_key[key]):
+                # Recover banks found by a prior manual check but never saved.
+                old_by_key[key]['autoDiscoveredAt']=now
+                added.add(key)
+        s['accounts']=list(old_by_key.values())
+        # Auto-monitor only eligible accounts; preserve explicit Sync OFF and
+        # institution/account exclusions, prior mappings and reviews.
+        watched=set(s.get('monitoredAccounts',[]))
+        watched.update(a['key'] for a in s['accounts'] if syncing(s,a))
+        s['monitoredAccounts']=sorted(watched)
+        # Partial provider responses never remove saved accounts or evidence.
+        candidate=merge(copy.deepcopy(s),response,now)
+        for account in candidate['accounts']:
+            if account['key'] in added:
+                account['autoDiscoveredAt']=now
+                account['firstSyncAt']=now
+                account.pop('discovered',None)
+        candidate['lastAutoRefreshAt']=now
+        candidate['nextAutoRefreshAt']=now+AUTO_REFRESH_INTERVAL
+        candidate['autoRefreshStatus']='complete'
+        candidate.pop('error',None)
+        s=candidate
+    except HTTPException as exc:
+        # Do not log provider data or private payees. Keep existing state.
+        s['autoRefreshStatus']='error'
+        s['autoRefreshErrorKind']=exc.status_code
+    return finish(uid,s,tag)
+
+
 async def scheduled_simplefin_loop():
     while True:
         try:
             if os.getenv('SIMPLEFIN_ENCRYPTION_KEY') and os.getenv('AUTHORIZED_USER_ID'):
                 uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
                 s, _ = await run_in_threadpool(read_state, uid)
-                if s.get('access') and s.get('accounts'):
-                    if time.time() >= s.get('nextSyncAt', 0):
-                        await run_in_threadpool(sync, uid)
-                    elif time.time() >= s.get('nextBalanceRefreshAt', 0):
-                        await run_in_threadpool(refresh_balances, uid)
+                if s.get('access') and time.time() >= s.get('nextAutoRefreshAt',0):
+                    await run_in_threadpool(auto_refresh, uid)
         except Exception as error:
             # Never log repr(error) or provider payload; both can contain secrets.
             BACKGROUND_LOGGER.warning("simplefin_scheduled_sync_error class=%s", type(error).__name__)
