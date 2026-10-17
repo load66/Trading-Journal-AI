@@ -1,0 +1,51 @@
+{
+  "categories": [
+    "bonus",
+    "dining",
+    "entertainment",
+    "fees",
+    "groceries",
+    "health",
+    "housing",
+    "income",
+    "insurance",
+    "loan",
+    "loan_proceeds",
+    "other",
+    "refund",
+    "shopping",
+    "subscription",
+    "taxes",
+    "transfer",
+    "transportation",
+    "travel",
+    "unreviewed",
+    "utilities",
+    "verification"
+  ],
+  "spending": [
+    "dining",
+    "entertainment",
+    "fees",
+    "groceries",
+    "health",
+    "housing",
+    "insurance",
+    "loan",
+    "other",
+    "shopping",
+    "subscription",
+    "taxes",
+    "transportation",
+    "travel",
+    "unreviewed",
+    "utilities"
+  ],
+  "neutral": [
+    "loan_proceeds",
+    "transfer",
+    "verification",
+    "refund",
+    "bonus"
+  ]
+}
