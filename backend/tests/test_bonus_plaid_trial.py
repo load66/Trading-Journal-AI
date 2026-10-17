@@ -49,6 +49,8 @@ def setup(monkeypatch):
                         "owner-a" if request.headers.get("Authorization") == "Bearer a"
                         else "owner-b" if request.headers.get("Authorization") == "Bearer b"
                         else (_ for _ in ()).throw(HTTPException(401, "Sign in required")))
+    # Mock the newly scheduled first sync in all quota tests: no provider calls.
+    monkeypatch.setattr(plaid,'_initial_read_only_sync',lambda uid:None)
     app = FastAPI()
     app.include_router(plaid.router)
     return TestClient(app), memory
@@ -281,3 +283,26 @@ def test_disconnect_locks_activity_before_revoke_and_retries_idempotently(setup,
     assert 'lease' not in saved
     assert client.delete('/api/bonus-tracker/plaid/items/'+handle,headers={'Authorization':'Bearer a'}).status_code==200
     assert calls==['/item/remove','/item/remove']
+
+
+def test_exchange_queues_first_readonly_sync_without_second_item_or_manual_discovery(setup,monkeypatch):
+    client,_=setup
+    observed=[]
+    def provider(endpoint,body):
+        if endpoint.endswith('create'):return {'link_token':'synthetic-token'}
+        observed.append('token_exchange')
+        return {'item_id':'synthetic-item','access_token':'synthetic-access'}
+    monkeypatch.setattr(plaid,'_provider',provider)
+    def first_sync(uid):
+        snapshot,_=plaid._read()
+        assert snapshot['used']==1
+        assert snapshot['items']['synthetic-item']['owner']==uid
+        observed.append('first_sync')
+    monkeypatch.setattr(plaid,'_initial_read_only_sync',first_sync)
+    link=start(client)
+    assert link.status_code==200
+    outcome=exchange(client,link.json()['session'])
+    assert outcome.status_code==200
+    assert outcome.json()['initialSync']=='started'
+    assert observed==['token_exchange','first_sync']
+    assert len(plaid._read()[0]['items'])==1
