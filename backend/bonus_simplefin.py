@@ -493,6 +493,8 @@ def enrich_transactions(state, result):
 
     # Employer recurrence is inferred from presentation rows only. Money movements
     # are paired first and are never counted as paychecks.
+    for account, _raw, row in records:
+        row['accountKey'] = account
     annotate_paychecks([row for _account, _raw, row in records])
 
     # Detect classic two-small-deposit account verification patterns. Keep raw
