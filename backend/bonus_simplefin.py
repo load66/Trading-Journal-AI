@@ -619,7 +619,7 @@ def merge(state, data, now):
 def public_state(s):
     # Never serialize the provider credential, setup token, or storage key.
     fields = ('accounts', 'mappings', 'monitoredAccounts', 'warnings', 'notices', 'institutionIssues', 'missingAccounts', 'lastSuccess',
-              'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'error',
+              'lastAttempt', 'windowStart', 'windowEnd', 'status', 'nextSyncAt', 'nextGuidedDiscoveryAt', 'error',
               'accountProfiles', 'balanceHistory', 'health', 'accountExclusions', 'financeAILastSync')
     out = {k: copy.deepcopy(s[k]) for k in fields if k in s}
     # Provider IDs and connection IDs are needed server-side for syncing, not in the browser.
@@ -907,15 +907,33 @@ def reconnect(body: ConnectBody, request: Request):
     return finish(uid, s, tag)
 
 
+@router.post('/discover-guided')
+def discover_guided(request: Request):
+    """One-time return-to-app check, bounded by a real rolling request budget."""
+    return discover(request, guided=True)
+
+
 @router.post('/discover')
-def discover(request: Request):
+def discover(request: Request, guided: bool = False):
     uid = owner(request)
     s, tag = reserve(uid, 'discover')
     now = int(time.time())
     if not s.get('access'):
         finish(uid, s, tag)
         raise HTTPException(409, 'Connect SimpleFIN first.')
-    if now < s.get('nextDiscoveryAt', 0):
+    if guided:
+        recent = [at for at in s.get('guidedDiscoveryAttempts', [])
+                  if isinstance(at, int) and at > now - DAY]
+        hour = [at for at in recent if at > now - 3600]
+        if (now < s.get('nextGuidedDiscoveryAt', 0) or len(hour) >= 3
+                or len(recent) >= 6 or len(s.get('requestAttempts', [])) >= 24):
+            s['nextGuidedDiscoveryAt'] = max(s.get('nextGuidedDiscoveryAt',0),
+                hour[0] + 3600 if len(hour)>=3 else 0,
+                recent[0] + DAY if len(recent)>=6 else 0)
+            return finish(uid, s, tag)
+        s['guidedDiscoveryAttempts'] = recent + [now]
+        s['nextGuidedDiscoveryAt'] = now + 180
+    elif now < s.get('nextDiscoveryAt', 0):
         return finish(uid, s, tag)
     s['nextDiscoveryAt'] = now + DAY
     tag = write_state(uid, s, tag)
