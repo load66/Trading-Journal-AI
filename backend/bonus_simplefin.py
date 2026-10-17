@@ -494,11 +494,14 @@ def merge(state, data, now):
             state['warnings'] = warnings[:50]
         # Preserve pending originals in encrypted storage, but hide a cleared
         # authorization once its date is covered by a later provider response.
-        for row_id, row in rows.items():
-            if (row.get('pending') and not row.get('pendingClearedAt')
-                    and row_id not in seen_ids
-                    and now - 90 * DAY <= row.get('posted', 0) <= now):
-                row['pendingClearedAt'] = now
+        # An empty/errored account response cannot establish that a pending
+        # authorization disappeared. Only reconcile after valid covered rows.
+        if seen_ids and not warnings and invalid_count == 0:
+            for row_id, row in rows.items():
+                if (row.get('pending') and not row.get('pendingClearedAt')
+                        and row_id not in seen_ids
+                        and now - 90 * DAY <= row.get('posted', 0) <= now):
+                    row['pendingClearedAt'] = now
         # Missing posted rows never imply reversal/deletion; preserve 90 days of observed history.
         state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
         state.setdefault('evidenceReviews', {})[k] = {
