@@ -1114,10 +1114,16 @@ def first_discovery_sync(body: FirstDiscoverySync,request: Request):
         response.update(syncStatus='not_enabled',budgetRemaining=_remaining_discovery_budget(s,now)[0])
         return response
     remaining,reset=_remaining_discovery_budget(s,now)
+    if now < s.get('firstSyncNextAt',0):
+        response=finish(uid,s,tag)
+        response.update(syncStatus='waiting',reason='history_pending',
+                        nextRetryAt=s['firstSyncNextAt'],budgetRemaining=remaining)
+        return response
     if not remaining:
         s['firstSyncNextAt']=reset
         response=finish(uid,s,tag)
-        response.update(syncStatus='waiting',nextRetryAt=reset,budgetRemaining=0)
+        response.update(syncStatus='waiting',reason='budget_exhausted',
+                        nextRetryAt=reset,budgetRemaining=0)
         return response
     try:
         claim_request(s,now)
@@ -1130,6 +1136,16 @@ def first_discovery_sync(body: FirstDiscoverySync,request: Request):
         filtered={**data,'accounts':[a for a in data['accounts'] if account_key(a) in allowed]}
         if not filtered['accounts']:
             raise HTTPException(502,'New-account transaction data is not ready.')
+        if not any(isinstance(t,dict) and not t.get('pending',False)
+                   for a in filtered['accounts'] for t in a.get('transactions',[])):
+            # An empty or pending-only response is not a successful first
+            # history import. Defer without inventing posted transactions.
+            s['firstSyncNextAt']=now+3600
+            response=finish(uid,s,tag)
+            response.update(syncStatus='waiting',reason='history_pending',
+                            nextRetryAt=s['firstSyncNextAt'],
+                            budgetRemaining=_remaining_discovery_budget(s,now)[0])
+            return response
         # merge() normally computes missingAccounts across every watched account.
         # Scoped first-history reads are not evidence that old accounts vanished.
         prior_missing=s.get('missingAccounts',[])
