@@ -473,7 +473,7 @@ PROVIDER_LOGIN = re.compile(
 def provider_messages(data, accounts):
     """Return nonfatal notices and *account-scoped* issues; no cross-bank flags."""
     by_key={a['key']: a for a in accounts}
-    by_connection={str(a.get('connection')): a['key'] for a in accounts if a.get('connection')}
+    by_connection={str(a.get('connection')):[b['key'] for b in accounts if str(b.get('connection'))==str(a.get('connection'))] for a in accounts if a.get('connection')}
     by_bank={}
     for a in accounts:
         by_bank.setdefault(str(a.get('bank') or '').lower(), []).append(a['key'])
@@ -496,7 +496,7 @@ def provider_messages(data, accounts):
                 value=raw.get(field)
                 if value is None:continue
                 value=str(value)
-                if value in by_connection: scope=[by_connection[value]];break
+                if value in by_connection: scope=by_connection[value];break
                 if value in by_key:scope=[value];break
                 scope=[a['key'] for a in accounts if str(a.get('id'))==value]
                 if scope:break
@@ -586,8 +586,11 @@ def merge(state, data, now):
             rows[t['id']] = row
         state.setdefault('invalidTransactionsByAccount', {})[k] = invalid_count
         if invalid_count:
-            warnings.append('One account contained '+str(invalid_count)+' invalid transaction row(s); skipped for safety.')
+            warning='One account contained '+str(invalid_count)+' invalid transaction row(s); skipped for safety.'
+            warnings.append(warning)
             state['warnings'] = warnings[:50]
+            state.setdefault('institutionIssues',{})[k]={'code':'invalid_data','message':warning}
+            state['status']='attention'
         # Preserve pending originals in encrypted storage, but hide a cleared
         # authorization once its date is covered by a later provider response.
         for row_id, row in rows.items():
@@ -865,7 +868,12 @@ def connect(body: ConnectBody, request: Request):
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
+                s['connectionProblem']='access_rejected' if activity_error.status_code in (401,403) else 'temporary_error'
+        prior_error=s.get('error')
         apply_provider_health(s,data,s['accounts'],s.get('missingAccounts',[]))
+        if prior_error:
+            s['error']=prior_error;s['status']='attention'
+            s['connectionProblem']='access_rejected' if 'rejected' in str(prior_error).lower() else 'temporary_error'
     except (HTTPException, UnicodeError) as e:
         s['error'] = e.detail if isinstance(e, HTTPException) else 'SimpleFIN returned an invalid response.'
         s['status'] = 'attention'
@@ -935,7 +943,10 @@ def discover(request: Request):
             except HTTPException as activity_error:
                 s['error'] = activity_error.detail
                 s['status'] = 'attention'
+        prior_error=s.get('error')
         apply_provider_health(s,data,s['accounts'],s.get('missingAccounts',[]))
+        if prior_error:
+            s['error']=prior_error;s['status']='attention'
     except HTTPException as e:
         s['error'] = e.detail
         s['status'] = 'attention'
