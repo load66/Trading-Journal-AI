@@ -1,5 +1,9 @@
 # Finance retirement — read-only inventory and owner gate
 
+## Owner decision and implementation checkpoint (2026-10-17)
+
+Owner confirmed all manual Plaid/SimpleFIN disconnect actions and an empty account list in chat, and explicitly approved removal of the Tracker's optional bank-activity review. **This removes the evidence-only dependency blocker; all manual Tracker features remain protected.** The retirement implementation deletes provider-backed Finance code and related tests, with one owner-authenticated cleanup route retained until the owner executes the R2 purge. No production data purge, provider API request or environment change was performed by the agent. See `docs/FINANCE_RETIREMENT_RUNBOOK.md` for the owner's guarded cleanup steps.
+
 Status: **inventory only; no removal, revocation, R2 purge, deployment, or live provider call**. Owner decision date: 2026-10-17. Branch: `codex/remove-finance`.
 
 Read first: `AGENTS.md` and `docs/AUDIT_PROGRESS.md` in both repositories. This document inventories **current default branches**, not old unmerged Finance PRs. The owner must complete the in-app steps and explicitly confirm them **in chat** before any Finance code-removal implementation or Finance R2 purge is considered. Separate explicit owner approval is required for the bonus-evidence dependency described below.
