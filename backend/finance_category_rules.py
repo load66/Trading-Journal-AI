@@ -102,7 +102,7 @@ MERCHANTS = (
                r'restaurant|coffee shop|panera|dunkin|taco bell)\b'),
     ('transportation', r'\b(?:shell oil|exxon|chevron|quiktrip|casey.?s|'
                        r'gas station|fuel|parking|toll|lyft|uber trip)\b'),
-    ('subscription', r'\b(?:netflix|spotify|youtube premium|hulu|apple subscription|apple\s*(?:com\s*/\s*bill|icloud|i\s*cloud)|'
+    ('subscription', r'\b(?:netflix|spotify|youtube premium|hulu|apple subscription|apple\s*(?:\.com\s*/\s*bill|com\s*/\s*bill|icloud|i\s*cloud)|icloud|'
                      r'disney plus|amazon prime membership)\b'),
     ('utilities', r'\b(?:t[ -]?mobile|verizon|at\s*&\s*t|att wireless|liberty utilities|electric company|water utility|'
                   r'internet provider|utility bill|cellular bill|at&t wireless)\b'),
