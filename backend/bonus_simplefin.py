@@ -611,6 +611,7 @@ class AccountProfile(BaseModel):
     kind: str
     order: int = Field(ge=0, le=499)
     balanceMode: str = 'exclude'
+    hidden: bool | None = None
 
     @field_validator('kind')
     @classmethod
@@ -856,7 +857,12 @@ def account_profiles(body: AccountProfilesBody, request: Request):
     if not set(body.profiles).issubset(allowed) or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in body.profiles):
         finish(uid, s, tag)
         raise HTTPException(400, 'Choose accounts from the current connection.')
-    supplied = {k: v.model_dump() for k, v in body.profiles.items()}
+    supplied = {k: v.model_dump(exclude_none=True) for k, v in body.profiles.items()}
+    # Legacy clients omit visibility. Never accidentally unhide a saved account
+    # when an older Finance version saves unrelated profile settings.
+    for k, profile in supplied.items():
+        if 'hidden' not in profile and s.get('accountProfiles', {}).get(k, {}).get('hidden') is True:
+            profile['hidden'] = True
     # Keep profiles for temporarily missing accounts; replace current connected-account profiles atomically.
     s['accountProfiles'] = {k: v for k, v in s.get('accountProfiles', {}).items() if k not in allowed}
     s['accountProfiles'].update(supplied)
