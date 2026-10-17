@@ -7,6 +7,7 @@ import copy
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -23,6 +24,8 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody)
 import bonus_plaid_trial as quota
 from finance_ai_categories import classify_unknown, cache_key
+
+BACKGROUND_LOGGER = logging.getLogger(__name__)
 
 DAY = 86400
 MAX_BYTES = 8 * 1024 * 1024
@@ -708,15 +711,15 @@ def scheduled_sync_once():
                 for item_id, state in doc.get("items", {}).items())
             if now >= doc.get("nextSyncAt", 0) or discover_due or item_due:
                 sync_owner(uid)
-        except Exception:
-            # Private per-owner status reports failures; never log bank data.
-            pass
+        except Exception as error:
+            # Only the exception class is logged; no account, token or bank data.
+            BACKGROUND_LOGGER.warning("plaid_owner_sync_error class=%s", type(error).__name__)
 
 
 async def scheduled_plaid_loop():
     while True:
         try:
             await asyncio.to_thread(scheduled_sync_once)
-        except Exception:
-            pass
+        except Exception as error:
+            BACKGROUND_LOGGER.warning("plaid_scheduled_sync_error class=%s", type(error).__name__)
         await asyncio.sleep(300)
