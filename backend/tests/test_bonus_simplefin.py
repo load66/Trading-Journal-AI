@@ -221,7 +221,13 @@ def test_network_never_follows_redirects_or_sends_credentials_in_url(setup,monke
     assert called[0][1]['auth']==('synthetic','secret')
     assert ('account','a') in called[0][1]['params']
     assert ('pending','1') in called[0][1]['params']
-    assert int(dict(called[0][1]['params'])['start-date']) == NOW-90*b.DAY
+    params=dict(called[0][1]['params'])
+    assert int(params['start-date']) == NOW-89*b.DAY
+    assert int(params['end-date']) == NOW
+    assert int(params['end-date'])-int(params['start-date']) == 89*b.DAY
+    b.get_data(ACCESS,[],balances=True)
+    balances=dict(called[-1][1]['params'])
+    assert int(balances['end-date'])-int(balances['start-date']) == 89*b.DAY
 
 
 def test_private_routes_disable_caching(setup,monkeypatch):
@@ -814,3 +820,67 @@ def test_saved_automatic_old_subscription_reclassified_without_mutating_ledger()
     assert row['category']=='transfer'
     assert 'investment_transfer' in row['signals']
     assert s['transactions'][a]['old']==before
+
+
+
+def test_simplefin_cap_notice_does_not_trigger_attention_and_clears_old_warning():
+    s=seed()
+    k=b.account_key(account())
+    s['monitoredAccounts']=[k]
+    s['warnings']=['Requested date range exceeds limit of 90 days and was capped.']
+    s['status']='attention'
+    fresh=data(account())
+    fresh['errlist']=[{'msg':'Requested date range exceeds limit of 90 days and was capped.'}]
+    synced=b.merge(s,fresh,NOW)
+    assert synced['status']=='connected'
+    assert 'connectionProblem' not in synced
+    assert not synced.get('institutionIssues')
+    assert b.public_state(synced)['accounts'][0].get('transactionSyncStatus')!='needs_attention'
+    fresh['errlist']=[]
+    synced=b.merge(synced,fresh,NOW+1)
+    assert synced['warnings']==[]
+    assert synced['status']=='connected'
+
+
+def test_provider_bank_login_error_attaches_only_to_affected_connection():
+    chase={**account(),'conn_id':'chase-conn','name':'Chase Checking'}
+    robin={**account(),'conn_id':'robin-conn','id':'robin-acc','name':'Robinhood Checking'}
+    s=b.empty_state()
+    s['accounts']=b.normalize_accounts({'accounts':[chase,robin],'connections':[
+       {'conn_id':'chase-conn','name':'Chase'},{'conn_id':'robin-conn','name':'Robinhood'}]})
+    s['monitoredAccounts']=[a['key'] for a in s['accounts']]
+    d={'accounts':[chase,robin],'connections':[
+       {'conn_id':'chase-conn','name':'Chase'},{'conn_id':'robin-conn','name':'Robinhood'}],
+       'errlist':[{'conn_id':'chase-conn','msg':'Bank login required. Sign in again.'}]}
+    b.merge(s,d,NOW)
+    public=b.public_state(s)
+    assert s['status']=='attention'
+    chase_row=next(a for a in public['accounts'] if a['bank']=='Chase')
+    robin_row=next(a for a in public['accounts'] if a['bank']=='Robinhood')
+    assert chase_row['syncIssueType']=='bank_login'
+    assert chase_row['transactionSyncStatus']=='needs_attention'
+    assert robin_row.get('syncIssueType') is None
+    assert robin_row.get('transactionSyncStatus')!='needs_attention'
+    d['errlist']=[]
+    b.merge(s,d,NOW+1)
+    assert s['status']=='connected'
+    assert not s['institutionIssues']
+
+
+def test_informational_partial_history_notice_is_not_a_login_error():
+    s=seed()
+    d=data(account())
+    d['errlist']=[{'conn_id':'one','msg':'Partial transaction history is available.'}]
+    b.merge(s,d,NOW)
+    assert s['status']=='connected'
+    assert not s['institutionIssues']
+
+
+def test_unauthorized_access_is_distinct_from_bank_login_issue():
+    s=seed()
+    s['connectionProblem']='access_rejected'
+    s['error']='SimpleFIN access was rejected.'
+    public=b.public_state(s)
+    assert public['connectionProblem']=='access_rejected'
+    assert public['error']=='SimpleFIN access was rejected.'
+    assert not any(a.get('syncIssueType') for a in public['accounts'])
