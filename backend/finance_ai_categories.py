@@ -99,7 +99,8 @@ def classify_unknown(state, *, post=httpx.post, now=None):
         desc = sanitized_description(row.get("description"))
         bucket = amount_bucket(row.get("amount"))
         ident = cache_key(desc)
-        if not desc or bucket is None or ident in cache or ident in unique:
+        if (not desc or bucket is None or ident in cache or ident in unique
+                or ident in state.get("merchantRules", {})):
             continue
         unique[ident] = {
             "description": desc,
