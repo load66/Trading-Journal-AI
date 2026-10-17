@@ -980,7 +980,7 @@ def test_guided_discovery_budget_cannot_exceed_24_requests_in_rolling_day(setup,
     assert result['connected']
     assert len(b.read_state('owner')[0]['requestAttempts']) == 24
 
-def test_six_hour_full_sync_three_hour_balance_refresh_and_shared_budget(setup, monkeypatch):
+def test_two_hour_full_sync_alternating_hourly_discovery_and_shared_budget(setup, monkeypatch):
     state=seed()
     state['nextSyncAt']=NOW+6*3600
     state['nextBalanceRefreshAt']=NOW
@@ -997,7 +997,7 @@ def test_six_hour_full_sync_three_hour_balance_refresh_and_shared_budget(setup, 
     out=b.refresh_balances('owner')
     assert requests==[True],'A balance-only refresh must not request transactions'
     assert out['nextSyncAt']==NOW+6*3600
-    assert out['nextBalanceRefreshAt']==NOW+3*3600
+    assert out['nextBalanceRefreshAt']==NOW+2*3600
     assert out['lastBalanceRefreshAt']==NOW
     assert b.read_state('owner')[0]['transactions']==before,'Saved activity must be immutable'
     b.refresh_balances('owner')
@@ -1204,3 +1204,78 @@ def test_empty_first_sync_is_waiting_without_claiming_posted_transactions(setup,
     assert repeat.status_code==200 and repeat.json()['syncStatus']=='waiting'
     assert len(calls)==1
     assert len(b.read_state('owner')[0]['requestAttempts'])==1
+
+
+def test_hourly_discovery_populates_new_linked_accounts_without_owner_click(setup,monkeypatch):
+    s=seed()
+    original=b.account_key(account())
+    s['nextSyncAt']=NOW+b.FULL_SYNC_INTERVAL
+    s['nextBalanceRefreshAt']=NOW
+    s['monitoredAccounts']=[original]
+    s['transactions']={original:{'saved':{
+        'id':'saved','amount':'-13.25','description':'Synthetic Merchant','posted':NOW-100,'pending':False}}}
+    s['transactionReviews']={original:{'saved':{'category':'other','reviewedAt':NOW-40}}}
+    s['accountProfiles']={original:{'kind':'checking','balanceMode':'asset'}}
+    previous=copy.deepcopy(s)
+    b.write_state('owner',s,None)
+    second=account('second','same')
+    third=account('third','same')
+    calls=[]
+    def provider(access,selected=None,balances=False):
+        calls.append((balances,len(selected or [])))
+        assert access==ACCESS
+        if balances:
+            return {'accounts':[account(),second,third],'connections':[
+                {'conn_id':'one','name':'Example CU'},
+                {'conn_id':'second','name':'Another Example CU'},
+                {'conn_id':'third','name':'Third Example CU'}],'errlist':[]}
+        assert {a['key'] for a in selected}=={b.account_key(second),b.account_key(third)}
+        with_posted=copy.deepcopy(second)
+        with_posted['transactions']=[txn('first-history','-4.25','Example Store')]
+        return {'accounts':[with_posted,third],'connections':[],'errlist':[]}
+    monkeypatch.setattr(b,'get_data',provider)
+    view=b.refresh_balances('owner')
+    k2,k3=b.account_key(second),b.account_key(third)
+    assert len(view['accounts'])==3
+    assert set(view['monitoredAccounts'])=={original,k2,k3}
+    assert view['newAccountsLastSeenCount']==2
+    assert view['lastAccountDiscoveryAt']==NOW
+    assert view['lastNewAccountsAt']==NOW
+    assert calls==[(True,0),(False,2)]
+    saved=b.read_state('owner')[0]
+    assert saved['transactions'][original]==previous['transactions'][original]
+    assert saved['transactionReviews'][original]==previous['transactionReviews'][original]
+    assert saved['accountProfiles'][original]==previous['accountProfiles'][original]
+    assert saved['mappings']==previous['mappings']
+    assert saved['transactions'][k2]['first-history']['amount']=='-4.25'
+    assert saved['accounts'][0]['key']==original
+    assert len(saved['requestAttempts'])==2
+    b.refresh_balances('owner')
+    assert len(calls)==2
+
+def test_automatic_discovery_empty_response_preserves_every_saved_account(setup,monkeypatch):
+    s=seed();original=b.account_key(account())
+    s['nextSyncAt']=NOW+b.FULL_SYNC_INTERVAL;s['nextBalanceRefreshAt']=NOW
+    s['transactions']={original:{'t':txn()}}
+    s['accountProfiles']={original:{'syncEnabled':False}}
+    s['evidenceReviews']={original:{'t':{'status':'reviewed'}}}
+    s['balanceHistory']={original:[{'at':NOW-86400,'balance':'50','observedAt':NOW-86400,'currency':'USD'}]}
+    b.write_state('owner',s,None)
+    monkeypatch.setattr(b,'get_data',lambda access,selected=None,balances=False:data())
+    b.refresh_balances('owner')
+    saved=b.read_state('owner')[0]
+    for field in ('accounts','monitoredAccounts','transactions','accountProfiles','evidenceReviews','balanceHistory','mappings'):
+        assert saved[field]==s[field]
+
+def test_auto_discovery_quota_is_bounded_and_reserves_manual_requests(setup,monkeypatch):
+    s=seed();s['nextSyncAt']=NOW;s['nextBalanceRefreshAt']=NOW
+    s['requestAttempts']=[NOW-100]*20
+    b.write_state('owner',s,None)
+    calls=[]
+    monkeypatch.setattr(b,'get_data',lambda *_args,**_kw:calls.append('network'))
+    budget,_=b._remaining_discovery_budget(s,NOW)
+    assert budget==b.AUTOMATIC_REQUEST_RESERVE==4
+    # The scheduler must refuse an automatic provider call at the reserve.
+    assert calls==[]
+    assert b.FULL_SYNC_INTERVAL==2*3600
+    assert b.BALANCE_SYNC_INTERVAL==2*3600
