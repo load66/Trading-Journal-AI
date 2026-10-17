@@ -782,3 +782,21 @@ def test_ai_sync_metadata_contains_only_counts():
     public=b.public_state(state)
     assert public['financeAILastSync']==state['financeAILastSync']
     assert public['financeVersion']=='3.4.80'
+
+
+
+def test_non_round_reciprocal_transfers_across_two_accounts_and_preserve_user_review():
+    a='a'*64;other='b'*64
+    s=b.empty_state()
+    s['transactions']={
+       a:{'left':{'id':'left','description':'Payee reference','amount':'-7379.04',
+                  'posted':NOW-400,'pending':False,'kind':'withdrawal'}},
+       other:{'right':{'id':'right','description':'Received reference','amount':'7379.04',
+                  'posted':NOW-200,'pending':False,'kind':'deposit'}}}
+    result={};b.enrich_transactions(s,result)
+    rows=[next(iter(group.values())) for group in result['transactions'].values()]
+    assert all(row['category']=='transfer' for row in rows)
+    assert all('matched_internal_transfer' in row['signals'] for row in rows)
+    s['transactionReviews']={a:{'left':{'category':'shopping'}}}
+    result={};b.enrich_transactions(s,result)
+    assert next(iter(result['transactions'][a].values()))['category']=='shopping'
