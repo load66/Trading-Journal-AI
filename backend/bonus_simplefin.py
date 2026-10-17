@@ -703,6 +703,13 @@ def public_state(s):
         a['invalidTransactionRows'] = s.get('invalidTransactionsByAccount', {}).get(a['key'], a.get('invalidTransactionRows', 0))
     out['monitoredAccounts'] = sorted(set(s.get('monitoredAccounts', [])) | (set(s.get('transactions', {})) & {a['key'] for a in s.get('accounts', [])}))
     out['historyMonths'] = list(s.get('historyMonths', []))
+    # Recover prior provider discoveries from encrypted owner state without
+    # spending a second SimpleFIN request or requiring another setup token.
+    monitored = set(s.get('monitoredAccounts', [])) | set(s.get('mappings', {}))
+    out['pendingAccounts'] = [a for a in out['accounts']
+        if a.get('discovered') and a['key'] not in monitored and not a.get('firstSyncAt')]
+    out['newBankDiscoveryNextAt'] = s.get('newBankDiscoveryNextAt') or None
+    out['budgetRemaining'] = _remaining_discovery_budget(s,int(time.time()))[0]
     out['transactions'] = {}
     enrich_transactions(s, out)
     filter_after_removal(s, out['transactions'])
@@ -1043,6 +1050,7 @@ def discover_now(request: Request):
         result=finish(uid,s,tag)
         result.update(found=False,newAccounts=0,bank='',discoveredAccounts=[],
                       nextRetryAt=s['newBankDiscoveryNextAt'],budgetRemaining=remaining)
+        result['pendingAccounts']=result.get('pendingAccounts',[])
         return result
     if remaining==0:
         finish(uid,s,tag)
@@ -1082,6 +1090,7 @@ def discover_now(request: Request):
                       bank=banks[0] if len(banks)==1 else '',
                       banks=banks,discoveredAccounts=discovered,
                       nextRetryAt=s['newBankDiscoveryNextAt'],budgetRemaining=remaining)
+        result['pendingAccounts']=result.get('pendingAccounts',[])
         return result
     except HTTPException as exc:
         s['newBankDiscoveryError']=exc.status_code
