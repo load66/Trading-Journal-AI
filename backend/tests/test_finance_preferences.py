@@ -65,3 +65,11 @@ def test_safe_metadata_validation(section,key,value):
 def test_invalid_preferences_fail_closed(section,key,value):
     with pytest.raises(HTTPException):
         f._validate(section,key,value)
+
+
+def test_nickname_validation_does_not_change_source_account():
+    key='simplefin:'+'a'*64
+    assert f._validate('accountAliases',key,{'name':'  Main Checking  '})=={'name':'Main Checking'}
+    assert f._validate('accountAliases',key,None) is None
+    with pytest.raises(HTTPException):
+        f._validate('accountAliases',key,{'name':'x'*91})
