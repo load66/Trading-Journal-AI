@@ -38,7 +38,7 @@ from bonus_simplefin import TRANSACTION_CATEGORIES, TransactionReviewBody
     ("Netflix monthly", "-9.99", "subscription"),
     ("Starbucks", "-5.16", "dining"),
     ("Shell Oil", "-30.25", "transportation"),
-    ("Liberty Utilities", "-132.70", "utilities"),
+    ("Example Water Utility", "-132.70", "utilities"),
     ("Amazon retail", "-35", "shopping"),
     ("Doctor clinic", "-89.75", "health"),
     ("Hotel", "-112.00", "travel"),
@@ -47,12 +47,12 @@ from bonus_simplefin import TRANSACTION_CATEGORIES, TransactionReviewBody
     ("Venmo to someone", "-18.25", "unreviewed"),
     ("To Brokerage", "-2000", "transfer"),
     ("To Citibank", "-251", "transfer"),
-    ("From Lafayette Fcu", "500", "transfer"),
-    ("From Regions Bank", "500", "transfer"),
+    ("From Example FCU", "500", "transfer"),
+    ("From Example Bank", "500", "transfer"),
     ("To Personal Savings", "-997.39", "transfer"),
     ("From Personal Checking", "997.39", "transfer"),
     ("X Money Promotional Bonus", "5.00", "bonus"),
-    ("Schreiber Foods Payroll", "1920.00", "income"),
+    ("Example Employer Payroll", "1920.00", "income"),
     ("To Personal Checking", "-7379.04", "transfer"),
     ("From Personal Savings", "7379.04", "transfer"),
     ("To Paypal", "-428.17", "transfer"),
@@ -97,7 +97,7 @@ def test_200_realistic_synthetic_examples_below_ten_percent_unreviewed():
         ("ALDI Grocery", "-63.18"),
         ("Shell Oil gas station", "-48.12"),
         ("Netflix monthly subscription", "-15.49"),
-        ("Liberty Utilities electric", "-74.56"),
+        ("Example Water Utility electric", "-74.56"),
         ("Amazon retail", "-27.90"),
         ("Mortgage payment", "-865.34"),
         ("X Money Transfer", "-100.00"),
@@ -128,7 +128,7 @@ def test_diverse_200_transaction_month_offline_coverage():
       ('Starbucks','-6.20'),('Chipotle','-14.70'),('DoorDash','-26.12'),('Panera','-11.22'),
       ('Shell Oil','-32.10'),('QuikTrip','-29.10'),('Lyft','-15.40'),('Parking','-7.00'),
       ('Netflix','-15.49'),('Spotify','-11.99'),('YouTube Premium','-13.99'),('Hulu','-9.99'),
-      ('Liberty Utilities','-122.17'),('Water Utility','-35.10'),('Internet Provider','-55'),('Cellular bill','-62'),
+      ('Example Water Utility','-122.17'),('Water Utility','-35.10'),('Internet Provider','-55'),('Cellular bill','-62'),
       ('Amazon retail','-28.20'),('Target','-25.22'),('Best Buy','-42.22'),('Etsy','-17.10'),
       ('CVS pharmacy','-14.30'),('Dental clinic','-70'),('Hotel','-120.50'),('Southwest Air','-165.40'),
       ('Mortgage payment','-1100'),('Auto loan payment','-320'),('X Money Transfer','-250'),('Payment Thank You','-130'),
@@ -174,3 +174,37 @@ def test_card_payment_regression_not_mortgage():
     assert "card_payment" in card[2]
     payment_credit = category_for("Payment Thank You", "500.00")
     assert payment_credit[0] == "transfer"
+
+
+@pytest.mark.parametrize("description,amount,category,confidence",[
+    ("PROG ADVANCED", "-113.34", "insurance", "medium"),
+    ("INSURANCE PREMIUM", "-90.00", "insurance", "medium"),
+    ("GEICO AUTO INS", "-71.15", "insurance", "medium"),
+    ("Example Store Walmart Insurance Item", "-13.25", "groceries", "medium"),
+    ("Example Lender Loan Disbursement", "700.00", "loan_proceeds", "high"),
+    ("Cash Advance", "150.05", "loan_proceeds", "high"),
+    ("SoFi Lending", "900.00", "loan_proceeds", "high"),
+    ("One Finance", "700.00", "loan_proceeds", "high"),
+    ("Upstart", "925.45", "loan_proceeds", "high"),
+    ("Example Employer PAYROLL", "547.00", "income", "high"),
+])
+def test_finance_categories_v2_synthetic_insurance_and_loan_proceeds(
+        description, amount, category, confidence):
+    actual, certainty, signals = category_for(description, amount)
+    assert actual == category
+    assert certainty == confidence
+    assert ("possible_loan_proceeds" in signals) == (category == "loan_proceeds")
+    assert (actual in {"income"}) == (category == "income")
+    assert (actual in {"housing","loan","insurance","utilities","groceries",
+                       "dining","transportation","shopping","health","entertainment",
+                       "fees","taxes","travel","subscription","other"}) == (category in {"insurance","groceries"})
+
+
+def test_finance_categories_v2_backend_category_sets_remain_identical():
+    from finance_preferences import RULE_CATEGORIES, CATEGORIES as BUDGET_CATEGORIES
+    assert CATEGORIES == TRANSACTION_CATEGORIES
+    assert {"insurance","loan_proceeds"} <= CATEGORIES
+    assert "insurance" in BUDGET_CATEGORIES
+    assert "loan_proceeds" not in BUDGET_CATEGORIES
+    assert "loan_proceeds" in RULE_CATEGORIES
+    assert category_for("Example Lender Loan Disbursement","700.00",pending=True)[0] == "unreviewed"
