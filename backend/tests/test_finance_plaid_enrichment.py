@@ -39,6 +39,7 @@ def test_cash_movement_and_paycheck_category_mapping():
         if signal:assert signal in result['plaidCategorySignals']
 
 def test_no_paid_endpoints_ever_appear_in_plaid_finance_allowlist():
-    assert ROUTES==frozenset(('/item/get','/accounts/get','/transactions/sync'))
+    assert ROUTES==frozenset(('/item/get','/accounts/get','/transactions/sync',
+                              '/item/webhook/update','/webhook_verification_key/get'))
     assert not any('refresh' in x or 'link/token/create' in x or 'recurring/get' in x
                    for x in ROUTES)
