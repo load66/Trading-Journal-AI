@@ -58,7 +58,7 @@ def category_for(description, amount, *, pending=False, kind=None):
         return 'unreviewed','low',[]
     text = str(description or '')
     if number == 0 or (abs(number) < 1 and VERIFICATION.search(text)):
-        return 'verification','high',['verification']
+        return 'verification','high',[]
     if pending:
         return 'unreviewed','low',[]
     if kind == 'possible_bonus':
