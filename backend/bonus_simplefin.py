@@ -758,6 +758,10 @@ def refresh_balances(uid, *, force=False):
             (not force and now < s.get('nextBalanceRefreshAt', 0)) or
             (not force and s.get('accounts') and now >= s.get('nextSyncAt', 0))):
         return finish(uid, s, tag)
+    remaining, _reset = _remaining_discovery_budget(s, now)
+    if force and remaining <= AUTOMATIC_REQUEST_RESERVE:
+        s['balanceRefreshErrorKind'] = 429
+        return finish(uid, s, tag)
     s['nextBalanceRefreshAt'] = now + BALANCE_SYNC_INTERVAL
     # Returning from the external Bridge may request an immediate check,
     # but never more than once per 90 seconds or outside the shared budget.
@@ -1470,11 +1474,15 @@ async def scheduled_simplefin_loop():
                 uid = hashlib.sha256(os.environ['AUTHORIZED_USER_ID'].strip().encode()).hexdigest()
                 s, _ = await run_in_threadpool(read_state, uid)
                 if s.get('access'):
-                    # Keep several daily calls available for owner-triggered
-                    # recovery and initial history. Never exceed claim_request.
+                    # Keep several daily calls available for initial history
+                    # and recovery. Zero-click startup scans legacy linked
+                    # accounts immediately after this additive release.
                     remaining, _ = _remaining_discovery_budget(s, int(time.time()))
                     if remaining > AUTOMATIC_REQUEST_RESERVE:
-                        if s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
+                        initial_scan=not s.get('lastAccountDiscoveryAt')
+                        if initial_scan:
+                            await run_in_threadpool(refresh_balances, uid, force=True)
+                        elif s.get('accounts') and time.time() >= s.get('nextSyncAt', 0):
                             await run_in_threadpool(sync, uid)
                         elif time.time() >= s.get('nextBalanceRefreshAt', 0):
                             await run_in_threadpool(refresh_balances, uid)
