@@ -11,6 +11,8 @@ import logging
 import time
 import hmac
 import jwt
+import threading
+from collections import deque
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -1084,6 +1086,160 @@ def sync_item_now(uid, item_id):
             "lastUpdatedAt": candidate["items"][item_id].get("lastTransactionSyncAt")}
 
 
+# Never trust X-Forwarded-For without a verified ingress proxy. Rate limits
+# are defensive, process-local; JWT + Item ownership are the real auth checks.
+_WEBHOOK_RATE_LOCK = threading.Lock()
+_WEBHOOK_RATE_GLOBAL = deque()
+_WEBHOOK_RATE_PEERS = {}
+WEBHOOK_MAX_BODY = 64 * 1024
+WEBHOOK_ALLOWED_TRANSACTIONS = frozenset(("SYNC_UPDATES_AVAILABLE",))
+WEBHOOK_ALLOWED_ITEM = frozenset(("ERROR", "LOGIN_REPAIRED",
+                                  "PENDING_DISCONNECT", "PENDING_EXPIRATION"))
+
+
+def _webhook_rate_check(peer, now):
+    with _WEBHOOK_RATE_LOCK:
+        while _WEBHOOK_RATE_GLOBAL and _WEBHOOK_RATE_GLOBAL[0] <= now - 60:
+            _WEBHOOK_RATE_GLOBAL.popleft()
+        if len(_WEBHOOK_RATE_GLOBAL) >= 120:
+            return False
+        peer = str(peer or "unknown")[:128]
+        recent = _WEBHOOK_RATE_PEERS.setdefault(peer, deque())
+        while recent and recent[0] <= now - 60:
+            recent.popleft()
+        if len(recent) >= 40:
+            return False
+        recent.append(now)
+        _WEBHOOK_RATE_GLOBAL.append(now)
+        if len(_WEBHOOK_RATE_PEERS) > 256:
+            for old_peer in tuple(_WEBHOOK_RATE_PEERS):
+                if not _WEBHOOK_RATE_PEERS[old_peer]:
+                    _WEBHOOK_RATE_PEERS.pop(old_peer, None)
+        return True
+
+
+def _queue_webhook_event(event):
+    """Store one pending signal per known active Item using Trial ledger CAS.
+
+    A nonce distinguishes an update arriving while a worker is already in
+    flight, without unbounded job queues or raw transaction persistence.
+    """
+    category = event.get("webhook_type")
+    code = event.get("webhook_code")
+    item_id = event.get("item_id")
+    if ((category == "TRANSACTIONS" and code not in WEBHOOK_ALLOWED_TRANSACTIONS)
+            or (category == "ITEM" and code not in WEBHOOK_ALLOWED_ITEM)
+            or category not in ("TRANSACTIONS", "ITEM")
+            or event.get("environment") != "production"
+            or not isinstance(item_id, str) or not item_id or len(item_id) > 256):
+        return None, None
+    now = int(time.time())
+    for _ in range(5):
+        ledger, etag = quota._ledger()
+        item = ledger.get("items", {}).get(item_id)
+        if (not isinstance(item, dict) or not isinstance(item.get("owner"), str) or
+                item.get("disconnectedAt") or item.get("disconnectingAt") or
+                not isinstance(item.get("access"), str)):
+            return None, None
+        was_pending = bool(item.get("webhookPending"))
+        if category == "ITEM":
+            item["webhookStatus"] = (
+                "needs_reconnect" if code == "ERROR"
+                else "expiring" if code in ("PENDING_DISCONNECT", "PENDING_EXPIRATION")
+                else "connected")
+        needs_sync = category == "TRANSACTIONS" or code == "LOGIN_REPAIRED"
+        if needs_sync:
+            item["webhookPending"] = True
+            item["webhookNonce"] = uuid.uuid4().hex
+            item["webhookQueuedAt"] = now
+        try:
+            quota._write(ledger, etag)
+            return (item["owner"], item_id) if needs_sync and not was_pending else (None, None)
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+    raise HTTPException(503, "Webhook queue is busy.")
+
+
+def _complete_webhook(item_id, seen_nonce):
+    for _ in range(5):
+        ledger, tag = quota._ledger()
+        item = ledger.get("items", {}).get(item_id)
+        if not isinstance(item, dict) or item.get("webhookNonce") != seen_nonce:
+            return False
+        item["webhookPending"] = False
+        item.pop("webhookQueuedAt", None)
+        item.pop("webhookNonce", None)
+        try:
+            quota._write(ledger, tag)
+            return True
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+    return False
+
+
+def _drain_pending_webhook(uid, item_id):
+    """Attempt once. Any events during processing remain pending for next tick."""
+    try:
+        ledger, _ = quota._ledger()
+        item = ledger.get("items", {}).get(item_id)
+        if (not isinstance(item, dict) or item.get("owner") != uid or
+                not item.get("webhookPending") or not item.get("webhookNonce") or
+                item.get("disconnectedAt") or item.get("disconnectingAt")):
+            return
+        nonce = item["webhookNonce"]
+        doc, _ = _read(uid)
+        state = doc.get("items", {}).get(item_id, {})
+        now = int(time.time())
+        last = state.get("lastTransactionAttemptAt") or state.get("lastTransactionSyncAt") or 0
+        if now - last < MIN_REFRESH_GAP_SECONDS:
+            return
+        if state.get("transactionSyncStatus") in ("needs_attention", "history_still_loading", "daily_cap_reached"):
+            if now < state.get("nextTransactionSyncAt", 0):
+                return
+        result = sync_item_now(uid, item_id)
+        if result.get("status") == "updated":
+            _complete_webhook(item_id, nonce)
+    except Exception as exc:
+        # Never log Item IDs, account names, transaction details, or JWTs.
+        BACKGROUND_LOGGER.warning("plaid_webhook_sync_error class=%s", type(exc).__name__)
+
+
+@router.post("/webhook", dependencies=[Depends(_private)])
+async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Public route only in the sense that JWT verification replaces user auth.
+
+    No Item creation, no bank operations, no plaintext event logging.
+    """
+    if not _webhook_rate_check(request.client.host if request.client else "unknown", time.time()):
+        raise HTTPException(429, "Too many webhook requests.")
+    length = request.headers.get("content-length")
+    if length is not None:
+        try:
+            if int(length) > WEBHOOK_MAX_BODY:
+                raise HTTPException(413, "Webhook exceeds size limit.")
+        except ValueError:
+            raise HTTPException(413, "Invalid webhook length.") from None
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > WEBHOOK_MAX_BODY:
+            raise HTTPException(413, "Webhook exceeds size limit.")
+    # Verify before parsing, looking up Items, or touching the queue.
+    _verify_webhook(request.headers.get("plaid-verification"), bytes(body))
+    try:
+        event = json.loads(bytes(body))
+    except (ValueError, UnicodeError):
+        raise HTTPException(400, "Invalid webhook format.") from None
+    if not isinstance(event, dict):
+        raise HTTPException(400, "Invalid webhook format.")
+    uid, item_id = _queue_webhook_event(event)
+    if uid and item_id:
+        background_tasks.add_task(_drain_pending_webhook, uid, item_id)
+    return {"received": True}
+
+
 def scheduled_sync_once():
     if not quota._ready():
         return
@@ -1093,6 +1249,9 @@ def scheduled_sync_once():
     owners = {row.get("owner") for row in ledger["items"].values() if row.get("owner")}
     for uid in owners:
         try:
+            for item_id, row in ledger["items"].items():
+                if row.get("owner") == uid and row.get("webhookPending"):
+                    _drain_pending_webhook(uid, item_id)
             doc, _ = _read(uid)
             now = time.time()
             owned = {item_id for item_id, item in ledger["items"].items()
