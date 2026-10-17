@@ -21,6 +21,7 @@ from botocore.exceptions import ClientError
 from bonus_backups import owner, store
 from finance_category_rules import category_for, micro_deposit_refs
 from finance_ai_categories import classify_unknown, cache_key
+from finance_history_archive import archive_old, read_month, HOT_DAYS
 
 def private_response(response: Response):
     response.headers['Cache-Control'] = 'no-store'
@@ -63,6 +64,7 @@ def migrate_state(value):
     if not isinstance(state.get('audit', []), list):
         raise HTTPException(503, 'Private financial data needs review before it can be used.')
     state.setdefault('audit', [])
+    state.setdefault('historyMonths', [])
     state['version'] = 2
     return state
 
@@ -97,6 +99,11 @@ def read_state(uid):
 
 def write_state(uid, state, etag):
     state = migrate_state(state)
+    # Preserve old activity in verified encrypted monthly shards before pruning.
+    hot, archived = archive_old(store(), cipher(), 'simplefin', uid,
+                                state.get('transactions', {}), int(time.time()))
+    state['transactions'] = hot
+    state['historyMonths'] = sorted(set(state.get('historyMonths', [])) | set(archived))
     raw = cipher().encrypt(json.dumps(state, sort_keys=True).encode())
     if len(raw) > MAX_STATE:
         raise HTTPException(413, 'Bank-sync history exceeded its safe storage limit.')
@@ -247,7 +254,20 @@ def record_balances(state, accounts, observed_at):
         if rows and all(rows[-1].get(k) == row.get(k) for k in ('at', 'balance', 'availableBalance', 'currency')):
             continue
         rows.append(row)
-        history[account['key']] = rows[-400:]
+        # At most one daily point for 90 days, then weekly through 24 months.
+        from datetime import datetime, timezone
+        seen = set()
+        compact = []
+        for point in reversed(rows):
+            at = point.get('observedAt', 0)
+            if not isinstance(at, (int, float)) or at < observed_at - 731 * DAY:
+                continue
+            day = datetime.fromtimestamp(at, timezone.utc).date()
+            bucket = str(day) if at >= observed_at - 90 * DAY else str(day.isocalendar()[:2])
+            if bucket not in seen:
+                seen.add(bucket)
+                compact.append(point)
+        history[account['key']] = list(reversed(compact))
 
 
 def public_ref(account, transaction):
@@ -501,7 +521,7 @@ def merge(state, data, now):
                     and now - 90 * DAY <= row.get('posted', 0) <= now):
                 row['pendingClearedAt'] = now
         # Missing posted rows never imply reversal/deletion; preserve 90 days of observed history.
-        state['transactions'][k] = {i: r for i, r in rows.items() if r['posted'] >= now - 90 * DAY}
+        state['transactions'][k] = rows  # Archived only after verified conditional R2 write.
         state.setdefault('evidenceReviews', {})[k] = {
             i: v for i, v in state.get('evidenceReviews', {}).get(k, {}).items()
             if i in state['transactions'][k] and isinstance(v, dict)
@@ -676,6 +696,17 @@ class TransactionReviewBody(BaseModel):
         if value not in TRANSACTION_CATEGORIES:
             raise ValueError('Unsupported transaction category')
         return value
+
+
+@router.get('/history/{month}')
+def history_month(month: str, request: Request):
+    uid = owner(request)
+    from finance_history_archive import archive_key
+    try:
+        archive_key('simplefin', uid, month)
+    except ValueError:
+        raise HTTPException(400, 'Choose a valid month.')
+    return {'month': month, 'transactions': read_month(store(), cipher(), 'simplefin', uid, month)}
 
 
 @router.get('')
