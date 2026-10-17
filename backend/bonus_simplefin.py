@@ -1465,9 +1465,10 @@ def auto_refresh(uid):
         s['accounts']=list(old_by_key.values())
         # Auto-monitor only eligible accounts; preserve explicit Sync OFF and
         # institution/account exclusions, prior mappings and reviews.
-        watched=set(s.get('monitoredAccounts',[]))
-        watched.update(a['key'] for a in s['accounts'] if syncing(s,a))
-        s['monitoredAccounts']=sorted(watched)
+        # Every eligible provider account is on by default. The explicit
+        # per-account/institution exclusions and syncEnabled=false still win.
+        s['monitoredAccounts']=sorted(
+            a['key'] for a in s['accounts'] if syncing(s,a))
         # Partial provider responses never remove saved accounts or evidence.
         candidate=merge(copy.deepcopy(s),response,now)
         for account in candidate['accounts']:
