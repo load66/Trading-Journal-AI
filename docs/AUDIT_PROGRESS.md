@@ -1,10 +1,15 @@
 # Audit progress
 
-Active agent: none
+Active agent: codex — Plaid fast sync — codex/plaid-fast-sync
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- Queue: Categories v2 backend amendment PR #227 merged at e6d9ce72a130a882ef16e493fa80884b4a6fb4eb; Railway exact-commit verification pending
+- Queue: frontend Categories v2 PR #157 tested and open, merge withheld pending backend production verification
+- In progress: Plaid fast sync, backend branch codex/plaid-fast-sync; existing-Item-only, nonbillable endpoint verification and isolated regression tests
+- Next step: implement signed webhook verification and scoped Item synchronization, then verify CI; never deploy backend before tests
 
 - Categories v2 backend v3.5.0: PR #224 merged; Railway SUCCESS on ed0d5314e7e5adfb367466b361995728c2ea3d7d
 - Case-insensitive P2P regression: PR #227, failing-before CI 39072698485, passing backend/build CI 39072838689
