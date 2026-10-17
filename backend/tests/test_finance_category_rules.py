@@ -152,3 +152,25 @@ def test_exact_financial_labels_are_not_false_positive_shopping():
     assert category_for('Apple', '-249.52')[0] == 'shopping'
     assert 'investment_transfer' in category_for('To Brokerage', '-2000')[2]
     assert 'card_payment' in category_for('U.S. Bank', '-820.77')[2]
+
+
+@pytest.mark.parametrize("description,amount", [
+    ("CHASE MORTGAGE PMT", "-2100.00"),
+    ("WELLS FARGO HOME MTG PAYMENT", "-1850.00"),
+    ("MR COOPER AUTOPAY", "-1600.00"),
+    ("LOANCARE PMT", "-1425.37"),
+    ("NEWREZ-SHELLPOIN WEB PMT", "-1999.99"),
+    ("US BANK HOME MTGE PAYMENT", "-2123.45"),
+    ("ROCKET MORTGAGE", "-1900.50"),
+])
+def test_mortgage_servicer_payments_are_housing_exact_cents(description, amount):
+    category, confidence, signals = category_for(description, amount)
+    assert (category, confidence, signals) == ("housing", "high", [])
+
+
+def test_card_payment_regression_not_mortgage():
+    card = category_for("CHASE CREDIT CRD AUTOPAY", "-500.00")
+    assert card[0] == "transfer"
+    assert "card_payment" in card[2]
+    payment_credit = category_for("Payment Thank You", "500.00")
+    assert payment_credit[0] == "transfer"
