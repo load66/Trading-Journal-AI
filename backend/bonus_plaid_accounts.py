@@ -7,6 +7,7 @@ import copy
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -28,6 +29,31 @@ MAX_BYTES = 8 * 1024 * 1024
 MAX_PAGES = 25
 MAX_ROWS = 10000
 router = APIRouter(prefix="/api/bonus-tracker/plaid")
+
+HISTORY_STATUS = frozenset(("NOT_READY", "INITIAL_UPDATE_COMPLETE", "HISTORICAL_UPDATE_COMPLETE"))
+HISTORY_RETRY_HOURS = (1, 3, 6)
+
+
+class SyncDelta(tuple):
+    """A four-element cursor delta with optional Plaid historical-readiness metadata."""
+    def __new__(cls, items, update_status=None):
+        instance = super().__new__(cls, items)
+        instance.update_status = update_status
+        return instance
+
+
+def _retry_at(now, attempts):
+    return now + (HISTORY_RETRY_HOURS[attempts - 1] * 3600 if 0 < attempts <= 3 else DAY)
+
+
+def _sync_failure(state, now, detail):
+    attempts = min(int(state.get("transactionRetryAttempts", 0)) + 1, 4)
+    state["transactionRetryAttempts"] = attempts
+    state["lastTransactionAttemptAt"] = now
+    state["nextTransactionSyncAt"] = _retry_at(now, attempts)
+    state["transactionSyncStatus"] = "needs_attention"
+    state["transactionSyncError"] = detail
+
 
 
 def connection_handle(uid, item_id):
@@ -194,11 +220,15 @@ def _sync_item(token, current_cursor):
     """Apply all pages atomically, never persist a partial cursor."""
     cursor = current_cursor or ""
     added, modified, removed = {}, {}, set()
+    update_status = None
     for _ in range(MAX_PAGES):
         response = _provider("/transactions/sync", token, cursor=cursor, count=500)
         if not isinstance(response, dict):
             raise HTTPException(502, "Plaid returned invalid transaction updates.")
         new_cursor, more = response.get("next_cursor"), response.get("has_more")
+        observed = response.get("transactions_update_status")
+        if observed in HISTORY_STATUS:
+            update_status = observed
         if not isinstance(new_cursor, str) or type(more) is not bool:
             raise HTTPException(502, "Plaid sync pagination is invalid.")
         for kind, destination in (("added", added), ("modified", modified)):
@@ -220,7 +250,7 @@ def _sync_item(token, current_cursor):
             raise HTTPException(502, "Plaid transaction batch is too large.")
         cursor = new_cursor
         if not more:
-            return added, modified, removed, cursor
+            return SyncDelta((added, modified, removed, cursor), update_status)
     raise HTTPException(502, "Plaid sync exceeds the safe page limit. Existing data is preserved.")
 
 
@@ -273,11 +303,23 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
     out["cursor"] = cursor
     out["lastTransactionAttemptAt"] = now
     out["lastTransactionSyncAt"] = now
-    out["nextTransactionSyncAt"] = now + DAY
     out.pop("transactionSyncError", None)
-    out["transactionSyncStatus"] = (
-        "ready" if any(not x.get("pending") for x in out["transactions"].values())
-        else "pending_only" if out["transactions"] else "awaiting_provider_data")
+    update_status = getattr(changes, "update_status", None)
+    if update_status in HISTORY_STATUS:
+        out["transactionUpdateStatus"] = update_status
+    if update_status in ("NOT_READY", "INITIAL_UPDATE_COMPLETE"):
+        attempts = min(int(out.get("transactionRetryAttempts", 0)) + 1, 4)
+        out["transactionRetryAttempts"] = attempts
+        out["nextTransactionSyncAt"] = _retry_at(now, attempts)
+        out["transactionSyncStatus"] = "history_still_loading"
+    else:
+        out["transactionRetryAttempts"] = 0 if out.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE" else out.get("transactionRetryAttempts", 0)
+        out["nextTransactionSyncAt"] = now + DAY
+        out["transactionSyncStatus"] = (
+            "ready" if any(not x.get("pending") for x in out["transactions"].values())
+            else "pending_only" if out["transactions"] else "awaiting_provider_data")
+        if out.get("transactionUpdateStatus") in ("NOT_READY", "INITIAL_UPDATE_COMPLETE"):
+            out["transactionSyncStatus"] = "history_still_loading"
     return out
 
 
@@ -299,6 +341,8 @@ def _view(doc, ledger, uid):
             view["accounts"].append({**{k: v for k, v in account.items() if k != "id"},
                                      "connectionHandle": connection_handle(uid, item_id),
                                      "transactionSyncStatus": state.get("transactionSyncStatus", "awaiting_first_sync"),
+                                     "transactionUpdateStatus": state.get("transactionUpdateStatus"),
+                                     "historyComplete": (state.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE" and any(not tx.get("pending") for tx in state.get("transactions", {}).values())),
                                      "transactionLastSyncAt": state.get("lastTransactionSyncAt"),
                                      "transactionNextSyncAt": state.get("nextTransactionSyncAt", doc.get("nextSyncAt")),
                                      "transactionSyncError": state.get("transactionSyncError")})
@@ -366,7 +410,11 @@ def profiles(body: AccountProfilesBody, request: Request):
     uid, ledger, doc, etag, view = _editable(request)
     if not set(body.profiles).issubset({a["key"] for a in view["accounts"]}):
         raise HTTPException(400, "Choose only your discovered Plaid accounts.")
-    doc["accountProfiles"] = {key: value.model_dump() for key, value in body.profiles.items()}
+    new_profiles = {key: value.model_dump(exclude_none=True) for key, value in body.profiles.items()}
+    for key, profile in new_profiles.items():
+        if 'hidden' not in profile and doc.get("accountProfiles", {}).get(key, {}).get("hidden") is True:
+            profile["hidden"] = True
+    doc["accountProfiles"] = new_profiles
     _write(uid, doc, etag)
     return _public(doc, ledger, uid)
 
@@ -510,10 +558,7 @@ def sync_owner(uid):
                     except HTTPException as exc:
                         # Retain successful account discovery and clearly mark
                         # incomplete first-history coverage, never invent zero.
-                        state["lastTransactionAttemptAt"] = now
-                        state["nextTransactionSyncAt"] = now + DAY
-                        state["transactionSyncStatus"] = "needs_attention"
-                        state["transactionSyncError"] = exc.detail
+                        _sync_failure(state, now, exc.detail)
                 candidate["items"][item_id] = state
                 candidate.get("newItemDiscoveryAttempts", {}).pop(item_id, None)
             for item_id, item in due_items.items():
@@ -527,10 +572,7 @@ def sync_owner(uid):
                         old, item_id, item["institution"], raw, delta, now)
                     candidate["lastSuccess"] = now
                 except HTTPException as exc:
-                    old["lastTransactionAttemptAt"] = now
-                    old["nextTransactionSyncAt"] = now + DAY
-                    old["transactionSyncStatus"] = "needs_attention"
-                    old["transactionSyncError"] = exc.detail
+                    _sync_failure(old, now, exc.detail)
             if eligible_missing:
                 candidate["lastAccountDiscovery"] = now
             if discovery_failed:
@@ -567,10 +609,7 @@ def sync_owner(uid):
                 # saved transactions or prevent other Items from updating.
                 if old:
                     exposed = copy.deepcopy(old)
-                    exposed["lastTransactionAttemptAt"] = now
-                    exposed["nextTransactionSyncAt"] = now + DAY
-                    exposed["transactionSyncStatus"] = "needs_attention"
-                    exposed["transactionSyncError"] = exc.detail
+                    _sync_failure(exposed, now, exc.detail)
                     candidate["items"][item_id] = exposed
                 continue
             discovered = {a["key"] for a in exposed["accounts"]}
@@ -589,10 +628,7 @@ def sync_owner(uid):
                 except HTTPException as exc:
                     # A temporarily unavailable Item must not roll back
                     # successfully synced unrelated banks or lose its cursor.
-                    exposed["lastTransactionAttemptAt"] = now
-                    exposed["nextTransactionSyncAt"] = now + DAY
-                    exposed["transactionSyncStatus"] = "needs_attention"
-                    exposed["transactionSyncError"] = exc.detail
+                    _sync_failure(exposed, now, exc.detail)
             # Plaid returns an Item-wide delta, even when only one account is
             # selected. Discard unselected activity before encrypted persistence.
             exposed["transactions"] = {
@@ -644,15 +680,15 @@ def scheduled_sync_once():
                 for item_id, state in doc.get("items", {}).items())
             if now >= doc.get("nextSyncAt", 0) or discover_due or item_due:
                 sync_owner(uid)
-        except Exception:
-            # Private per-owner status reports failures; never log bank data.
-            pass
+        except Exception as exc:
+            # Exception type only; provider messages and private owner data are excluded.
+            logging.getLogger(__name__).warning("Plaid scheduled owner check failed: %s", type(exc).__name__)
 
 
 async def scheduled_plaid_loop():
     while True:
         try:
             await asyncio.to_thread(scheduled_sync_once)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Plaid scheduler failed: %s", type(exc).__name__)
         await asyncio.sleep(300)

@@ -328,7 +328,7 @@ def test_initial_provider_error_preserves_discovery_and_suspends_retry(monkeypat
     result = adapter.sync_owner("alice")
     assert len(result["accounts"]) == 1
     assert result["accounts"][0]["transactionSyncStatus"] == "needs_attention"
-    assert result["accounts"][0]["transactionNextSyncAt"] == NOW + adapter.DAY
+    assert result["accounts"][0]["transactionNextSyncAt"] == NOW + 3600
     assert "secret" not in str(result)
     assert calls == ["/accounts/get", "/transactions/sync"]
     adapter.sync_owner("alice")
@@ -441,7 +441,7 @@ def test_one_bank_transaction_failure_does_not_rollback_other_bank(monkeypatch):
     assert by_name["Available"]["transactionSyncStatus"] == "ready"
     assert len(result["transactions"][adapter._account_key("good-bank", "good-checking")]) == 1
     assert storage["items"]["good-bank"]["cursor"] == "good-cursor"
-    assert storage["items"]["old-failing"]["nextTransactionSyncAt"] == NOW + adapter.DAY
+    assert storage["items"]["old-failing"]["nextTransactionSyncAt"] == NOW + 3600
 
 
 def test_account_discovery_outage_isolates_item_and_retains_saved_history(monkeypatch):
@@ -562,3 +562,64 @@ def test_delayed_initial_history_retries_on_its_own_due_date(monkeypatch):
     calls_before = len(calls)
     adapter.sync_owner("alice")
     assert len(calls) == calls_before, "A fresh backfill must not be fetched twice"
+
+
+def test_plaid_not_ready_and_initial_update_do_not_claim_complete(monkeypatch):
+    """Synthetic Plaid status keeps partial rows visible without certifying history."""
+    responses = iter(("NOT_READY", "INITIAL_UPDATE_COMPLETE", "HISTORICAL_UPDATE_COMPLETE"))
+    def provider(endpoint, token, **kwargs):
+        assert endpoint == "/transactions/sync"
+        status = next(responses)
+        return {"added": [], "modified": [], "removed": [],
+                "next_cursor": "cursor-" + status, "has_more": False,
+                "transactions_update_status": status}
+    monkeypatch.setattr(adapter, "_provider", provider)
+    state = {}
+    for index, (status, seconds) in enumerate((
+            ("NOT_READY", 3600), ("INITIAL_UPDATE_COMPLETE", 3 * 3600),
+            ("HISTORICAL_UPDATE_COMPLETE", adapter.DAY)), start=1):
+        delta = adapter._sync_item("synthetic-token", state.get("cursor", ""))
+        assert delta.update_status == status
+        state = adapter._merge(state, "test-item", "Test Bank",
+                               {"accounts": [account()]}, delta, NOW + index)
+        assert state["nextTransactionSyncAt"] == NOW + index + seconds
+        assert state["transactionSyncStatus"] == (
+            "awaiting_provider_data" if status == "HISTORICAL_UPDATE_COMPLETE"
+            else "history_still_loading")
+        assert (state["transactionUpdateStatus"] == "HISTORICAL_UPDATE_COMPLETE") == (
+            status == "HISTORICAL_UPDATE_COMPLETE")
+
+
+def test_plaid_missing_history_status_is_not_certified():
+    state = adapter._merge({}, "test-item", "Test Bank", {"accounts": [account()]},
+                           ({}, {}, set(), "cursor"), NOW)
+    ledger = {"items": {"test-item": {"owner": "alice", "access": "sensitive"}}}
+    key = adapter._account_key("test-item", "example")
+    result = adapter._public({"version": 1, "items": {"test-item": state},
+                              "monitored": [key], "lastSuccess": NOW}, ledger, "alice")
+    assert result["accounts"][0]["historyComplete"] is False
+    assert result["accounts"][0]["transactionUpdateStatus"] is None
+    assert "sensitive" not in str(result)
+
+
+def test_plaid_history_loading_exponential_schedule():
+    assert [adapter._retry_at(NOW, i) - NOW for i in range(1, 6)] == [
+        3600, 3 * 3600, 6 * 3600, adapter.DAY, adapter.DAY]
+
+
+def test_plaid_hidden_profile_is_backward_compatible(monkeypatch):
+    key=adapter._account_key("plaid-item","example")
+    doc=adapter._default()
+    snapshot={"accounts":[{"key":key}],"transactions":{}}
+    ledger={"items":{}}
+    monkeypatch.setattr(adapter,"_editable",lambda request:("owner",ledger,doc,"etag",snapshot))
+    monkeypatch.setattr(adapter,"_write",lambda *a,**kw:"tag")
+    monkeypatch.setattr(adapter,"_public",lambda *a:doc)
+    model={"kind":"checking","order":0,"balanceMode":"asset"}
+    payload=adapter.AccountProfilesBody(profiles={key:{**model,"hidden":True}})
+    adapter.profiles(payload,None)
+    assert doc["accountProfiles"][key]["hidden"] is True
+    adapter.profiles(adapter.AccountProfilesBody(profiles={key:model}),None)
+    assert doc["accountProfiles"][key]["hidden"] is True
+    adapter.profiles(adapter.AccountProfilesBody(profiles={key:{**model,"hidden":False}}),None)
+    assert doc["accountProfiles"][key]["hidden"] is False
