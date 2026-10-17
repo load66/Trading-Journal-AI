@@ -20,7 +20,11 @@ VERIFICATION = re.compile(
 PAYROLL = re.compile(r'\b(?:payroll|salary|wages|direct\s*dep(?:osit)?|dir\s*dep|ppd|paycheck)\b', re.I)
 REFUND = re.compile(r'\b(?:refund|return(?:ed)?\s+(?:purchase|item|payment)|reimbursement|merchant credit)\b', re.I)
 INTEREST = re.compile(r'\b(?:interest (?:paid|earned|credit)|dividends?|apy interest)\b', re.I)
-HOUSING = re.compile(r'\b(?:mortgage|home loan|rent|landlord|apartment lease)\b', re.I)
+HOUSING = re.compile(
+    r'\b(?:mortgage|mortg|mtge?|home\s*mtg|home\s+loan|rent|landlord|apartment\s+lease|'
+    r'mr\.?\s*cooper|loancare|newrez|shellpoin(?:t)?|rocket\s+mortgage|pennymac|'
+    r'freedom\s+mortgage|dovenmuehle|cenlar|nationstar|lakeview\s+loan|'
+    r'carrington\s+mortgage|roundpoint|sps\s+servicing)\b', re.I)
 LOAN = re.compile(r'\b(?:student loan|auto loan|vehicle loan|personal loan|loan payment)\b', re.I)
 TRANSFER = re.compile(
     r'\b(?:transfer|xfer|pmt|autopay|epayment|credit card payment|'
@@ -70,6 +74,9 @@ def financial_movement(description, amount):
     if not value.is_finite() or value == 0:
         return None
     label = str(description or '').strip()
+    # A recognizable mortgage debit is not an issuer/card payment.
+    if value < 0 and HOUSING.search(label):
+        return None
     if ACCOUNT_ARROW.fullmatch(label):
         return 'transfer', ['matched_internal_transfer' if not INVESTMENT_DESTINATION.search(label) else 'investment_transfer']
     direction = FINANCIAL_DIRECTION.fullmatch(label)
