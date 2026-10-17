@@ -25,6 +25,8 @@ from bonus_simplefin import (cipher, clean, classify, evidence_fingerprint, publ
     public_state, apply_mapping_selection, apply_evidence_decision, merchant_rule_key, SelectionBody,
     EvidenceReviewBody, AccountProfilesBody, TransactionReviewBody, record_balances)
 import bonus_plaid_trial as quota
+from plaid_sync_policy import (reserve_call, DailyCallCapReached, ITEM_POLL_SECONDS,
+                               MIN_REFRESH_GAP_SECONDS, MAX_DAILY_CALLS)
 from finance_history_archive import archive_old, read_month, archive_key, purge_account
 from finance_account_management import (AccountAction, syncing, public_accounts, merge_profiles,
     action as account_action, purge_history, filter_after_removal)
@@ -178,6 +180,45 @@ def _write(uid, doc, etag):
     return new_tag
 
 
+def _reserve_transaction_call(access_token):
+    """Reserve one API request on an EXISTING Item in the encrypted Trial ledger.
+
+    Every /transactions/sync pagination request consumes one slot BEFORE the
+    provider is contacted. Quota CAS prevents concurrent workers bypassing the
+    rolling budget. This operation never creates/changes an Item or product.
+    """
+    if not quota._ready():
+        raise HTTPException(503, "Plaid Trial is not activated.")
+    if not isinstance(access_token, str) or not access_token:
+        raise HTTPException(403, "Existing Item required.")
+    for _ in range(5):
+        ledger, etag = quota._ledger()
+        matches = [
+            row for row in ledger.get("items", {}).values()
+            if isinstance(row, dict) and isinstance(row.get("access"), str)
+            and hmac.compare_digest(row["access"], access_token)
+        ]
+        if len(matches) != 1 or matches[0].get("disconnectedAt") or matches[0].get("disconnectingAt"):
+            raise HTTPException(403, "Existing active Item required.")
+        item = matches[0]
+        now = time.time()
+        try:
+            item["transactionSyncCalls"] = reserve_call(item.get("transactionSyncCalls"), now)
+        except DailyCallCapReached as limited:
+            # No provider call and no leaked Item reference. Next retry time is
+            # derived only from already-reserved calls in the encrypted ledger.
+            raise HTTPException(429, "Daily Plaid transaction sync limit reached.") from None
+        except ValueError:
+            raise HTTPException(503, "Transaction sync budget integrity check failed.") from None
+        try:
+            quota._write(ledger, etag)
+            return
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+    raise HTTPException(409, "Concurrent Plaid transaction budget change.")
+
+
 def _provider(endpoint, token=None, **kwargs):
     """Fail-closed, non-billable allowlist for existing Plaid Items only."""
     if endpoint not in ROUTES:
@@ -203,6 +244,8 @@ def _provider(endpoint, token=None, **kwargs):
             if set(kwargs) != {"webhook"} or not isinstance(kwargs["webhook"], str) or not kwargs["webhook"].startswith("https://"):
                 raise HTTPException(500, "Invalid existing-Item webhook update.")
         body = {"access_token": token, **kwargs}
+    if endpoint == "/transactions/sync":
+        _reserve_transaction_call(token)
     try:
         response = httpx.post(quota.BASE + endpoint,
             json={"client_id": quota.os.environ["PLAID_CLIENT_ID"],
