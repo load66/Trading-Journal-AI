@@ -336,6 +336,7 @@ def _merge(old, item_id, name, provider_accounts, changes, now):
         _account_key(item_id, raw): count for raw, count in malformed.items() if raw != "unknown"
     }
     out["unassignedInvalidTransactions"] = malformed.get("unknown", 0)
+    out.setdefault("firstTransactionAttemptAt", now)
     out["lastTransactionAttemptAt"] = now
     out["lastTransactionSyncAt"] = now
     out.pop("transactionSyncError", None)
@@ -386,6 +387,7 @@ def _view(doc, ledger, uid):
                                      "transactionUpdateStatus": state.get("transactionUpdateStatus"),
                                      "invalidTransactionRows": state.get("invalidTransactionsByAccount", {}).get(key, 0),
                                      "historyComplete": (state.get("transactionUpdateStatus") == "HISTORICAL_UPDATE_COMPLETE"),
+                                     "transactionFirstSyncAt": state.get("firstTransactionAttemptAt"),
                                      "transactionLastSyncAt": state.get("lastTransactionSyncAt"),
                                      "transactionNextSyncAt": state.get("nextTransactionSyncAt", doc.get("nextSyncAt")),
                                      "transactionSyncError": state.get("transactionSyncError"),
