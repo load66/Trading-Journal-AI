@@ -72,6 +72,10 @@ Static code identifies:
 - A **SimpleFIN pre-disconnect snapshot** was requested for cleanup, but its precise deployed key cannot be established from the current main-branch key constructors. Later implementation must discover and explicitly whitelist the exact prefix from reviewed evidence; do not guess a wildcard or delete an entire common parent.
 - `SIMPLEFIN_ENCRYPTION_KEY` presently backs `cipher()` used by provider activity, preferences and the immutable slot ledger. Whether any retained runtime consumer needs it after removal must be reassessed; do not alter the Railway variable or decrypt retained ledger data.
 
+### Browser-local Finance residue
+
+The Finance page also persists **only UI preferences** in browser `localStorage` keys `bt_finance_hide_v2` and `bt_finance_tx_filter`. After owner confirmation, remove these two exact keys in migration (never clear shared Tracker, recovery or authentication storage). The ordinary cloud recovery key allowlist does not include these two keys; separately downloaded old full-browser backup files are outside the server-side R2 purge and require an owner-controlled decision.
+
 ### Owner-only future R2 purge design (NOT IMPLEMENTED OR RUN HERE)
 
 After owner chat confirmation and dependency decision, implement one-time owner-authenticated cleanup. Require a dry-run listing with **counts and allowed key prefixes only**, bind the dry-run count to an exact plan digest, require a typed confirmation phrase, enforce allowlist and explicit denylist (particularly the global ledger), use conditional/idempotent deletion, count-only logs and a post-execution list verification. Never call Plaid/SimpleFIN or mutate live data from the agent. Preserve bonus backups, journal data, screenshots and ledger. The owner alone invokes this cleanup.
