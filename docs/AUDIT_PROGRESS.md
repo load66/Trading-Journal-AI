@@ -1,10 +1,12 @@
 # Audit progress
 
-Active agent: codex (Railway authentication diagnostics v3.6.8, codex/railway-auth-layer-diagnostics-v368)
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- Railway hosting authentication diagnostics PR #237 (`codex/railway-auth-layer-diagnostics-v368`): disambiguates HTTP 401, HTTP 403 and GraphQL permission errors at the initial `me` check, returning and logging only fixed source codes; no token, remote text, private data or env-var writes. Synthetic tests for all three paths and information safety added. PR CI run 39120018235 PASS (backend suite and journal frontend build/tests). Next: merge after exact-head CI, confirm Railway SUCCESS for merged commit and inspect sanitized live auth source; do not presume token fixed until live verification.
 
 - v3.6.7 Railway usage step diagnosis (branch `claude/usage-step-diagnosis-v367`): each Railway field queried separately; only a failed `me { id }` token check reports token_unauthorized, later denials report permission_denied with the fixed field name; denied/failed estimatedUsage keeps verified month-to-date cost as partial with projection null ("Projection not available from Railway"); workspace scope falls back to project scope on denial; failures cached 2 minutes; `?refresh=1` bypasses cache once per minute per owner; startup probe logs fixed step/code identifiers only. Full backend pytest 402 passed; new regressions fail on 99e1a1d. Next: confirm Railway exact-commit SUCCESS, then frontend release sending `?refresh=1` from Try again and showing permission_denied/projectionNote.
 
