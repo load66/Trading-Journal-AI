@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: ChatGPT Codex | v3.6.0 Railway API compatibility | codex/v3.6.0-usage-graphql-compat
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
