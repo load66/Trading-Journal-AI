@@ -6,6 +6,8 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
+- v3.6.7 Railway usage step diagnosis (branch `claude/usage-step-diagnosis-v367`): each Railway field queried separately; only a failed `me { id }` token check reports token_unauthorized, later denials report permission_denied with the fixed field name; denied/failed estimatedUsage keeps verified month-to-date cost as partial with projection null ("Projection not available from Railway"); workspace scope falls back to project scope on denial; failures cached 2 minutes; `?refresh=1` bypasses cache once per minute per owner; startup probe logs fixed step/code identifiers only. Full backend pytest 402 passed; new regressions fail on 99e1a1d. Next: confirm Railway exact-commit SUCCESS, then frontend release sending `?refresh=1` from Try again and showing permission_denied/projectionNote.
+
 - v3.6.6 Railway usage contract: PR #234 branch `codex/usage-precision-partial-v366`, CI 39093491729 PASS. Safe reason codes, verified partial metrics, known subtotal and genuine-zero distinction; no Railway token, environment variable or stored data changed. Next: merge backend; verify Railway exact-commit SUCCESS before frontend release.
 
 - Hosting usage workspace repair: Railway usage now resolves the workspace containing the configured project and uses the official workspace-scoped usage/estimate queries while filtering every row back to the project. Synthetic regression coverage and full backend suite: 387 passed. Release candidate ready for PR/CI; deploy backend before frontend v3.6.3.\n
