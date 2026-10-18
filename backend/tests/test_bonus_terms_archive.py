@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from botocore.exceptions import ClientError
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
@@ -133,7 +133,7 @@ def test_authenticated_read_and_upload(monkeypatch):
     monkeypatch.setattr(archive, "store", lambda: storage)
     monkeypatch.setattr(archive, "owner", lambda request:
         "owner1" if request.headers.get("Authorization") == "Bearer mock" else
-        (_ for _ in ()).throw(AuthError(401, "Authentication required")))
+        (_ for _ in ()).throw(HTTPException(401, "Authentication required")))
     app = FastAPI()
     app.include_router(archive.router)
     client = TestClient(app)
