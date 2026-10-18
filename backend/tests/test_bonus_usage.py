@@ -462,3 +462,60 @@ def test_snapshot_reports_actual_cache_lifetime(monkeypatch):
     assert u.usage_snapshot(AT)['cacheSeconds'] == 3600
     monkeypatch.setattr(u, '_railway_usage', lambda now: {'status': 'unavailable'})
     assert u.usage_snapshot(AT)['cacheSeconds'] == 120
+
+
+def test_auth_failure_layer_survives_me_verification_without_secret_leak(monkeypatch, caplog):
+    # Synthetic regression: both transport and GraphQL failures used to look
+    # identical, repeatedly blaming token configuration without evidence.
+    _configured(monkeypatch)
+    for layer in ('http_401', 'http_403', 'graphql'):
+        def deny(token, query, variables):
+            assert token == 'synthetic-do-not-log'
+            raise u.UsageFailure('denied', auth_layer=layer)
+        monkeypatch.setattr(u, '_railway_query', deny)
+        with caplog.at_level('INFO', logger='uvicorn.error'):
+            value = u._railway_usage(AT)
+        assert value['reasonCode'] == 'token_unauthorized'
+        assert value['failedStep'] == 'me'
+        assert value['authFailureSource'] == layer
+        assert 'synthetic-do-not-log' not in str(value) + caplog.text
+        assert 'source=' + layer in caplog.text
+
+
+def test_auth_layer_transport_and_graphql_are_distinguished(monkeypatch):
+    from urllib.error import HTTPError
+
+    for status in (401, 403):
+        def denied(*_a, **_kw):
+            raise HTTPError('https://example.invalid', status, 'SECRET', None, None)
+        monkeypatch.setattr(u, 'urlopen', denied)
+        try:
+            u._railway_query('SYNTHETIC-SECRET', 'query { me { id } }', {})
+            assert False, 'Request should have been rejected'
+        except u.UsageFailure as exc:
+            assert exc.code == 'denied' and exc.auth_layer == 'http_' + str(status)
+            assert 'SECRET' not in str(exc)
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+
+    monkeypatch.setattr(u, 'urlopen', lambda *_a, **_kw: Response())
+    monkeypatch.setattr(u.json, 'load', lambda *_a, **_kw: {
+        'errors': [{'message': 'Not Authorized', 'extensions': {'code': 'INTERNAL_SERVER_ERROR'}}]
+    })
+    try:
+        u._railway_query('SYNTHETIC-SECRET', 'query { me { id } }', {})
+        assert False, 'GraphQL response should have been rejected'
+    except u.UsageFailure as exc:
+        assert exc.code == 'denied' and exc.auth_layer == 'graphql'
+        assert 'SECRET' not in str(exc)
+
+
+def test_auth_layer_rejects_untrusted_remote_values():
+    exc = u.UsageFailure('denied', auth_layer='SECRET-INJECTION')
+    assert exc.auth_layer is None
+    value = u._reason_response('token_unauthorized', 'me', exc.auth_layer)
+    assert 'authFailureSource' not in value
+    assert 'SECRET-INJECTION' not in str(value)
