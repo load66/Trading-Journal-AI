@@ -75,8 +75,8 @@ query BonusHosting($projectId: String!, $startDate: DateTime!) {
 """
 
 _METRICS = """
-query BonusHostingMemory($environmentId: String!, $startDate: DateTime!) {
-  metrics(environmentId: $environmentId, startDate: $startDate,
+query BonusHostingMemory($environmentId: String!, $projectId: String!, $startDate: DateTime!) {
+  metrics(environmentId: $environmentId, projectId: $projectId, startDate: $startDate,
           groupBy: [SERVICE_ID], measurements: [MEMORY_USAGE_GB]) {
     measurement
     tags { serviceId }
@@ -141,7 +141,7 @@ def _railway_usage(now: datetime) -> dict:
         # A separate time series is required for average RAM; the per-month
         # usage aggregate is not a point-in-time RAM reading.
         memory_data = _railway_query(token, _METRICS, {
-            "environmentId": environment, "startDate": start.isoformat()})
+            "environmentId": environment, "projectId": project, "startDate": start.isoformat()})
         averages: dict[str, float] = {}
         for series in memory_data.get("metrics") or []:
             sid = (series.get("tags") or {}).get("serviceId")
@@ -149,20 +149,45 @@ def _railway_usage(now: datetime) -> dict:
             samples = [v for v in samples if v is not None]
             if sid in names and samples:
                 averages[names[sid]] = sum(samples) / len(samples)
+        # Use Railway's own current-billing-cycle estimate, not a homegrown
+        # linear projection from a partial month. Missing/invalid estimates
+        # are unavailable rather than inferred as zero.
+        estimate_rows = data.get("estimatedUsage")
+        if not isinstance(estimate_rows, list):
+            raise ValueError("Railway billing estimate unavailable")
+        projected_metrics = {}
+        for row in estimate_rows:
+            if not isinstance(row, dict):
+                raise ValueError("Invalid Railway estimated usage line")
+            # Railway can return workspace-level measurements; only the
+            # requested project is attributable to this card.
+            if row.get("projectId") not in (None, project):
+                continue
+            metric = row.get("measurement")
+            amount = _valid_number(row.get("estimatedValue"))
+            if metric in ("CPU_USAGE", "MEMORY_USAGE_GB", "NETWORK_TX_GB") and amount is not None:
+                projected_metrics[metric] = projected_metrics.get(metric, 0.0) + amount
+        projected = _metric_cost(projected_metrics)
+        if projected is None:
+            raise ValueError("Incomplete Railway billing estimate")
         services = []
         for name, metrics in by_service.items():
             cost = _metric_cost(metrics)
             services.append({"name": name, "costSoFar": round(cost, 4) if cost is not None else None,
-                             "projectedMonthEnd": round(cost / fraction, 4) if cost is not None else None,
+                             "projectedMonthEnd": None,
                              "avgMemoryGb": round(averages[name], 3) if name in averages else None})
         # If one service lacks billable measurements, never describe the
-        # project total as complete.
+        # project total as complete. Distribute Railway's aggregate projection
+        # across services in proportion to their verified accrued cost.
         if not services or any(s["costSoFar"] is None for s in services):
             raise ValueError("Railway usage measurements incomplete")
         total = sum(s["costSoFar"] for s in services)
+        if total > 0:
+            for item in services:
+                item["projectedMonthEnd"] = round(projected * item["costSoFar"] / total, 4)
         return {"status": "ok", "month": month, "costSoFar": round(total, 4),
-                "projectedMonthEnd": round(total / fraction, 4), "services": services,
-                "basis": "Railway resource usage estimated at published compute rates; before plan credits or tax"}
+                "projectedMonthEnd": round(projected, 4), "services": services,
+                "basis": "Railway's projected resource usage at published rates; before plan credits, base subscription or tax"}
     except Exception:
         return {"status": "unavailable", "services": [], "costSoFar": None,
                 "projectedMonthEnd": None, "reason": "Railway usage unavailable"}
