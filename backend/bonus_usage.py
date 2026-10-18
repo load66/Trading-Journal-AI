@@ -54,10 +54,12 @@ class UsageFailure(Exception):
     "denied" is internal: the caller decides whether a denial means the token is
     invalid (token check step) or one field is not readable (permission_denied).
     """
-    def __init__(self, code: str, field: str | None = None):
+    def __init__(self, code: str, field: str | None = None, auth_layer: str | None = None):
         super().__init__(code)
         self.code = code
         self.field = field
+        # Fixed, non-secret identifiers only. Never retain remote response bodies.
+        self.auth_layer = auth_layer if auth_layer in ("http_401", "http_403", "graphql") else None
 
 
 SAFE_REASONS = {
@@ -84,7 +86,7 @@ def _denied_reason(field: str) -> str:
     return f"Railway doesn't allow this token to read {field}." if field in FIELDS else SAFE_REASONS["permission_denied"]
 
 
-def _reason_response(code: str, field: str | None = None) -> dict:
+def _reason_response(code: str, field: str | None = None, auth_layer: str | None = None) -> dict:
     code = code if code in SAFE_REASONS else "response_changed"
     field = field if field in FIELDS else None
     result = {"status": "unavailable", "reasonCode": code, "reason": SAFE_REASONS[code],
@@ -95,6 +97,9 @@ def _reason_response(code: str, field: str | None = None) -> dict:
     if code == "permission_denied" and field:
         result["deniedFields"] = [field]
         result["reason"] = _denied_reason(field)
+    # Distinguish an HTTP-layer rejection from a GraphQL authorization denial.
+    if code == "token_unauthorized" and auth_layer in ("http_401", "http_403", "graphql"):
+        result["authFailureSource"] = auth_layer
     return result
 
 
@@ -109,7 +114,7 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
     try:
         with urlopen(request, timeout=12) as response:
             if response.status in (401, 403):
-                raise UsageFailure("denied")
+                raise UsageFailure("denied", auth_layer=f"http_{response.status}")
             if response.status == 429:
                 raise UsageFailure("rate_limited")
             if response.status != 200:
@@ -117,7 +122,7 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
             payload = json.load(response)
     except HTTPError as exc:
         if exc.code in (401, 403):
-            raise UsageFailure("denied") from None
+            raise UsageFailure("denied", auth_layer=f"http_{exc.code}") from None
         if exc.code == 429:
             raise UsageFailure("rate_limited") from None
         raise UsageFailure("railway_unreachable" if exc.code >= 500 else "response_changed") from None
@@ -145,7 +150,7 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
             msg = str(error.get("message", "")).lower()
             # Railway reports authorization denials as HTTP 200 with "Not Authorized".
             if any(x in marker or x in msg for x in _DENIAL_MARKERS):
-                raise UsageFailure("denied")
+                raise UsageFailure("denied", auth_layer="graphql")
             if "rate_limit" in marker or "rate limit" in msg or "too many requests" in msg:
                 raise UsageFailure("rate_limited")
         raise UsageFailure("response_changed")
@@ -210,7 +215,7 @@ def _step(token: str, field: str, query: str, variables: dict) -> dict:
     try:
         data = _railway_query(token, query, variables)
     except UsageFailure as exc:
-        raise UsageFailure(exc.code, field) from None
+        raise UsageFailure(exc.code, field, exc.auth_layer) from None
     if not isinstance(data, dict):
         raise UsageFailure("response_changed", field)
     return data
@@ -261,7 +266,8 @@ def _log_failure(exc: UsageFailure) -> None:
     # Fixed identifiers only: no token, variables or remote text.
     field = exc.field if exc.field in FIELDS else "unknown"
     code = exc.code if exc.code in SAFE_REASONS or exc.code == "denied" else "response_changed"
-    log.info("bonus_usage_step_failed step=%s code=%s", field, code)
+    log.info("bonus_usage_step_failed step=%s code=%s source=%s",
+             field, code, exc.auth_layer or "none")
 
 
 def _railway_usage(now: datetime) -> dict:
@@ -281,7 +287,7 @@ def _railway_usage(now: datetime) -> dict:
             me = _step(token, "me", _VERIFY, {}).get("me")
         except UsageFailure as exc:
             if exc.code == "denied":
-                raise UsageFailure("token_unauthorized", "me") from None
+                raise UsageFailure("token_unauthorized", "me", exc.auth_layer) from None
             raise
         if not isinstance(me, dict) or not me.get("id"):
             raise UsageFailure("response_changed", "me")
@@ -436,7 +442,7 @@ def _railway_usage(now: datetime) -> dict:
         _log_failure(exc)
         if exc.code == "denied":
             return _reason_response("permission_denied", exc.field)
-        return _reason_response(exc.code, exc.field)
+        return _reason_response(exc.code, exc.field, exc.auth_layer)
     except Exception:
         # All unexpected failures are classified without exposing messages
         # or remote bodies in logs, API output or the browser.
@@ -494,9 +500,10 @@ def cached_usage(owner_id: str, refresh: bool = False) -> dict:
 def startup_probe() -> None:
     """Log which Railway step works after a deploy; fixed codes only, nothing cached."""
     railway = _railway_usage(datetime.now(timezone.utc))
-    log.info("bonus_usage_probe status=%s reason=%s step=%s denied=%s",
+    log.info("bonus_usage_probe status=%s reason=%s step=%s denied=%s source=%s",
              railway.get("status"), railway.get("reasonCode", "none"), railway.get("failedStep", "none"),
-             ",".join(railway.get("deniedFields") or []) or "none")
+             ",".join(railway.get("deniedFields") or []) or "none",
+             railway.get("authFailureSource", "none"))
 
 
 @router.get("/api/bonus-tracker/usage")
