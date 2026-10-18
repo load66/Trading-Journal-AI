@@ -519,3 +519,36 @@ def test_auth_layer_rejects_untrusted_remote_values():
     value = u._reason_response('token_unauthorized', 'me', exc.auth_layer)
     assert 'authFailureSource' not in value
     assert 'SECRET-INJECTION' not in str(value)
+
+
+def test_railway_graphql_request_identifies_app_not_python_urllib(monkeypatch):
+    # Synthetic regression: Cloudflare can reject Python-urllib/x.y with HTTP
+    # 403 before token authentication. A named User-Agent reaches the API.
+    import io
+
+    captured = []
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *_args): return None
+        def read(self, *_args):
+            return b'{"data":{"me":{"id":"synthetic-user"}}}'
+
+    def fake_open(request, timeout):
+        captured.append(request)
+        assert timeout == 12
+        return Response()
+
+    monkeypatch.setattr(u, 'urlopen', fake_open)
+    result = u._railway_query('synthetic-do-not-log', u._VERIFY, {})
+    assert result['me']['id'] == 'synthetic-user'
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.full_url == u.URL
+    assert request.get_method() == 'POST'
+    assert request.get_header('Authorization') == 'Bearer synthetic-do-not-log'
+    assert request.get_header('Content-type') == 'application/json'
+    assert request.get_header('Accept') == 'application/json'
+    assert request.get_header('User-agent') == 'BonusTracker-Railway-Usage/1.0'
+    assert 'Python-urllib' not in request.get_header('User-agent')
