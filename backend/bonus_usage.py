@@ -1,11 +1,14 @@
 """Owner-only, read-only resource usage for BonusTracker.
 
 No Railway token, GraphQL payload or storage object name is logged or returned.
-Cache successful (and unavailable) snapshots for one hour in this process.
+Each Railway field is queried as its own step so a denial is attributed to the
+exact field: only a failed token check (me { id }) means the token is rejected.
+Complete snapshots are cached for one hour; anything else for two minutes.
 """
 from __future__ import annotations
 
 import calendar
+import logging
 import socket
 from urllib.error import HTTPError, URLError
 import json
@@ -22,14 +25,18 @@ from starlette.concurrency import run_in_threadpool
 from bonus_backups import owner, store
 
 router = APIRouter()
+log = logging.getLogger("uvicorn.error")
 CACHE_SECONDS = 3600
+FAILURE_CACHE_SECONDS = 120
+REFRESH_INTERVAL_SECONDS = 60
 R2_FREE_BYTES = 10_000_000_000
 URL = "https://backboard.railway.com/graphql/v2"
 # Railway documented billing rates, dollars per unit-minute and per GB of egress.
 CPU_PER_MINUTE = 20 / (30 * 24 * 60)
 MEMORY_PER_GB_MINUTE = 10 / (30 * 24 * 60)
 NETWORK_PER_GB = 0.05
-_cache: dict[str, object] = {}
+_cache: dict[str, tuple[float, dict]] = {}
+_refreshed_at: dict[str, float] = {}
 _cache_lock = threading.Lock()
 
 
@@ -42,15 +49,21 @@ def _month(now: datetime) -> tuple[str, datetime, float]:
 
 
 class UsageFailure(Exception):
-    """Safe classification only. Never retain or expose remote response bodies."""
-    def __init__(self, code: str):
+    """Safe classification only. Never retain or expose remote response bodies.
+
+    "denied" is internal: the caller decides whether a denial means the token is
+    invalid (token check step) or one field is not readable (permission_denied).
+    """
+    def __init__(self, code: str, field: str | None = None):
         super().__init__(code)
         self.code = code
+        self.field = field
 
 
 SAFE_REASONS = {
     "token_missing": "Railway account token is not configured.",
     "token_unauthorized": "Railway rejected the account token.",
+    "permission_denied": "Railway doesn't allow this token to read a required field.",
     "workspace_not_found": "No accessible Railway workspace was found.",
     "project_not_visible": "The Railway account token cannot access this project.",
     "estimate_missing": "Railway did not report all required billing estimates.",
@@ -60,15 +73,33 @@ SAFE_REASONS = {
     "railway_unreachable": "Railway could not be reached.",
     "response_changed": "Railway returned an unrecognized usage response.",
 }
+# Step/field names are fixed identifiers, never derived from remote text.
+FIELDS = ("me", "project", "usage", "estimatedUsage", "metrics")
 MEASUREMENTS = ("CPU_USAGE", "MEMORY_USAGE_GB", "NETWORK_TX_GB")
 BASIS = "Railway resource-minutes at published rates; before plan credit, base subscription or tax"
+PROJECTION_UNAVAILABLE = "Projection not available from Railway"
 
 
-def _reason_response(code: str) -> dict:
+def _denied_reason(field: str) -> str:
+    return f"Railway doesn't allow this token to read {field}." if field in FIELDS else SAFE_REASONS["permission_denied"]
+
+
+def _reason_response(code: str, field: str | None = None) -> dict:
     code = code if code in SAFE_REASONS else "response_changed"
-    return {"status": "unavailable", "reasonCode": code, "reason": SAFE_REASONS[code],
-            "costSoFar": None, "projectedMonthEnd": None, "knownCostSubtotal": None,
-            "services": [], "missing": []}
+    field = field if field in FIELDS else None
+    result = {"status": "unavailable", "reasonCode": code, "reason": SAFE_REASONS[code],
+              "costSoFar": None, "projectedMonthEnd": None, "knownCostSubtotal": None,
+              "services": [], "missing": []}
+    if field:
+        result["failedStep"] = field
+    if code == "permission_denied" and field:
+        result["deniedFields"] = [field]
+        result["reason"] = _denied_reason(field)
+    return result
+
+
+_DENIAL_MARKERS = ("not authorized", "unauthoriz", "forbidden", "permission", "unauthenticat",
+                   "invalid token", "not authenticated")
 
 
 def _railway_query(token: str, query: str, variables: dict) -> dict:
@@ -78,7 +109,7 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
     try:
         with urlopen(request, timeout=12) as response:
             if response.status in (401, 403):
-                raise UsageFailure("token_unauthorized")
+                raise UsageFailure("denied")
             if response.status == 429:
                 raise UsageFailure("rate_limited")
             if response.status != 200:
@@ -86,7 +117,7 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
             payload = json.load(response)
     except HTTPError as exc:
         if exc.code in (401, 403):
-            raise UsageFailure("token_unauthorized") from None
+            raise UsageFailure("denied") from None
         if exc.code == 429:
             raise UsageFailure("rate_limited") from None
         raise UsageFailure("railway_unreachable" if exc.code >= 500 else "response_changed") from None
@@ -112,8 +143,9 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
             ext = error.get("extensions") or {}
             marker = str(ext.get("code", "")).lower() if isinstance(ext, dict) else ""
             msg = str(error.get("message", "")).lower()
-            if any(x in marker or x in msg for x in ("unauthoriz", "forbidden", "permission", "unauthenticat", "invalid token", "not authenticated")):
-                raise UsageFailure("token_unauthorized")
+            # Railway reports authorization denials as HTTP 200 with "Not Authorized".
+            if any(x in marker or x in msg for x in _DENIAL_MARKERS):
+                raise UsageFailure("denied")
             if "rate_limit" in marker or "rate limit" in msg or "too many requests" in msg:
                 raise UsageFailure("rate_limited")
         raise UsageFailure("response_changed")
@@ -121,26 +153,39 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
         raise UsageFailure("response_changed")
     return payload["data"]
 
-_WORKSPACES = """
-query BonusHostingWorkspaces {
-  externalWorkspaces { id projects { id } }
-  me { workspaces { id projects(first: 500) { edges { node { id } } } } }
+
+# One field per query: a non-null field that is denied nulls the whole
+# response, so combining fields hides which one Railway refused.
+_VERIFY = """
+query BonusHostingVerify {
+  me { id }
 }
 """
 
-_QUERY = """
-query BonusHosting($workspaceId: String!, $projectId: String!, $startDate: DateTime!, $endDate: DateTime!) {
+_PROJECT = """
+query BonusHostingProject($projectId: String!) {
   project(id: $projectId) {
+    workspaceId
     services { edges { node { id name } } }
   }
-  usage(workspaceId: $workspaceId, startDate: $startDate, endDate: $endDate,
+}
+"""
+
+_USAGE = """
+query BonusHostingUsage($workspaceId: String, $projectId: String, $startDate: DateTime!, $endDate: DateTime!) {
+  usage(workspaceId: $workspaceId, projectId: $projectId, startDate: $startDate, endDate: $endDate,
         includeDeleted: true, groupBy: [PROJECT_ID, SERVICE_ID],
         measurements: [CPU_USAGE, MEMORY_USAGE_GB, NETWORK_TX_GB]) {
     measurement
     value
     tags { projectId serviceId }
   }
-  estimatedUsage(workspaceId: $workspaceId, includeDeleted: true,
+}
+"""
+
+_ESTIMATE = """
+query BonusHostingEstimate($workspaceId: String, $projectId: String) {
+  estimatedUsage(workspaceId: $workspaceId, projectId: $projectId, includeDeleted: true,
                  measurements: [CPU_USAGE, MEMORY_USAGE_GB, NETWORK_TX_GB]) {
     measurement
     estimatedValue
@@ -159,6 +204,36 @@ query BonusHostingMemory($environmentId: String!, $projectId: String!, $startDat
   }
 }
 """
+
+
+def _step(token: str, field: str, query: str, variables: dict) -> dict:
+    try:
+        data = _railway_query(token, query, variables)
+    except UsageFailure as exc:
+        raise UsageFailure(exc.code, field) from None
+    if not isinstance(data, dict):
+        raise UsageFailure("response_changed", field)
+    return data
+
+
+def _scoped_step(token: str, field: str, query: str, scopes: list[dict], extra: dict) -> list:
+    """Query a billing field, trying the workspace scope then the project scope.
+
+    Only a denial moves on to the next scope; any other failure is final.
+    """
+    last: UsageFailure | None = None
+    for scope in scopes:
+        try:
+            rows = _step(token, field, query, {**scope, **extra}).get(field)
+        except UsageFailure as exc:
+            if exc.code != "denied":
+                raise
+            last = exc
+            continue
+        if not isinstance(rows, list):
+            raise UsageFailure("response_changed", field)
+        return rows
+    raise last or UsageFailure("response_changed", field)
 
 
 def _valid_number(x):
@@ -182,23 +257,11 @@ def _metric_cost(measurements: dict[str, float]) -> float | None:
     return cpu * CPU_PER_MINUTE + memory * MEMORY_PER_GB_MINUTE + network * NETWORK_PER_GB
 
 
-def _workspace_for_project(payload: dict, project_id: str) -> str | None:
-    candidates = []
-    external = payload.get("externalWorkspaces")
-    if isinstance(external, list):
-        candidates.extend(external)
-    member = (payload.get("me") or {}).get("workspaces")
-    if isinstance(member, list):
-        candidates.extend(member)
-    for workspace in candidates:
-        if not isinstance(workspace, dict) or not workspace.get("id"):
-            continue
-        projects = workspace.get("projects") or []
-        if isinstance(projects, dict):
-            projects = [edge.get("node") for edge in projects.get("edges") or [] if isinstance(edge, dict)]
-        if any(isinstance(item, dict) and item.get("id") == project_id for item in projects):
-            return str(workspace["id"])
-    return None
+def _log_failure(exc: UsageFailure) -> None:
+    # Fixed identifiers only: no token, variables or remote text.
+    field = exc.field if exc.field in FIELDS else "unknown"
+    code = exc.code if exc.code in SAFE_REASONS or exc.code == "denied" else "response_changed"
+    log.info("bonus_usage_step_failed step=%s code=%s", field, code)
 
 
 def _railway_usage(now: datetime) -> dict:
@@ -213,46 +276,41 @@ def _railway_usage(now: datetime) -> dict:
     month, start, _ = _month(now)
     verified_at = now.astimezone(timezone.utc).isoformat()
     try:
-        workspace_data = _railway_query(token, _WORKSPACES, {})
-        if not isinstance(workspace_data, dict) or not isinstance(workspace_data.get("externalWorkspaces"), list):
-            raise UsageFailure("response_changed")
-        me = workspace_data.get("me") or {}
-        if not isinstance(me, dict) or not isinstance(me.get("workspaces"), list):
-            raise UsageFailure("response_changed")
-        if not workspace_data["externalWorkspaces"] and not me["workspaces"]:
-            raise UsageFailure("workspace_not_found")
-        workspace = _workspace_for_project(workspace_data, project)
-        if not workspace:
-            raise UsageFailure("project_not_visible")
+        # 1. Token check. Only this step may conclude the token is rejected.
+        try:
+            me = _step(token, "me", _VERIFY, {}).get("me")
+        except UsageFailure as exc:
+            if exc.code == "denied":
+                raise UsageFailure("token_unauthorized", "me") from None
+            raise
+        if not isinstance(me, dict) or not me.get("id"):
+            raise UsageFailure("response_changed", "me")
 
-        data = _railway_query(token, _QUERY, {
-            "workspaceId": workspace, "projectId": project,
-            "startDate": start.isoformat(), "endDate": verified_at
-        })
-        if data.get("project") is None:
-            raise UsageFailure("project_not_visible")
-        services_node = data["project"].get("services") if isinstance(data["project"], dict) else None
+        # 2. Project services and the workspace that bills it.
+        node = _step(token, "project", _PROJECT, {"projectId": project}).get("project")
+        if not isinstance(node, dict):
+            raise UsageFailure("project_not_visible", "project")
+        services_node = node.get("services")
         edges = services_node.get("edges") if isinstance(services_node, dict) else None
         if not isinstance(edges, list) or not edges:
-            raise UsageFailure("response_changed")
+            raise UsageFailure("response_changed", "project")
         names = {}
         for edge in edges:
-            node = edge.get("node") if isinstance(edge, dict) else None
-            if not isinstance(node, dict) or not node.get("id") or not node.get("name"):
-                raise UsageFailure("response_changed")
-            names[str(node["id"])] = str(node["name"])
+            item = edge.get("node") if isinstance(edge, dict) else None
+            if not isinstance(item, dict) or not item.get("id") or not item.get("name"):
+                raise UsageFailure("response_changed", "project")
+            names[str(item["id"])] = str(item["name"])
+        workspace = node.get("workspaceId")
+        scopes = ([{"workspaceId": str(workspace), "projectId": None}] if isinstance(workspace, str) and workspace else [])
+        scopes.append({"workspaceId": None, "projectId": project})
 
-        usage = data.get("usage")
-        estimates = data.get("estimatedUsage")
-        if not isinstance(usage, list):
-            raise UsageFailure("response_changed")
-        if not isinstance(estimates, list):
-            raise UsageFailure("estimate_missing")
-
+        # 3. Month-to-date usage. Without it there is no verified cost at all.
+        usage = _scoped_step(token, "usage", _USAGE, scopes,
+                             {"startDate": start.isoformat(), "endDate": verified_at})
         by_service = {sid: {} for sid in names}
         for row in usage:
             if not isinstance(row, dict) or not isinstance(row.get("tags"), dict):
-                raise UsageFailure("response_changed")
+                raise UsageFailure("response_changed", "usage")
             tags = row["tags"]
             sid = tags.get("serviceId")
             if tags.get("projectId") != project or sid not in names:
@@ -264,29 +322,36 @@ def _railway_usage(now: datetime) -> dict:
             if value is not None:
                 by_service[sid][metric] = by_service[sid].get(metric, 0.0) + value
 
-        projected_metrics = {}
-        for row in estimates:
-            if not isinstance(row, dict):
-                raise UsageFailure("response_changed")
-            if row.get("projectId") != project:
-                continue
-            metric = row.get("measurement")
-            if metric not in MEASUREMENTS:
-                continue
-            value = _valid_number(row.get("estimatedValue"))
-            if value is not None:
-                projected_metrics[metric] = projected_metrics.get(metric, 0.0) + value
-
-        # Average RAM is supplementary. A failed time-series query cannot
-        # invalidate the already verified cost measurements.
-        averages = {}
-        memory_issue = None
+        # 4. Railway's month-end estimate. Supplementary: a denial or outage
+        # leaves verified month-to-date cost intact and the projection null.
+        projected_metrics: dict[str, float] = {}
+        estimate_issue: UsageFailure | None = None
         try:
-            memory_data = _railway_query(token, _METRICS, {
-                "environmentId": environment, "projectId": project, "startDate": start.isoformat()})
-            series = memory_data.get("metrics")
+            estimates = _scoped_step(token, "estimatedUsage", _ESTIMATE, scopes, {})
+            for row in estimates:
+                if not isinstance(row, dict):
+                    raise UsageFailure("response_changed", "estimatedUsage")
+                if row.get("projectId") != project:
+                    continue
+                metric = row.get("measurement")
+                if metric not in MEASUREMENTS:
+                    continue
+                value = _valid_number(row.get("estimatedValue"))
+                if value is not None:
+                    projected_metrics[metric] = projected_metrics.get(metric, 0.0) + value
+        except UsageFailure as exc:
+            estimate_issue = exc
+            projected_metrics = {}
+            _log_failure(exc)
+
+        # 5. Average RAM is supplementary as well.
+        averages = {}
+        memory_issue: UsageFailure | None = None
+        try:
+            series = _step(token, "metrics", _METRICS, {
+                "environmentId": environment, "projectId": project, "startDate": start.isoformat()}).get("metrics")
             if not isinstance(series, list):
-                raise UsageFailure("response_changed")
+                raise UsageFailure("response_changed", "metrics")
             for item in series:
                 if not isinstance(item, dict) or not isinstance(item.get("tags"), dict) or not isinstance(item.get("values"), list):
                     continue
@@ -296,9 +361,8 @@ def _railway_usage(now: datetime) -> dict:
                 if sid in names and samples:
                     averages[sid] = sum(samples) / len(samples)
         except UsageFailure as exc:
-            # Authentication, throttling and outages remain identifiable,
-            # without discarding the independently verified cost rows.
-            memory_issue = exc.code
+            memory_issue = exc
+            _log_failure(exc)
 
         missing = []
         known_subtotal = 0.0
@@ -322,11 +386,17 @@ def _railway_usage(now: datetime) -> dict:
                 "measurements": parts, "projectedMonthEnd": None,
                 "avgMemoryGb": round(averages[sid], 3) if sid in averages else None,
             })
-        for metric in MEASUREMENTS:
-            if metric not in projected_metrics:
-                missing.append({"service": "project", "metric": metric, "kind": "estimate"})
+        denied = [exc.field for exc in (estimate_issue, memory_issue) if exc and exc.code == "denied"]
+        if estimate_issue:
+            kind = "permission_denied" if estimate_issue.code == "denied" else estimate_issue.code
+            missing.append({"service": "project", "metric": "estimatedUsage", "kind": kind})
+        else:
+            for metric in MEASUREMENTS:
+                if metric not in projected_metrics:
+                    missing.append({"service": "project", "metric": metric, "kind": "estimate"})
         if memory_issue:
-            missing.append({"service": "project", "metric": "average_memory", "kind": memory_issue})
+            kind = "permission_denied" if memory_issue.code == "denied" else memory_issue.code
+            missing.append({"service": "project", "metric": "average_memory", "kind": kind})
         projection = _metric_cost(projected_metrics)
         if projection is not None and complete and known_subtotal > 0:
             for row in services:
@@ -342,14 +412,31 @@ def _railway_usage(now: datetime) -> dict:
             "projectedMonthEnd": round(projection, 4) if projection is not None else None,
             "services": services, "missing": missing,
         }
+        if projection is None:
+            result["projectionNote"] = PROJECTION_UNAVAILABLE
         if missing:
-            result["reasonCode"] = "measurement_missing" if any(x["kind"] == "usage" for x in missing) else (
-                "estimate_missing" if any(x["kind"] == "estimate" for x in missing) else memory_issue
-            )
-            result["reason"] = SAFE_REASONS.get(result["reasonCode"], SAFE_REASONS["response_changed"])
+            if any(x["kind"] == "usage" for x in missing):
+                code = "measurement_missing"
+            elif denied:
+                code = "permission_denied"
+            elif estimate_issue:
+                code = estimate_issue.code if estimate_issue.code in SAFE_REASONS else "response_changed"
+            elif any(x["kind"] == "estimate" for x in missing):
+                code = "estimate_missing"
+            else:
+                code = memory_issue.code if memory_issue and memory_issue.code in SAFE_REASONS else "response_changed"
+            result["reasonCode"] = code
+            result["reason"] = SAFE_REASONS[code]
+            if denied:
+                result["deniedFields"] = denied
+                if code == "permission_denied":
+                    result["reason"] = _denied_reason(denied[0])
         return result
     except UsageFailure as exc:
-        return _reason_response(exc.code)
+        _log_failure(exc)
+        if exc.code == "denied":
+            return _reason_response("permission_denied", exc.field)
+        return _reason_response(exc.code, exc.field)
     except Exception:
         # All unexpected failures are classified without exposing messages
         # or remote bodies in logs, API output or the browser.
@@ -368,24 +455,35 @@ def _r2_usage() -> dict:
                 "objectCount": None}
 
 
+def _ttl(snapshot: dict) -> int:
+    railway = snapshot.get("railway") if isinstance(snapshot, dict) else None
+    ok = isinstance(railway, dict) and railway.get("status") == "ok"
+    return CACHE_SECONDS if ok else FAILURE_CACHE_SECONDS
+
+
 def usage_snapshot(now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     current_month, _, _ = _month(now)
     result = {
-        "month": current_month, "checkedAt": now.isoformat(), "cacheSeconds": CACHE_SECONDS,
+        "month": current_month, "checkedAt": now.isoformat(),
         "railway": _railway_usage(now), "r2": _r2_usage()
     }
+    result["cacheSeconds"] = _ttl(result)
     return result
 
 
-def cached_usage(owner_id: str) -> dict:
+def cached_usage(owner_id: str, refresh: bool = False) -> dict:
     now = datetime.now(timezone.utc)
     key = owner_id + ":" + _month(now)[0]
     current = time.monotonic()
     with _cache_lock:
         cached = _cache.get(key)
-        if cached and current - cached[0] < CACHE_SECONDS:
+        # A manual refresh bypasses the cache at most once a minute per owner.
+        bypass = refresh and current - _refreshed_at.get(owner_id, float("-inf")) >= REFRESH_INTERVAL_SECONDS
+        if cached and not bypass and current - cached[0] < _ttl(cached[1]):
             return dict(cached[1])
+        if refresh and bypass:
+            _refreshed_at[owner_id] = current
         # Serialize refreshes to prevent duplicate paid/R2 list operations.
         snapshot = usage_snapshot(now)
         _cache.clear()
@@ -393,8 +491,17 @@ def cached_usage(owner_id: str) -> dict:
         return dict(snapshot)
 
 
+def startup_probe() -> None:
+    """Log which Railway step works after a deploy; fixed codes only, nothing cached."""
+    railway = _railway_usage(datetime.now(timezone.utc))
+    log.info("bonus_usage_probe status=%s reason=%s step=%s denied=%s",
+             railway.get("status"), railway.get("reasonCode", "none"), railway.get("failedStep", "none"),
+             ",".join(railway.get("deniedFields") or []) or "none")
+
+
 @router.get("/api/bonus-tracker/usage")
 async def hosting_usage(request: Request):
     authenticated_owner = owner(request)
-    value = await run_in_threadpool(cached_usage, authenticated_owner)
+    refresh = request.query_params.get("refresh") == "1"
+    value = await run_in_threadpool(cached_usage, authenticated_owner, refresh)
     return JSONResponse(value, headers={"Cache-Control": "private, no-store"})

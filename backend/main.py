@@ -100,9 +100,20 @@ async def lifespan(app: FastAPI):
     backup_task = asyncio.create_task(scheduled_recovery_loop())
     from bank_availability import scheduled_availability_loop
     availability_task = asyncio.create_task(scheduled_availability_loop())
+    from bonus_usage import startup_probe
+
+    async def usage_probe():
+        # Logs fixed step/code identifiers only, after the server is serving.
+        await asyncio.sleep(20)
+        try:
+            await asyncio.to_thread(startup_probe)
+        except Exception:
+            pass
+    usage_probe_task = asyncio.create_task(usage_probe())
     try:
         yield
     finally:
+        usage_probe_task.cancel()
         availability_task.cancel()
         try:
             await availability_task
