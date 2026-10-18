@@ -59,6 +59,13 @@ def test_usage_near_and_over_editable_plan(monkeypatch):
     assert chip(projection/1.1)=='over'
 
 
+def test_schema_uses_project_scoped_railway_usage_and_billing_estimate():
+    assert "estimatedUsage(projectId: $projectId" in u._QUERY
+    assert "groupBy: [SERVICE_ID]" in u._QUERY
+    assert "metrics(environmentId: $environmentId, projectId: $projectId" in u._METRICS
+    assert "groupBy: [SERVICE_ID]" in u._METRICS
+
+
 def test_no_token_is_not_zero(monkeypatch):
     monkeypatch.delenv('RAILWAY_API_TOKEN',raising=False)
     monkeypatch.setattr(u,'_railway_query',lambda *_: (_ for _ in ()).throw(AssertionError('should not query')))
