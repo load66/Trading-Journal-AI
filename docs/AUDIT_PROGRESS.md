@@ -6,6 +6,8 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
+- v3.6.6 Railway usage contract: PR #234 branch `codex/usage-precision-partial-v366`, CI 39093491729 PASS. Safe reason codes, verified partial metrics, known subtotal and genuine-zero distinction; no Railway token, environment variable or stored data changed. Next: merge backend; verify Railway exact-commit SUCCESS before frontend release.
+
 - Hosting usage workspace repair: Railway usage now resolves the workspace containing the configured project and uses the official workspace-scoped usage/estimate queries while filtering every row back to the project. Synthetic regression coverage and full backend suite: 387 passed. Release candidate ready for PR/CI; deploy backend before frontend v3.6.3.\n
 - Hosting usage GraphQL compatibility: PR https://github.com/load66/Trading-Journal-AI/pull/232 now uses project-scoped Railway resource metrics and Railway-provided estimatedUsage; unavailable projections remain null, never zero. CI https://github.com/load66/Trading-Journal-AI/actions/runs/39084713593 PASS (backend and journal frontend). Pending merge and Railway exact-commit verification; no token or variables changed.
 
