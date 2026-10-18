@@ -31,13 +31,17 @@ FIELDS = frozenset((
     "expirationDateText", "payoutTimingText", "requiredDaysText",
     "eligibilityText", "sourceEligibilityBasis", "churnPeriodValue",
     "churnPeriodUnit", "couponEnrollmentDate", "offerEnrollmentDate",
-    "closeRestrictionType", "closeBufferDays", "tcSourceId",
+    "closeRestrictionType", "closeBufferDays", "closeFeeCountdownDays",
+    "closedWithNegativeBalance", "eligibilityScope", "eligibilityAnchorEvidenceText",
+    "reapplicationAction", "monthlyFeeFrequency", "monthlyFeeWaiverType",
+    "monthlyFeeWaiverAmountText", "monthlyFeeNoMonthlyServiceFee", "tcSourceId",
     "tcSourceUpdatedAt",
 ))
 STRING_FIELDS = FIELDS - frozenset((
     "format", "version", "bonus", "schemaVersion", "financialRules",
     "eligibilityRules", "minHoldDays", "earlyCloseFee", "churnPeriodValue",
-    "closeBufferDays",
+    "closeBufferDays", "closeFeeCountdownDays", "closedWithNegativeBalance",
+    "monthlyFeeNoMonthlyServiceFee",
 ))
 SENSITIVE_FIELD = re.compile(
     r"(?:password|credential|(?:api|auth|access|refresh)[_-]?token|secret|"
@@ -83,10 +87,13 @@ def validate_terms(raw):
         if key in data and (not isinstance(data[key], str) or len(data[key]) > 350000):
             raise ValueError("Invalid terms text")
     for key in ("bonus", "schemaVersion", "minHoldDays", "earlyCloseFee",
-                "churnPeriodValue", "closeBufferDays"):
+                "churnPeriodValue", "closeBufferDays", "closeFeeCountdownDays"):
         if key in data and (isinstance(data[key], bool) or not isinstance(data[key], (int, float))
                            or not -1_000_000 <= data[key] <= 1_000_000):
             raise ValueError("Invalid historical term number")
+    for key in ("closedWithNegativeBalance", "monthlyFeeNoMonthlyServiceFee"):
+        if key in data and not isinstance(data[key], bool):
+            raise ValueError("Invalid historical terms boolean")
     if "financialRules" in data and data["financialRules"] is not None:
         if not isinstance(data["financialRules"], dict):
             raise ValueError("Financial rules must be an object")
@@ -148,9 +155,7 @@ def save_terms(storage, uid, packet):
     key = _key(uid, digest)
     metadata = {
         "sha256": digest, "created-at": datetime.now(timezone.utc).isoformat(),
-        "bank": data["bank"][:120],
-        "account-type": data["accountType"],
-        "opened": str(data.get("opened") or "")[:32],
+        # R2 object metadata must remain ASCII; names/text stay in the signed body.
     }
     try:
         storage.client.put_object(
