@@ -1,11 +1,12 @@
 # Audit progress
 
-Active agent: Codex — hosting usage workspace fix on `codex/hosting-usage-workspace-fix`
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
 
+- Hosting usage workspace repair: Railway usage now resolves the workspace containing the configured project and uses the official workspace-scoped usage/estimate queries while filtering every row back to the project. Synthetic regression coverage and full backend suite: 387 passed. Release candidate ready for PR/CI; deploy backend before frontend v3.6.3.\n
 - Hosting usage GraphQL compatibility: PR https://github.com/load66/Trading-Journal-AI/pull/232 now uses project-scoped Railway resource metrics and Railway-provided estimatedUsage; unavailable projections remain null, never zero. CI https://github.com/load66/Trading-Journal-AI/actions/runs/39084713593 PASS (backend and journal frontend). Pending merge and Railway exact-commit verification; no token or variables changed.
 
 - BonusTracker v3.6.0 Hosting & usage backend: PR https://github.com/load66/Trading-Journal-AI/pull/231 adds owner-only read-only endpoint and one-hour caching, mock-only Railway/R2 tests, and cloud snapshot threshold allowlist. CI run https://github.com/load66/Trading-Journal-AI/actions/runs/39083721730 PASS (backend tests and journal build). No Railway token or variables changed. Pending merge and Railway exact-commit production verification; frontend remains gated until that succeeds.
