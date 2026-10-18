@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: none
+Active agent: ChatGPT/Codex · immutable BonusTracker terms archive · codex/bonus-terms-immutable-r2
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
