@@ -15,7 +15,7 @@ from storage import R2Storage
 
 router = APIRouter()
 MAX_BYTES = 8 * 1024 * 1024
-KEYS = frozenset(('bt_e_v4','bt_t_v4','bt_dd_methods','bt_bank_reqs','bt_offer_history_v1','bt_tc_archive_v1','bt_phone_book_v1','bt_user_datapoints_v1','bt_community_datapoints_v1','bt_community_datapoints_seed_v2','bt_profile_events_v1','bt_last_backup','bt_tc_learning_inbox_v320','bt_analyzer_memory_v1','bt_analyzer_training_library_v1','bt_analyzer_user_rules_v1','bt_last_restore'))
+KEYS = frozenset(('bt_e_v4','bt_t_v4','bt_dd_methods','bt_bank_reqs','bt_offer_history_v1','bt_tc_archive_v1','bt_phone_book_v1','bt_user_datapoints_v1','bt_community_datapoints_v1','bt_community_datapoints_seed_v2','bt_profile_events_v1','bt_last_backup','bt_tc_learning_inbox_v320','bt_analyzer_memory_v1','bt_analyzer_training_library_v1','bt_analyzer_user_rules_v1','bt_last_restore','bt_hosting_usage_settings_v1'))
 ID = re.compile(r'^[a-f0-9]{32}$')
 
 
