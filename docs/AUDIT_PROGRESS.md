@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: none
+Active agent: Codex — hosting usage workspace fix on `codex/hosting-usage-workspace-fix`
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
