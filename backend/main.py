@@ -179,6 +179,8 @@ from bonus_questions import router as bonus_questions_router
 app.include_router(bonus_questions_router)
 from bonus_backups import router as bonus_backups_router
 app.include_router(bonus_backups_router)
+from bonus_usage import router as bonus_usage_router
+app.include_router(bonus_usage_router)
 # Owner-invoked R2 cleanup; no Finance account, provider, or sync endpoints survive.
 from finance_retirement import router as finance_retirement_router
 app.include_router(finance_retirement_router)
