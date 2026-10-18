@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: none
+Active agent: codex (Railway urllib API header repair, codex/railway-usage-user-agent-fix)
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
