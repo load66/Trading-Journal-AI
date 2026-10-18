@@ -1,10 +1,12 @@
 # Audit progress
 
-Active agent: codex (Railway urllib API header repair, codex/railway-usage-user-agent-fix)
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- Railway usage HTTP 403 transport fix (`codex/railway-usage-user-agent-fix`): sets a fixed application User-Agent and JSON Accept header on outgoing read-only Railway GraphQL calls while preserving account token authentication, timeout and no-secret logging. Synthetic regression verifies the actual urllib request and existing diagnostic source tests remain. No variable or financial data changes. Next: PR CI, merge passing exact code, verify deployed commit and live auth source.
 
 - Railway hosting authentication diagnostics PR #237 (`codex/railway-auth-layer-diagnostics-v368`): disambiguates HTTP 401, HTTP 403 and GraphQL permission errors at the initial `me` check, returning and logging only fixed source codes; no token, remote text, private data or env-var writes. Synthetic tests for all three paths and information safety added. PR CI run 39120018235 PASS (backend suite and journal frontend build/tests). Next: merge after exact-head CI, confirm Railway SUCCESS for merged commit and inspect sanitized live auth source; do not presume token fixed until live verification.
 
