@@ -1,10 +1,12 @@
 # Audit progress
 
-Active agent: Codex — churn vault v1 — codex/churn-vault-v1
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- Independent churn vault v1 (`codex/churn-vault-v1`): owner-authenticated append-only AES-GCM critical-cycle records on a dedicated persistent volume outside R2; checksum/decrypt readback before acknowledgment, no delete/overwrite/automatic restore or retention pruning. Missing facts remain missing. Synthetic owner-isolation, corruption/key-loss, date/private-field validation, mount guard and route tests pass; full backend 420 tests pass. Next: PR CI, provision isolated volume path, merge and verify exact Railway SUCCESS before frontend rollout. No real owner records or credentials changed.
 
 - Immutable terms archival v1 additive allowlist extension (`codex/terms-archive-legacy-churn-fields`): preserve legacy churn source basis, original rule wording, repeatable flag, decision evidence and eligibility review date in owner-scoped snapshots. Original immutability, readback and field safety retained; synthetic regression added. Next: full backend CI, merge and exact Railway production SUCCESS before frontend starts transmitting added fields.
 

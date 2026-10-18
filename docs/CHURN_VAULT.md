@@ -1,0 +1,9 @@
+# Independent churn evidence vault
+
+The authenticated `/api/bonus-tracker/churn-vault` routes preserve narrow allowlisted per-cycle facts and original offer/fee text on a Railway persistent volume. They do not use R2, journal tables, bank providers, rotating backup retention, or automatic restores. Mount the dedicated volume at `/var/lib/bonus-churn-vault`; Railway supplies its mount-path variable automatically. Absence or mismatch fails closed rather than writing to ephemeral storage.
+
+Records are content-addressed immutable versions, AES-GCM encrypted and bound to the authenticated owner and digest. Acknowledgment requires reopening the durable database, decrypting, validating and hashing the stored bytes. Owner hashes and timestamps are metadata; financial text is encrypted. The encryption key is a private 0600 file on that volume. Back up and restore the **whole volume, including the key**; database-only recovery is insufficient. A missing key with an existing database fails closed and never generates a replacement. A volume/runtime administrator can access both files; this is not end-to-end encryption.
+
+There is no delete, replace or pruning API. Corrections create new versions. Original text missing from old accounts must remain explicitly missing; current offers are not historical evidence. Client recovery may propose blank fields only for a matching account, bank, audience and opening or payout anchor, with conflicting dates rejected and the normal owner-reviewed account-save flow required. Never overwrite real records from a deployment, test, import or public bank terms.
+
+An empty volume is not proof that any phone is protected. Protection starts only after a signed-in device submits and verifies its exact current records. Offline changes remain pending. The UI must distinguish a verified stored copy from completeness of the underlying source facts. Existing R2 recovery and immutable terms remain separate and are not deleted.
