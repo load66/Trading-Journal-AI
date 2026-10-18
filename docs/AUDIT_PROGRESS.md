@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: none
+Active agent: codex (Railway authentication diagnostics v3.6.8, codex/railway-auth-layer-diagnostics-v368)
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
