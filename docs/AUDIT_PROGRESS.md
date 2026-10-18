@@ -1,10 +1,12 @@
 # Audit progress
 
-Active agent: ChatGPT Codex | v3.6.0 hosting usage | codex/v3.6.0-hosting-usage
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- BonusTracker v3.6.0 Hosting & usage backend: PR https://github.com/load66/Trading-Journal-AI/pull/231 adds owner-only read-only endpoint and one-hour caching, mock-only Railway/R2 tests, and cloud snapshot threshold allowlist. CI run https://github.com/load66/Trading-Journal-AI/actions/runs/39083721730 PASS (backend tests and journal build). No Railway token or variables changed. Pending merge and Railway exact-commit production verification; frontend remains gated until that succeeds.
 
 - Release checkpoint (2026-10-17): Finance backend retired via PR #229, merge `c491332a7e4f51def3cd4486b7d204b9ab2c13e5`; Railway production `api` deployment SUCCESS on exact commit (deployment `aae2f683-7d78-4765-b2b2-aac9f4a08a6a`).
 - Backend main CI https://github.com/load66/Trading-Journal-AI/actions/runs/39078861129 PASS: full pytest 377 passed; trading-journal frontend build/tests PASS.
