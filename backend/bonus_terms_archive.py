@@ -36,6 +36,9 @@ FIELDS = frozenset((
     "reapplicationAction", "monthlyFeeFrequency", "monthlyFeeWaiverType",
     "monthlyFeeWaiverAmountText", "monthlyFeeNoMonthlyServiceFee", "tcSourceId",
     "tcSourceUpdatedAt",
+    "churn", "churnability", "churnRuleText", "churnReason",
+    "churnDecisionSource", "churnDecisionConfidence", "churnBasis",
+    "eligibilityVerifiedAt",
 ))
 STRING_FIELDS = FIELDS - frozenset((
     "format", "version", "bonus", "schemaVersion", "financialRules",
