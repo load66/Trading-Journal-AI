@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: none
+Active agent: ChatGPT Codex · v3.6.6 · codex/usage-precision-partial-v366
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
