@@ -6,6 +6,8 @@ Cache successful (and unavailable) snapshots for one hour in this process.
 from __future__ import annotations
 
 import calendar
+import socket
+from urllib.error import HTTPError, URLError
 import json
 import os
 import threading
@@ -39,19 +41,85 @@ def _month(now: datetime) -> tuple[str, datetime, float]:
     return start.strftime("%Y-%m"), start, min(elapsed_minutes / period_minutes, 1.0)
 
 
+class UsageFailure(Exception):
+    """Safe classification only. Never retain or expose remote response bodies."""
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+SAFE_REASONS = {
+    "token_missing": "Railway account token is not configured.",
+    "token_unauthorized": "Railway rejected the account token.",
+    "workspace_not_found": "No accessible Railway workspace was found.",
+    "project_not_visible": "The Railway account token cannot access this project.",
+    "estimate_missing": "Railway did not report all required billing estimates.",
+    "measurement_missing": "Railway did not report all required usage measurements.",
+    "rate_limited": "Railway is limiting usage queries.",
+    "timeout": "Railway did not respond before the request timed out.",
+    "railway_unreachable": "Railway could not be reached.",
+    "response_changed": "Railway returned an unrecognized usage response.",
+}
+MEASUREMENTS = ("CPU_USAGE", "MEMORY_USAGE_GB", "NETWORK_TX_GB")
+BASIS = "Railway resource-minutes at published rates; before plan credit, base subscription or tax"
+
+
+def _reason_response(code: str) -> dict:
+    code = code if code in SAFE_REASONS else "response_changed"
+    return {"status": "unavailable", "reasonCode": code, "reason": SAFE_REASONS[code],
+            "costSoFar": None, "projectedMonthEnd": None, "knownCostSubtotal": None,
+            "services": [], "missing": []}
+
+
 def _railway_query(token: str, query: str, variables: dict) -> dict:
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     request = UrlRequest(URL, data=body, method="POST",
-                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                         )
-    with urlopen(request, timeout=12) as response:
-        if response.status != 200:
-            raise ValueError("Railway API unavailable")
-        payload = json.load(response)
-    if not isinstance(payload, dict) or payload.get("errors") or not isinstance(payload.get("data"), dict):
-        raise ValueError("Railway API response invalid")
+                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    try:
+        with urlopen(request, timeout=12) as response:
+            if response.status in (401, 403):
+                raise UsageFailure("token_unauthorized")
+            if response.status == 429:
+                raise UsageFailure("rate_limited")
+            if response.status != 200:
+                raise UsageFailure("railway_unreachable" if response.status >= 500 else "response_changed")
+            payload = json.load(response)
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            raise UsageFailure("token_unauthorized") from None
+        if exc.code == 429:
+            raise UsageFailure("rate_limited") from None
+        raise UsageFailure("railway_unreachable" if exc.code >= 500 else "response_changed") from None
+    except (TimeoutError, socket.timeout):
+        raise UsageFailure("timeout") from None
+    except URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise UsageFailure("timeout") from None
+        raise UsageFailure("railway_unreachable") from None
+    except (OSError, ConnectionError):
+        raise UsageFailure("railway_unreachable") from None
+    except (ValueError, UnicodeError, json.JSONDecodeError):
+        raise UsageFailure("response_changed") from None
+    if not isinstance(payload, dict):
+        raise UsageFailure("response_changed")
+    errors = payload.get("errors") or []
+    if errors:
+        if not isinstance(errors, list):
+            raise UsageFailure("response_changed")
+        for error in errors:
+            if not isinstance(error, dict):
+                continue
+            ext = error.get("extensions") or {}
+            marker = str(ext.get("code", "")).lower() if isinstance(ext, dict) else ""
+            msg = str(error.get("message", "")).lower()
+            if any(x in marker or x in msg for x in ("unauthoriz", "forbidden", "permission", "unauthenticat", "invalid token", "not authenticated")):
+                raise UsageFailure("token_unauthorized")
+            if "rate_limit" in marker or "rate limit" in msg or "too many requests" in msg:
+                raise UsageFailure("rate_limited")
+        raise UsageFailure("response_changed")
+    if not isinstance(payload.get("data"), dict):
+        raise UsageFailure("response_changed")
     return payload["data"]
-
 
 _WORKSPACES = """
 query BonusHostingWorkspaces {
@@ -138,95 +206,154 @@ def _railway_usage(now: datetime) -> dict:
     project = os.getenv("RAILWAY_PROJECT_ID", "").strip()
     environment = os.getenv("RAILWAY_ENVIRONMENT_ID", "").strip()
     if not token:
-        return {"status": "not_configured", "services": [], "costSoFar": None,
-                "projectedMonthEnd": None, "reason": "Railway API token not configured"}
+        return _reason_response("token_missing")
     if not project or not environment:
-        return {"status": "unavailable", "services": [], "costSoFar": None,
-                "projectedMonthEnd": None, "reason": "Railway project context unavailable"}
-    month, start, _fraction = _month(now)
+        return _reason_response("project_not_visible")
+
+    month, start, _ = _month(now)
+    verified_at = now.astimezone(timezone.utc).isoformat()
     try:
         workspace_data = _railway_query(token, _WORKSPACES, {})
+        if not isinstance(workspace_data, dict) or not isinstance(workspace_data.get("externalWorkspaces"), list):
+            raise UsageFailure("response_changed")
+        me = workspace_data.get("me") or {}
+        if not isinstance(me, dict) or not isinstance(me.get("workspaces"), list):
+            raise UsageFailure("response_changed")
+        if not workspace_data["externalWorkspaces"] and not me["workspaces"]:
+            raise UsageFailure("workspace_not_found")
         workspace = _workspace_for_project(workspace_data, project)
         if not workspace:
-            raise ValueError("Railway workspace could not be resolved")
+            raise UsageFailure("project_not_visible")
+
         data = _railway_query(token, _QUERY, {
             "workspaceId": workspace, "projectId": project,
-            "startDate": start.isoformat(), "endDate": now.astimezone(timezone.utc).isoformat()
+            "startDate": start.isoformat(), "endDate": verified_at
         })
-        edges = ((data.get("project") or {}).get("services") or {}).get("edges") or []
-        names = {str(edge["node"]["id"]): str(edge["node"]["name"]) for edge in edges
-                 if isinstance(edge, dict) and isinstance(edge.get("node"), dict)
-                 and edge["node"].get("id") and edge["node"].get("name")}
-        usage = data.get("usage")
-        if not isinstance(usage, list) or not names:
-            raise ValueError("No matching Railway project usage")
-        by_service = {name: {} for name in names.values()}
-        for row in usage:
-            if not isinstance(row, dict):
-                raise ValueError("Invalid usage line")
-            sid = (row.get("tags") or {}).get("serviceId")
-            row_project = (row.get("tags") or {}).get("projectId")
-            metric = row.get("measurement")
-            value = _valid_number(row.get("value"))
-            if row_project != project or sid not in names or metric not in ("CPU_USAGE", "MEMORY_USAGE_GB", "NETWORK_TX_GB") or value is None:
-                continue
-            by_service[names[sid]][metric] = by_service[names[sid]].get(metric, 0) + value
+        if data.get("project") is None:
+            raise UsageFailure("project_not_visible")
+        services_node = data["project"].get("services") if isinstance(data["project"], dict) else None
+        edges = services_node.get("edges") if isinstance(services_node, dict) else None
+        if not isinstance(edges, list) or not edges:
+            raise UsageFailure("response_changed")
+        names = {}
+        for edge in edges:
+            node = edge.get("node") if isinstance(edge, dict) else None
+            if not isinstance(node, dict) or not node.get("id") or not node.get("name"):
+                raise UsageFailure("response_changed")
+            names[str(node["id"])] = str(node["name"])
 
-        # A separate time series is required for average RAM; the per-month
-        # usage aggregate is not a point-in-time RAM reading.
-        memory_data = _railway_query(token, _METRICS, {
-            "environmentId": environment, "projectId": project, "startDate": start.isoformat()})
-        averages: dict[str, float] = {}
-        for series in memory_data.get("metrics") or []:
-            sid = (series.get("tags") or {}).get("serviceId")
-            samples = [_valid_number(p.get("value")) for p in series.get("values", []) if isinstance(p, dict)]
-            samples = [v for v in samples if v is not None]
-            if sid in names and samples:
-                averages[names[sid]] = sum(samples) / len(samples)
-        # Use Railway's own current-billing-cycle estimate, not a homegrown
-        # linear projection from a partial month. Missing/invalid estimates
-        # are unavailable rather than inferred as zero.
-        estimate_rows = data.get("estimatedUsage")
-        if not isinstance(estimate_rows, list):
-            raise ValueError("Railway billing estimate unavailable")
+        usage = data.get("usage")
+        estimates = data.get("estimatedUsage")
+        if not isinstance(usage, list):
+            raise UsageFailure("response_changed")
+        if not isinstance(estimates, list):
+            raise UsageFailure("estimate_missing")
+
+        by_service = {sid: {} for sid in names}
+        for row in usage:
+            if not isinstance(row, dict) or not isinstance(row.get("tags"), dict):
+                raise UsageFailure("response_changed")
+            tags = row["tags"]
+            sid = tags.get("serviceId")
+            if tags.get("projectId") != project or sid not in names:
+                continue
+            metric = row.get("measurement")
+            if metric not in MEASUREMENTS:
+                continue
+            value = _valid_number(row.get("value"))
+            if value is not None:
+                by_service[sid][metric] = by_service[sid].get(metric, 0.0) + value
+
         projected_metrics = {}
-        for row in estimate_rows:
+        for row in estimates:
             if not isinstance(row, dict):
-                raise ValueError("Invalid Railway estimated usage line")
-            # Railway can return workspace-level measurements; only the
-            # requested project is attributable to this card.
+                raise UsageFailure("response_changed")
             if row.get("projectId") != project:
                 continue
             metric = row.get("measurement")
-            amount = _valid_number(row.get("estimatedValue"))
-            if metric in ("CPU_USAGE", "MEMORY_USAGE_GB", "NETWORK_TX_GB") and amount is not None:
-                projected_metrics[metric] = projected_metrics.get(metric, 0.0) + amount
-        projected = _metric_cost(projected_metrics)
-        if projected is None:
-            raise ValueError("Incomplete Railway billing estimate")
-        services = []
-        for name, metrics in by_service.items():
-            cost = _metric_cost(metrics)
-            services.append({"name": name, "costSoFar": round(cost, 4) if cost is not None else None,
-                             "projectedMonthEnd": None,
-                             "avgMemoryGb": round(averages[name], 3) if name in averages else None})
-        # If one service lacks billable measurements, never describe the
-        # project total as complete. Distribute Railway's aggregate projection
-        # across services in proportion to their verified accrued cost.
-        if not services or any(s["costSoFar"] is None for s in services):
-            raise ValueError("Railway usage measurements incomplete")
-        total = sum(s["costSoFar"] for s in services)
-        if total > 0:
-            for item in services:
-                item["projectedMonthEnd"] = round(projected * item["costSoFar"] / total, 4)
-        return {"status": "ok", "month": month, "costSoFar": round(total, 4),
-                "projectedMonthEnd": round(projected, 4), "services": services,
-                "basis": "Railway's projected resource usage at published rates; before plan credits, base subscription or tax"}
-    except Exception as error:
-        reason = "workspace_resolution_failed" if "workspace" in str(error).lower() else "railway_query_failed"
-        return {"status": "unavailable", "services": [], "costSoFar": None,
-                "projectedMonthEnd": None, "reason": "Railway usage unavailable", "reasonCode": reason}
+            if metric not in MEASUREMENTS:
+                continue
+            value = _valid_number(row.get("estimatedValue"))
+            if value is not None:
+                projected_metrics[metric] = projected_metrics.get(metric, 0.0) + value
 
+        # Average RAM is supplementary. A failed time-series query cannot
+        # invalidate the already verified cost measurements.
+        averages = {}
+        memory_issue = None
+        try:
+            memory_data = _railway_query(token, _METRICS, {
+                "environmentId": environment, "projectId": project, "startDate": start.isoformat()})
+            series = memory_data.get("metrics")
+            if not isinstance(series, list):
+                raise UsageFailure("response_changed")
+            for item in series:
+                if not isinstance(item, dict) or not isinstance(item.get("tags"), dict) or not isinstance(item.get("values"), list):
+                    continue
+                sid = item["tags"].get("serviceId")
+                samples = [_valid_number(p.get("value")) for p in item["values"] if isinstance(p, dict)]
+                samples = [v for v in samples if v is not None]
+                if sid in names and samples:
+                    averages[sid] = sum(samples) / len(samples)
+        except UsageFailure as exc:
+            # Authentication, throttling and outages remain identifiable,
+            # without discarding the independently verified cost rows.
+            memory_issue = exc.code
+
+        missing = []
+        known_subtotal = 0.0
+        complete = True
+        services = []
+        for sid, name in names.items():
+            metrics = by_service[sid]
+            parts = {}
+            for metric in MEASUREMENTS:
+                value = metrics.get(metric)
+                parts[metric] = value if value is not None else None
+                if value is None:
+                    missing.append({"service": name, "metric": metric, "kind": "usage"})
+            cost = _metric_cost(metrics)
+            if cost is None:
+                complete = False
+            else:
+                known_subtotal += cost
+            services.append({
+                "name": name, "costSoFar": round(cost, 4) if cost is not None else None,
+                "measurements": parts, "projectedMonthEnd": None,
+                "avgMemoryGb": round(averages[sid], 3) if sid in averages else None,
+            })
+        for metric in MEASUREMENTS:
+            if metric not in projected_metrics:
+                missing.append({"service": "project", "metric": metric, "kind": "estimate"})
+        if memory_issue:
+            missing.append({"service": "project", "metric": "average_memory", "kind": memory_issue})
+        projection = _metric_cost(projected_metrics)
+        if projection is not None and complete and known_subtotal > 0:
+            for row in services:
+                row["projectedMonthEnd"] = round(projection * row["costSoFar"] / known_subtotal, 4)
+        if projection == 0 and complete and known_subtotal == 0:
+            for row in services:
+                row["projectedMonthEnd"] = 0.0
+        status = "ok" if not missing else "partial"
+        result = {
+            "status": status, "month": month, "verifiedAt": verified_at, "basis": BASIS,
+            "costSoFar": round(known_subtotal, 4) if complete else None,
+            "knownCostSubtotal": round(known_subtotal, 4) if any(x["costSoFar"] is not None for x in services) else None,
+            "projectedMonthEnd": round(projection, 4) if projection is not None else None,
+            "services": services, "missing": missing,
+        }
+        if missing:
+            result["reasonCode"] = "measurement_missing" if any(x["kind"] == "usage" for x in missing) else (
+                "estimate_missing" if any(x["kind"] == "estimate" for x in missing) else memory_issue
+            )
+            result["reason"] = SAFE_REASONS.get(result["reasonCode"], SAFE_REASONS["response_changed"])
+        return result
+    except UsageFailure as exc:
+        return _reason_response(exc.code)
+    except Exception:
+        # All unexpected failures are classified without exposing messages
+        # or remote bodies in logs, API output or the browser.
+        return _reason_response("response_changed")
 
 def _r2_usage() -> dict:
     try:
