@@ -53,19 +53,26 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
     return payload["data"]
 
 
+_WORKSPACES = """
+query BonusHostingWorkspaces {
+  externalWorkspaces { id projects { id } }
+  me { workspaces { id projects(first: 500) { edges { node { id } } } } }
+}
+"""
+
 _QUERY = """
-query BonusHosting($projectId: String!, $startDate: DateTime!) {
+query BonusHosting($workspaceId: String!, $projectId: String!, $startDate: DateTime!, $endDate: DateTime!) {
   project(id: $projectId) {
     services { edges { node { id name } } }
   }
-  usage(projectId: $projectId, startDate: $startDate,
-        groupBy: [SERVICE_ID],
+  usage(workspaceId: $workspaceId, startDate: $startDate, endDate: $endDate,
+        includeDeleted: true, groupBy: [PROJECT_ID, SERVICE_ID],
         measurements: [CPU_USAGE, MEMORY_USAGE_GB, NETWORK_TX_GB]) {
     measurement
     value
-    tags { serviceId }
+    tags { projectId serviceId }
   }
-  estimatedUsage(projectId: $projectId,
+  estimatedUsage(workspaceId: $workspaceId, includeDeleted: true,
                  measurements: [CPU_USAGE, MEMORY_USAGE_GB, NETWORK_TX_GB]) {
     measurement
     estimatedValue
@@ -107,6 +114,25 @@ def _metric_cost(measurements: dict[str, float]) -> float | None:
     return cpu * CPU_PER_MINUTE + memory * MEMORY_PER_GB_MINUTE + network * NETWORK_PER_GB
 
 
+def _workspace_for_project(payload: dict, project_id: str) -> str | None:
+    candidates = []
+    external = payload.get("externalWorkspaces")
+    if isinstance(external, list):
+        candidates.extend(external)
+    member = (payload.get("me") or {}).get("workspaces")
+    if isinstance(member, list):
+        candidates.extend(member)
+    for workspace in candidates:
+        if not isinstance(workspace, dict) or not workspace.get("id"):
+            continue
+        projects = workspace.get("projects") or []
+        if isinstance(projects, dict):
+            projects = [edge.get("node") for edge in projects.get("edges") or [] if isinstance(edge, dict)]
+        if any(isinstance(item, dict) and item.get("id") == project_id for item in projects):
+            return str(workspace["id"])
+    return None
+
+
 def _railway_usage(now: datetime) -> dict:
     token = os.getenv("RAILWAY_API_TOKEN", "").strip()
     project = os.getenv("RAILWAY_PROJECT_ID", "").strip()
@@ -117,9 +143,16 @@ def _railway_usage(now: datetime) -> dict:
     if not project or not environment:
         return {"status": "unavailable", "services": [], "costSoFar": None,
                 "projectedMonthEnd": None, "reason": "Railway project context unavailable"}
-    month, start, fraction = _month(now)
+    month, start, _fraction = _month(now)
     try:
-        data = _railway_query(token, _QUERY, {"projectId": project, "startDate": start.isoformat()})
+        workspace_data = _railway_query(token, _WORKSPACES, {})
+        workspace = _workspace_for_project(workspace_data, project)
+        if not workspace:
+            raise ValueError("Railway workspace could not be resolved")
+        data = _railway_query(token, _QUERY, {
+            "workspaceId": workspace, "projectId": project,
+            "startDate": start.isoformat(), "endDate": now.astimezone(timezone.utc).isoformat()
+        })
         edges = ((data.get("project") or {}).get("services") or {}).get("edges") or []
         names = {str(edge["node"]["id"]): str(edge["node"]["name"]) for edge in edges
                  if isinstance(edge, dict) and isinstance(edge.get("node"), dict)
@@ -132,9 +165,10 @@ def _railway_usage(now: datetime) -> dict:
             if not isinstance(row, dict):
                 raise ValueError("Invalid usage line")
             sid = (row.get("tags") or {}).get("serviceId")
+            row_project = (row.get("tags") or {}).get("projectId")
             metric = row.get("measurement")
             value = _valid_number(row.get("value"))
-            if sid not in names or metric not in ("CPU_USAGE", "MEMORY_USAGE_GB", "NETWORK_TX_GB") or value is None:
+            if row_project != project or sid not in names or metric not in ("CPU_USAGE", "MEMORY_USAGE_GB", "NETWORK_TX_GB") or value is None:
                 continue
             by_service[names[sid]][metric] = by_service[names[sid]].get(metric, 0) + value
 
@@ -161,7 +195,7 @@ def _railway_usage(now: datetime) -> dict:
                 raise ValueError("Invalid Railway estimated usage line")
             # Railway can return workspace-level measurements; only the
             # requested project is attributable to this card.
-            if row.get("projectId") not in (None, project):
+            if row.get("projectId") != project:
                 continue
             metric = row.get("measurement")
             amount = _valid_number(row.get("estimatedValue"))
@@ -188,9 +222,10 @@ def _railway_usage(now: datetime) -> dict:
         return {"status": "ok", "month": month, "costSoFar": round(total, 4),
                 "projectedMonthEnd": round(projected, 4), "services": services,
                 "basis": "Railway's projected resource usage at published rates; before plan credits, base subscription or tax"}
-    except Exception:
+    except Exception as error:
+        reason = "workspace_resolution_failed" if "workspace" in str(error).lower() else "railway_query_failed"
         return {"status": "unavailable", "services": [], "costSoFar": None,
-                "projectedMonthEnd": None, "reason": "Railway usage unavailable"}
+                "projectedMonthEnd": None, "reason": "Railway usage unavailable", "reasonCode": reason}
 
 
 def _r2_usage() -> dict:
