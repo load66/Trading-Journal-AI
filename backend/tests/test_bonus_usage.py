@@ -12,7 +12,8 @@ from auth import AuthError
 AT = datetime(2026,10,17,12,tzinfo=timezone.utc)
 
 
-def _remote(query,variables):
+def _remote(token,query,variables):
+    assert token == 'synthetic-do-not-log'
     if 'BonusHostingMemory' in query:
         return {"metrics":[{"tags":{"serviceId":"svc-a"},"values":[{"ts":1,"value":0.27},{"ts":2,"value":0.33}]},
                            {"tags":{"serviceId":"svc-b"},"values":[{"ts":1,"value":0.6}]}]}
