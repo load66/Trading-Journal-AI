@@ -19,6 +19,9 @@ def _remote(token,query,variables):
                            {"tags":{"serviceId":"svc-b"},"values":[{"ts":1,"value":0.6}]}]}
     return {"project":{"services":{"edges":[{"node":{"id":"svc-a","name":"api"}},
                                           {"node":{"id":"svc-b","name":"leaps-alpaca-live"}}]}},
+            "estimatedUsage":[{"measurement":"CPU_USAGE","estimatedValue":30,"projectId":"synthetic-project"},
+                              {"measurement":"MEMORY_USAGE_GB","estimatedValue":3500,"projectId":"synthetic-project"},
+                              {"measurement":"NETWORK_TX_GB","estimatedValue":0.8,"projectId":"synthetic-project"}],
             "usage":[
                 {"measurement":m,"value":v,"tags":{"serviceId":id}}
                 for id,parts in {"svc-a":{"CPU_USAGE":3,"MEMORY_USAGE_GB":400,"NETWORK_TX_GB":0.1},
@@ -40,6 +43,8 @@ def test_normal_railway_with_real_units_and_average_memory(monkeypatch):
     assert value['costSoFar']>0 and value['projectedMonthEnd']>value['costSoFar']
     assert {s['name'] for s in value['services']}=={'api','leaps-alpaca-live'}
     assert value['services'][0]['avgMemoryGb']==0.3
+    assert value['projectedMonthEnd'] == round(u._metric_cost({'CPU_USAGE':30,'MEMORY_USAGE_GB':3500,'NETWORK_TX_GB':0.8}),4)
+    assert value['projectedMonthEnd'] != round(value['costSoFar'] / u._month(AT)[2],4), 'Use Railway estimate, not local extrapolation'
 
 
 def test_usage_near_and_over_editable_plan(monkeypatch):
