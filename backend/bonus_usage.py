@@ -54,10 +54,12 @@ class UsageFailure(Exception):
     "denied" is internal: the caller decides whether a denial means the token is
     invalid (token check step) or one field is not readable (permission_denied).
     """
-    def __init__(self, code: str, field: str | None = None):
+    def __init__(self, code: str, field: str | None = None, source: str | None = None):
         super().__init__(code)
         self.code = code
         self.field = field
+        # Fixed label for how Railway answered (http401, http403, graphql), never remote text.
+        self.source = source
 
 
 SAFE_REASONS = {
@@ -71,6 +73,7 @@ SAFE_REASONS = {
     "rate_limited": "Railway is limiting usage queries.",
     "timeout": "Railway did not respond before the request timed out.",
     "railway_unreachable": "Railway could not be reached.",
+    "request_blocked": "Railway's network edge blocked the usage request before checking the token.",
     "response_changed": "Railway returned an unrecognized usage response.",
 }
 # Step/field names are fixed identifiers, never derived from remote text.
@@ -102,14 +105,35 @@ _DENIAL_MARKERS = ("not authorized", "unauthoriz", "forbidden", "permission", "u
                    "invalid token", "not authenticated")
 
 
+# Python's default urllib User-Agent is commonly refused at Railway's CDN edge
+# with an HTML 403 page, which is not an answer about the token.
+USER_AGENT = "BonusTracker-usage/1.0 (+https://load66.github.io/bonus-tracker/)"
+
+
+def _clean_token(raw: str) -> str:
+    """Tolerate common paste artifacts: surrounding quotes or a "Bearer " prefix."""
+    token = raw.strip().strip('"').strip("'").strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
+
+
+def _denial_from_status(status: int, content_type: str) -> UsageFailure:
+    # A token denial comes back as JSON; an HTML 403 is the edge refusing the request.
+    if status == 403 and "json" not in content_type.lower():
+        return UsageFailure("request_blocked", source="http403")
+    return UsageFailure("denied", source=f"http{status}")
+
+
 def _railway_query(token: str, query: str, variables: dict) -> dict:
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     request = UrlRequest(URL, data=body, method="POST",
-                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                                  "Accept": "application/json", "User-Agent": USER_AGENT})
     try:
         with urlopen(request, timeout=12) as response:
             if response.status in (401, 403):
-                raise UsageFailure("denied")
+                raise _denial_from_status(response.status, str(response.headers.get("Content-Type", "")))
             if response.status == 429:
                 raise UsageFailure("rate_limited")
             if response.status != 200:
@@ -117,7 +141,8 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
             payload = json.load(response)
     except HTTPError as exc:
         if exc.code in (401, 403):
-            raise UsageFailure("denied") from None
+            headers = exc.headers if exc.headers is not None else {}
+            raise _denial_from_status(exc.code, str(headers.get("Content-Type", ""))) from None
         if exc.code == 429:
             raise UsageFailure("rate_limited") from None
         raise UsageFailure("railway_unreachable" if exc.code >= 500 else "response_changed") from None
@@ -145,7 +170,7 @@ def _railway_query(token: str, query: str, variables: dict) -> dict:
             msg = str(error.get("message", "")).lower()
             # Railway reports authorization denials as HTTP 200 with "Not Authorized".
             if any(x in marker or x in msg for x in _DENIAL_MARKERS):
-                raise UsageFailure("denied")
+                raise UsageFailure("denied", source="graphql")
             if "rate_limit" in marker or "rate limit" in msg or "too many requests" in msg:
                 raise UsageFailure("rate_limited")
         raise UsageFailure("response_changed")
@@ -210,7 +235,7 @@ def _step(token: str, field: str, query: str, variables: dict) -> dict:
     try:
         data = _railway_query(token, query, variables)
     except UsageFailure as exc:
-        raise UsageFailure(exc.code, field) from None
+        raise UsageFailure(exc.code, field, exc.source) from None
     if not isinstance(data, dict):
         raise UsageFailure("response_changed", field)
     return data
@@ -261,11 +286,12 @@ def _log_failure(exc: UsageFailure) -> None:
     # Fixed identifiers only: no token, variables or remote text.
     field = exc.field if exc.field in FIELDS else "unknown"
     code = exc.code if exc.code in SAFE_REASONS or exc.code == "denied" else "response_changed"
-    log.info("bonus_usage_step_failed step=%s code=%s", field, code)
+    source = exc.source if exc.source in ("http401", "http403", "graphql") else "none"
+    log.info("bonus_usage_step_failed step=%s code=%s source=%s", field, code, source)
 
 
 def _railway_usage(now: datetime) -> dict:
-    token = os.getenv("RAILWAY_API_TOKEN", "").strip()
+    token = _clean_token(os.getenv("RAILWAY_API_TOKEN", ""))
     project = os.getenv("RAILWAY_PROJECT_ID", "").strip()
     environment = os.getenv("RAILWAY_ENVIRONMENT_ID", "").strip()
     if not token:
@@ -281,7 +307,7 @@ def _railway_usage(now: datetime) -> dict:
             me = _step(token, "me", _VERIFY, {}).get("me")
         except UsageFailure as exc:
             if exc.code == "denied":
-                raise UsageFailure("token_unauthorized", "me") from None
+                raise UsageFailure("token_unauthorized", "me", exc.source) from None
             raise
         if not isinstance(me, dict) or not me.get("id"):
             raise UsageFailure("response_changed", "me")

@@ -226,7 +226,7 @@ def test_safe_reason_codes_never_echo_remote_text_or_token(monkeypatch, capsys):
     assert set(u.SAFE_REASONS) == {
         'token_missing', 'token_unauthorized', 'permission_denied', 'workspace_not_found',
         'project_not_visible', 'estimate_missing', 'measurement_missing',
-        'rate_limited', 'timeout', 'railway_unreachable', 'response_changed'
+        'rate_limited', 'timeout', 'railway_unreachable', 'request_blocked', 'response_changed'
     }
     cases = [
         ('token_unauthorized', lambda: u.UsageFailure('token_unauthorized')),
@@ -255,7 +255,9 @@ def test_transport_http_and_graphql_errors_are_sanitized(monkeypatch):
     import socket
     scenarios = [
         (HTTPError('https://example.invalid', 401, 'secret', None, None), 'denied'),
-        (HTTPError('https://example.invalid', 403, 'secret', None, None), 'denied'),
+        (HTTPError('https://example.invalid', 403, 'secret', {'Content-Type': 'application/json'}, None), 'denied'),
+        (HTTPError('https://example.invalid', 403, 'secret', {'Content-Type': 'text/html; charset=UTF-8'}, None), 'request_blocked'),
+        (HTTPError('https://example.invalid', 403, 'secret', None, None), 'request_blocked'),
         (HTTPError('https://example.invalid', 429, 'secret', None, None), 'rate_limited'),
         (HTTPError('https://example.invalid', 502, 'secret', None, None), 'railway_unreachable'),
         (URLError(socket.timeout('secret')), 'timeout'),
@@ -389,7 +391,7 @@ def test_step_failures_log_fixed_identifiers_only(monkeypatch, caplog):
         u._railway_usage(AT)
         u.startup_probe()
     text = caplog.text
-    assert 'bonus_usage_step_failed step=estimatedUsage code=denied' in text
+    assert 'bonus_usage_step_failed step=estimatedUsage code=denied source=none' in text
     assert 'bonus_usage_probe status=partial reason=permission_denied step=none denied=estimatedUsage' in text
     assert 'synthetic-do-not-log' not in text
 
@@ -462,3 +464,55 @@ def test_snapshot_reports_actual_cache_lifetime(monkeypatch):
     assert u.usage_snapshot(AT)['cacheSeconds'] == 3600
     monkeypatch.setattr(u, '_railway_usage', lambda now: {'status': 'unavailable'})
     assert u.usage_snapshot(AT)['cacheSeconds'] == 120
+
+
+def test_request_sends_identifying_user_agent_and_bearer_token(monkeypatch):
+    sent = {}
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+    def fake(request, timeout):
+        sent['headers'] = {k.lower(): v for k, v in request.header_items()}
+        return Response()
+    monkeypatch.setattr(u, 'urlopen', fake)
+    monkeypatch.setattr(u.json, 'load', lambda *a, **kw: {'data': {'me': {'id': 'x'}}})
+    u._railway_query('fake-secret', u._VERIFY, {})
+    assert sent['headers']['authorization'] == 'Bearer fake-secret'
+    assert 'python-urllib' not in sent['headers']['user-agent'].lower()
+    assert sent['headers']['user-agent'] == u.USER_AGENT
+
+
+def test_token_paste_artifacts_are_removed(monkeypatch):
+    for raw in ['synthetic-do-not-log', '  synthetic-do-not-log\n', '"synthetic-do-not-log"',
+                "'synthetic-do-not-log'", 'Bearer synthetic-do-not-log', '"Bearer synthetic-do-not-log"']:
+        assert u._clean_token(raw) == 'synthetic-do-not-log'
+    _configured(monkeypatch)
+    monkeypatch.setenv('RAILWAY_API_TOKEN', ' "Bearer synthetic-do-not-log" ')
+    assert u._railway_usage(AT)['status'] == 'ok'
+
+
+def test_edge_block_on_token_check_is_not_reported_as_rejected_token(monkeypatch, caplog):
+    _configured(monkeypatch)
+    def remote(token, query, variables):
+        if 'BonusHostingVerify' in query:
+            raise u.UsageFailure('request_blocked', source='http403')
+        return _remote(token, query, variables)
+    monkeypatch.setattr(u, '_railway_query', remote)
+    with caplog.at_level('INFO', logger='uvicorn.error'):
+        value = u._railway_usage(AT)
+    assert value['reasonCode'] == 'request_blocked' and value['failedStep'] == 'me'
+    assert 'step=me code=request_blocked source=http403' in caplog.text
+
+
+def test_token_denial_logs_how_railway_answered(monkeypatch, caplog):
+    _configured(monkeypatch)
+    for source in ('http401', 'graphql'):
+        def remote(token, query, variables, source=source):
+            raise u.UsageFailure('denied', source=source)
+        monkeypatch.setattr(u, '_railway_query', remote)
+        caplog.clear()
+        with caplog.at_level('INFO', logger='uvicorn.error'):
+            assert u._railway_usage(AT)['reasonCode'] == 'token_unauthorized'
+        assert f'step=me code=token_unauthorized source={source}' in caplog.text
+        assert 'synthetic-do-not-log' not in caplog.text
