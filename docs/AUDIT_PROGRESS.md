@@ -1,6 +1,6 @@
 # Audit progress
 
-Active agent: none
+Active agent: ChatGPT Codex | v3.6.0 hosting GraphQL compatibility | codex/v3.6.0-hosting-graphql-fix
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
