@@ -1,10 +1,12 @@
 # Audit progress
 
-Active agent: ChatGPT/Codex · terms archive legacy churn evidence · codex/terms-archive-legacy-churn-fields
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- Immutable terms archival v1 additive allowlist extension (`codex/terms-archive-legacy-churn-fields`): preserve legacy churn source basis, original rule wording, repeatable flag, decision evidence and eligibility review date in owner-scoped snapshots. Original immutability, readback and field safety retained; synthetic regression added. Next: full backend CI, merge and exact Railway production SUCCESS before frontend starts transmitting added fields.
 
 - Immutable BonusTracker historical T&C R2 archive: PR https://github.com/load66/Trading-Journal-AI/pull/239 (`codex/bonus-terms-immutable-r2`), new owner-authenticated append-only SHA-256 verified terms records separate from rotating backups, with read-only listing/detail, strict source-field allowlist, and isolated synthetic tests. Backend suite (410 tests) and journal frontend build/tests PASS on https://github.com/load66/Trading-Journal-AI/actions/runs/39127627819. No real owner data, credentials, providers or recovery snapshots changed. Next: merge #239 after final head CI, verify Railway production exact commit, then frontend #188.
 
