@@ -89,15 +89,18 @@ def test_workspace_or_other_project_usage_is_never_attributed(monkeypatch):
         return value
     monkeypatch.setattr(u,'_railway_query',remote)
     value=u._railway_usage(AT)
-    assert value['status']=='unavailable'
-    assert value['costSoFar'] is None
+    assert value['status']=='partial'
+    assert value['costSoFar'] is not None
+    assert value['projectedMonthEnd'] is None
+    assert value['reasonCode']=='estimate_missing'
 
 
 def test_no_token_is_not_zero(monkeypatch):
     monkeypatch.delenv('RAILWAY_API_TOKEN',raising=False)
     monkeypatch.setattr(u,'_railway_query',lambda *_: (_ for _ in ()).throw(AssertionError('should not query')))
     value=u._railway_usage(AT)
-    assert value['status']=='not_configured'
+    assert value['status']=='unavailable'
+    assert value['reasonCode']=='token_missing'
     assert value['costSoFar'] is None
     assert value['projectedMonthEnd'] is None
 
@@ -154,3 +157,132 @@ def test_owner_only_auth_checked_before_any_api_calls(monkeypatch):
     monkeypatch.setattr(b,'auth_required',lambda:False)
     assert client.get('/api/bonus-tracker/usage',headers={'Authorization':'Bearer owner'}).status_code==503
     assert len(called)==1
+
+
+def test_partial_usage_preserves_only_verified_service_costs(monkeypatch):
+    _configured(monkeypatch)
+    def missing_network(token, query, variables):
+        payload = _remote(token, query, variables)
+        if 'BonusHosting(' in query:
+            payload['usage'] = [v for v in payload['usage'] if not (
+                v['tags']['serviceId'] == 'svc-b' and v['measurement'] == 'NETWORK_TX_GB')]
+        return payload
+    monkeypatch.setattr(u, '_railway_query', missing_network)
+    value = u._railway_usage(AT)
+    assert value['status'] == 'partial'
+    assert value['costSoFar'] is None, 'Do not describe a subtotal as the complete bill'
+    assert value['knownCostSubtotal'] == value['services'][0]['costSoFar']
+    assert value['services'][1]['costSoFar'] is None
+    assert value['services'][1]['measurements']['NETWORK_TX_GB'] is None
+    assert {'service': 'leaps-alpaca-live', 'metric': 'NETWORK_TX_GB', 'kind': 'usage'} in value['missing']
+    assert value['projectedMonthEnd'] is not None
+    assert value['basis'] and value['verifiedAt']
+
+
+def test_true_zero_is_verified_not_missing(monkeypatch):
+    _configured(monkeypatch)
+    def zeros(token, query, variables):
+        payload = _remote(token, query, variables)
+        if 'BonusHosting(' in query:
+            for row in payload['usage']:
+                row['value'] = 0
+            for row in payload['estimatedUsage']:
+                row['estimatedValue'] = 0
+        return payload
+    monkeypatch.setattr(u, '_railway_query', zeros)
+    result = u._railway_usage(AT)
+    assert result['status'] == 'ok'
+    assert result['costSoFar'] == 0
+    assert result['projectedMonthEnd'] == 0
+    assert all(x['costSoFar'] == 0 for x in result['services'])
+    assert all(x['projectedMonthEnd'] == 0 for x in result['services'])
+    assert result['verifiedAt'] and result['basis']
+
+
+def test_missing_estimate_lists_metric_without_fake_zero(monkeypatch):
+    _configured(monkeypatch)
+    def omit(token, query, variables):
+        payload = _remote(token, query, variables)
+        if 'BonusHosting(' in query:
+            payload['estimatedUsage'] = [x for x in payload['estimatedUsage'] if x['measurement'] != 'NETWORK_TX_GB']
+        return payload
+    monkeypatch.setattr(u, '_railway_query', omit)
+    result = u._railway_usage(AT)
+    assert result['status'] == 'partial'
+    assert result['costSoFar'] is not None
+    assert result['projectedMonthEnd'] is None
+    assert result['reasonCode'] == 'estimate_missing'
+    assert {'service': 'project', 'metric': 'NETWORK_TX_GB', 'kind': 'estimate'} in result['missing']
+
+
+def test_safe_reason_codes_never_echo_remote_text_or_token(monkeypatch, capsys):
+    _configured(monkeypatch)
+    marker = 'TOP-SECRET-REMOTE-RESPONSE'
+    assert set(u.SAFE_REASONS) == {
+        'token_missing', 'token_unauthorized', 'workspace_not_found',
+        'project_not_visible', 'estimate_missing', 'measurement_missing',
+        'rate_limited', 'timeout', 'railway_unreachable', 'response_changed'
+    }
+    cases = [
+        ('token_unauthorized', lambda: u.UsageFailure('token_unauthorized')),
+        ('rate_limited', lambda: u.UsageFailure('rate_limited')),
+        ('timeout', lambda: u.UsageFailure('timeout')),
+        ('railway_unreachable', lambda: u.UsageFailure('railway_unreachable')),
+        ('response_changed', lambda: ValueError(marker)),
+    ]
+    for expected, factory in cases:
+        def fails(token, query, variables):
+            raise factory()
+        monkeypatch.setattr(u, '_railway_query', fails)
+        response = u._railway_usage(AT)
+        assert response['status'] == 'unavailable'
+        assert response['reasonCode'] == expected
+        assert response['costSoFar'] is None
+        assert 'synthetic-do-not-log' not in str(response)
+        assert marker not in str(response)
+    monkeypatch.setattr(u, '_railway_query', lambda token, query, variables: {
+        'externalWorkspaces': [], 'me': {'workspaces': []}})
+    assert u._railway_usage(AT)['reasonCode'] == 'workspace_not_found'
+    monkeypatch.setattr(u, '_railway_query', lambda token, query, variables: {
+        'externalWorkspaces': [], 'me': {'workspaces': [
+            {'id': 'other', 'projects': {'edges': []}}]}})
+    assert u._railway_usage(AT)['reasonCode'] == 'project_not_visible'
+    assert marker not in capsys.readouterr().out
+
+
+def test_transport_http_and_graphql_errors_are_sanitized(monkeypatch):
+    from urllib.error import HTTPError, URLError
+    import socket
+    scenarios = [
+        (HTTPError('https://example.invalid', 401, 'secret', None, None), 'token_unauthorized'),
+        (HTTPError('https://example.invalid', 403, 'secret', None, None), 'token_unauthorized'),
+        (HTTPError('https://example.invalid', 429, 'secret', None, None), 'rate_limited'),
+        (HTTPError('https://example.invalid', 502, 'secret', None, None), 'railway_unreachable'),
+        (URLError(socket.timeout('secret')), 'timeout'),
+        (URLError('secret'), 'railway_unreachable'),
+    ]
+    for raised, code in scenarios:
+        monkeypatch.setattr(u, 'urlopen', lambda *a, **kw: (_ for _ in ()).throw(raised))
+        try:
+            u._railway_query('fake-secret', 'query {}', {})
+            assert False, 'Expected sanitized exception'
+        except u.UsageFailure as exc:
+            assert exc.code == code
+            assert 'secret' not in str(exc)
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+    for payload, code in [
+        ({'errors': [{'message': 'unauthorized account token'}]}, 'token_unauthorized'),
+        ({'errors': [{'extensions': {'code': 'RATE_LIMITED'}}]}, 'rate_limited'),
+        ({'errors': [{'message': 'SCHEMA_CHANGED secret'}]}, 'response_changed'),
+    ]:
+        monkeypatch.setattr(u, 'urlopen', lambda *a, **kw: Response())
+        monkeypatch.setattr(u.json, 'load', lambda *a, **kw: payload)
+        try:
+            u._railway_query('fake-secret', 'query {}', {})
+            assert False
+        except u.UsageFailure as exc:
+            assert exc.code == code
+            assert 'secret' not in str(exc)
