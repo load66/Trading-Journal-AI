@@ -95,6 +95,22 @@ def test_append_only_versions_and_no_pruning_of_terms():
     assert archive.read_terms(storage, "owner1", first["id"])["snapshot"] == p["snapshot"]
 
 
+def test_preserves_legacy_churn_conditions_and_source_separately():
+    storage = FakeStorage()
+    raw = sample(churn="1", churnability="repeatable", churnBasis="bonus",
+                 churnRuleText="Previous bonus within twelve months is ineligible",
+                 churnReason="Original 2026 enrolled terms",
+                 churnDecisionSource="official-promotion-terms",
+                 churnDecisionConfidence="High", eligibilityVerifiedAt="2026-10-15")
+    saved = archive.save_terms(storage, "owner1", packet(raw))
+    historic = json.loads(archive.read_terms(storage, "owner1", saved["id"])["snapshot"])
+    assert historic["churn"] == "1"
+    assert historic["churnBasis"] == "bonus"
+    assert historic["churnRuleText"].startswith("Previous bonus")
+    assert historic["churnDecisionSource"] == "official-promotion-terms"
+    assert len(historic["eligibilityRules"]) == 1
+
+
 def test_owner_isolation_integrity_and_no_overwrite():
     storage = FakeStorage()
     first = archive.save_terms(storage, "owner1", packet())
