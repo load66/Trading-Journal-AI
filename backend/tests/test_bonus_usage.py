@@ -14,6 +14,10 @@ AT = datetime(2026,10,17,12,tzinfo=timezone.utc)
 
 def _remote(token,query,variables):
     assert token == 'synthetic-do-not-log'
+    if 'BonusHostingWorkspaces' in query:
+        return {"externalWorkspaces":[],"me":{"workspaces":[{
+            "id":"synthetic-workspace","projects":{"edges":[{"node":{"id":"synthetic-project"}}]}
+        }]}}
     if 'BonusHostingMemory' in query:
         return {"metrics":[{"tags":{"serviceId":"svc-a"},"values":[{"ts":1,"value":0.27},{"ts":2,"value":0.33}]},
                            {"tags":{"serviceId":"svc-b"},"values":[{"ts":1,"value":0.6}]}]}
@@ -23,7 +27,7 @@ def _remote(token,query,variables):
                               {"measurement":"MEMORY_USAGE_GB","estimatedValue":3500,"projectId":"synthetic-project"},
                               {"measurement":"NETWORK_TX_GB","estimatedValue":0.8,"projectId":"synthetic-project"}],
             "usage":[
-                {"measurement":m,"value":v,"tags":{"serviceId":id}}
+                {"measurement":m,"value":v,"tags":{"projectId":"synthetic-project","serviceId":id}}
                 for id,parts in {"svc-a":{"CPU_USAGE":3,"MEMORY_USAGE_GB":400,"NETWORK_TX_GB":0.1},
                                  "svc-b":{"CPU_USAGE":12,"MEMORY_USAGE_GB":900,"NETWORK_TX_GB":0.2}}.items()
                 for m,v in parts.items()]}
@@ -60,10 +64,33 @@ def test_usage_near_and_over_editable_plan(monkeypatch):
 
 
 def test_schema_uses_project_scoped_railway_usage_and_billing_estimate():
-    assert "estimatedUsage(projectId: $projectId" in u._QUERY
-    assert "groupBy: [SERVICE_ID]" in u._QUERY
+    assert "estimatedUsage(workspaceId: $workspaceId" in u._QUERY
+    assert "groupBy: [PROJECT_ID, SERVICE_ID]" in u._QUERY
+    assert "endDate: $endDate" in u._QUERY
+    assert "externalWorkspaces" in u._WORKSPACES and "me { workspaces" in u._WORKSPACES
     assert "metrics(environmentId: $environmentId, projectId: $projectId" in u._METRICS
     assert "groupBy: [SERVICE_ID]" in u._METRICS
+
+
+def test_workspace_resolution_supports_member_and_external_shapes():
+    member={"externalWorkspaces":[],"me":{"workspaces":[{"id":"w1","projects":{"edges":[{"node":{"id":"p1"}}]}}]}}
+    external={"externalWorkspaces":[{"id":"w2","projects":[{"id":"p2"}]}],"me":{"workspaces":[]}}
+    assert u._workspace_for_project(member,"p1")=="w1"
+    assert u._workspace_for_project(external,"p2")=="w2"
+    assert u._workspace_for_project(member,"missing") is None
+
+
+def test_workspace_or_other_project_usage_is_never_attributed(monkeypatch):
+    _configured(monkeypatch)
+    def remote(token,query,variables):
+        value=_remote(token,query,variables)
+        if 'BonusHosting(' in query:
+            value['estimatedUsage']=[{"measurement":"CPU_USAGE","estimatedValue":30,"projectId":"other-project"}]
+        return value
+    monkeypatch.setattr(u,'_railway_query',remote)
+    value=u._railway_usage(AT)
+    assert value['status']=='unavailable'
+    assert value['costSoFar'] is None
 
 
 def test_no_token_is_not_zero(monkeypatch):
