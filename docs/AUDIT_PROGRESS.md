@@ -1,10 +1,12 @@
 # Audit progress
 
-Active agent: ChatGPT Codex | v3.6.0 hosting GraphQL compatibility | codex/v3.6.0-hosting-graphql-fix
+Active agent: none
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- Hosting usage GraphQL compatibility: PR https://github.com/load66/Trading-Journal-AI/pull/232 now uses project-scoped Railway resource metrics and Railway-provided estimatedUsage; unavailable projections remain null, never zero. CI https://github.com/load66/Trading-Journal-AI/actions/runs/39084713593 PASS (backend and journal frontend). Pending merge and Railway exact-commit verification; no token or variables changed.
 
 - BonusTracker v3.6.0 Hosting & usage backend: PR https://github.com/load66/Trading-Journal-AI/pull/231 adds owner-only read-only endpoint and one-hour caching, mock-only Railway/R2 tests, and cloud snapshot threshold allowlist. CI run https://github.com/load66/Trading-Journal-AI/actions/runs/39083721730 PASS (backend tests and journal build). No Railway token or variables changed. Pending merge and Railway exact-commit production verification; frontend remains gated until that succeeds.
 
