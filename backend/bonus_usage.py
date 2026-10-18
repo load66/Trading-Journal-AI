@@ -110,7 +110,14 @@ _DENIAL_MARKERS = ("not authorized", "unauthoriz", "forbidden", "permission", "u
 def _railway_query(token: str, query: str, variables: dict) -> dict:
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     request = UrlRequest(URL, data=body, method="POST",
-                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+                         headers={
+                             "Authorization": f"Bearer {token}",
+                             "Content-Type": "application/json",
+                             "Accept": "application/json",
+                             # urllib's default Python-urllib/x.y signature is blocked
+                             # by some Cloudflare rules before Railway checks tokens.
+                             "User-Agent": "BonusTracker-Railway-Usage/1.0",
+                         })
     try:
         with urlopen(request, timeout=12) as response:
             if response.status in (401, 403):
