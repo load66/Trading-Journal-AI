@@ -68,6 +68,27 @@ def test_tokens_and_unknown_keys_rejected():
     d=json.loads(p['snapshot']);d['version']=2
     with pytest.raises(ValueError):b.validate_snapshot(json.dumps(d))
 
+def test_entry_scoped_sources_roundtrip_without_credential_leak():
+    """Legacy T&C resolver text survives an owner-verified snapshot and new device."""
+    source = {'account-synthetic': {'raw': 'Synthetic enrolled terms and fee details.',
+                                    'sourceId': 'src-test', 'kind': 'stored-entry-source'}}
+    p = packet('b' * 32)
+    data = json.loads(p['snapshot'])
+    data['storageSnapshot']['bt_tc_entry_sources_v3'] = json.dumps(source)
+    p['snapshot'] = json.dumps(data)
+    p['sha256'] = hashlib.sha256(p['snapshot'].encode()).hexdigest()
+    assert b.validate_snapshot(p['snapshot'])[1] == 1
+    storage = MemoryR2()
+    result = b.save_verified(storage, 'owner', p)
+    assert result['verified']
+    restored = json.loads(b.read_verified(storage, 'owner', p['id'])['snapshot'])
+    assert restored['storageSnapshot']['bt_tc_entry_sources_v3'] == json.dumps(source)
+    assert 'bonus-ai-auth' not in restored['storageSnapshot']
+    restored['storageSnapshot']['bonus-ai-auth'] = 'not-allowed'
+    with pytest.raises(ValueError):
+        b.validate_snapshot(json.dumps(restored))
+
+
 def test_twelve_hour_checkpoint_survives_restart():
     s=MemoryR2();b.save_verified(s,'owner',packet());now=datetime(2026,10,14,12,tzinfo=timezone.utc)
     assert b.scheduled_checkpoint(s,'owner',now)['created']

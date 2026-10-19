@@ -6,6 +6,8 @@ Public-safe fields only: versions, commit hashes, PR links, sanitized issue titl
 
 ## Handoff
 
+- BonusTracker cloud recovery source-coverage backend (`codex/bonus-backup-source-allowlist`): add the existing entry-scoped T&C source store to the owner-only verified recovery allowlist, with synthetic restore and rejected-key tests. Backend ships before frontend v3.6.44. No real records touched. CI run 39242171818 passed (backend tests + journal frontend build). Next: merge PR #242 and verify Railway deploy before frontend v3.6.44.
+
 - Immutable terms archival v1 additive allowlist extension (`codex/terms-archive-legacy-churn-fields`): preserve legacy churn source basis, original rule wording, repeatable flag, decision evidence and eligibility review date in owner-scoped snapshots. Original immutability, readback and field safety retained; synthetic regression added. Next: full backend CI, merge and exact Railway production SUCCESS before frontend starts transmitting added fields.
 
 - Immutable BonusTracker historical T&C R2 archive: PR https://github.com/load66/Trading-Journal-AI/pull/239 (`codex/bonus-terms-immutable-r2`), new owner-authenticated append-only SHA-256 verified terms records separate from rotating backups, with read-only listing/detail, strict source-field allowlist, and isolated synthetic tests. Backend suite (410 tests) and journal frontend build/tests PASS on https://github.com/load66/Trading-Journal-AI/actions/runs/39127627819. No real owner data, credentials, providers or recovery snapshots changed. Next: merge #239 after final head CI, verify Railway production exact commit, then frontend #188.
