@@ -1,10 +1,12 @@
 # Audit progress
 
-Active agent: none
+Active agent: Codex — backup allowlist — codex/bonus-backup-source-allowlist
 
 Public-safe fields only: versions, commit hashes, PR links, sanitized issue titles, test status.
 
 ## Handoff
+
+- BonusTracker cloud recovery source-coverage backend (`codex/bonus-backup-source-allowlist`): add the existing entry-scoped T&C source store to the owner-only verified recovery allowlist, with synthetic restore and rejected-key tests. Backend ships before frontend v3.6.44. No real records touched. Next: backend CI, Railway release verification.
 
 - Immutable terms archival v1 additive allowlist extension (`codex/terms-archive-legacy-churn-fields`): preserve legacy churn source basis, original rule wording, repeatable flag, decision evidence and eligibility review date in owner-scoped snapshots. Original immutability, readback and field safety retained; synthetic regression added. Next: full backend CI, merge and exact Railway production SUCCESS before frontend starts transmitting added fields.
 
