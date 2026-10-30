@@ -185,3 +185,17 @@ def test_safety_snapshot_keeps_selected_recovery_until_restored_replacement():
     assert result['verified'] and result['retention']['retainedCopies']<=4
     assert b.list_backups(s,'owner')['backups'][0]['id']==restored['id']
     assert b.read_verified(s,'owner',restored['id'])['snapshot']==selected['snapshot']
+
+
+def test_credit_card_plans_exact_recovery():
+    p = packet('d' * 32)
+    data = json.loads(p['snapshot'])
+    cards = json.dumps({'version': 1, 'cards': [{'current': {'id': 'synthetic', 'name': 'Synthetic card'}, 'history': [{'name': 'Prior plan'}]}]})
+    data['storageSnapshot']['bt_credit_cards_v1'] = cards
+    p['snapshot'] = json.dumps(data)
+    p['sha256'] = hashlib.sha256(p['snapshot'].encode()).hexdigest()
+    storage = MemoryR2()
+    assert b.save_verified(storage, 'owner', p)['verified']
+    recovered = json.loads(b.read_verified(storage, 'owner', p['id'])['snapshot'])
+    assert recovered['storageSnapshot']['bt_credit_cards_v1'] == cards
+    assert b.list_backups(storage, 'other')['backups'] == []
